@@ -1,0 +1,212 @@
+[
+  {
+    "case": "multi_garment",
+    "input": "/Users/kiran/Downloads/multi_garment.jpeg",
+    "http_code": "400",
+    "status": "selection_required",
+    "item_count": 2,
+    "overlay": "/Users/kiran/Documents/github/clients/glamify/hybrid_vto_v1/ai/tests/detection_renders/multi_garment_overlay.png",
+    "crops": [
+      "/Users/kiran/Documents/github/clients/glamify/hybrid_vto_v1/ai/tests/detection_renders/multi_garment_crop_0_bottom.png",
+      "/Users/kiran/Documents/github/clients/glamify/hybrid_vto_v1/ai/tests/detection_renders/multi_garment_crop_1_top.png"
+    ],
+    "types": [
+      "bottom",
+      "top"
+    ],
+    "debug": {
+      "image_size": {
+        "width": 500,
+        "height": 500
+      },
+      "raw_detected_count": 1,
+      "parser_split_used": false,
+      "parser_candidates_count": 1,
+      "heuristic_split_used": true,
+      "heuristic_candidates_count": 2,
+      "dedup_removed": 0,
+      "collapsed_same_type": false,
+      "unique_types": [
+        "bottom",
+        "top"
+      ],
+      "post_filter_count": 2,
+      "caption_mode": "short"
+    }
+  },
+  {
+    "case": "dress_model_1",
+    "input": "/Users/kiran/Downloads/61jQGZBXUmL._AC_UY1100_.jpg",
+    "http_code": "200",
+    "status": "success",
+    "item_count": 1,
+    "overlay": "/Users/kiran/Documents/github/clients/glamify/hybrid_vto_v1/ai/tests/detection_renders/dress_model_1_overlay.png",
+    "crops": [
+      "/Users/kiran/Documents/github/clients/glamify/hybrid_vto_v1/ai/tests/detection_renders/dress_model_1_crop_0_dress.png"
+    ],
+    "types": [
+      "dress"
+    ],
+    "debug": {
+      "image_size": {
+        "width": 800,
+        "height": 1100
+      },
+      "raw_detected_count": 1,
+      "parser_split_used": true,
+      "parser_candidates_count": 2,
+      "heuristic_split_used": false,
+      "heuristic_candidates_count": 0,
+      "dedup_removed": 1,
+      "collapsed_same_type": false,
+      "unique_types": [
+        "dress"
+      ],
+      "post_filter_count": 2,
+      "caption_mode": "short",
+      "returned_item_ids": [
+        0
+      ]
+    }
+  },
+  {
+    "case": "dress_flatlay",
+    "input": "/Users/kiran/Downloads/9565aac5-85c5-41c2-b044-6e9756b494db.jpg",
+    "http_code": "200",
+    "status": "success",
+    "item_count": 1,
+    "overlay": "/Users/kiran/Documents/github/clients/glamify/hybrid_vto_v1/ai/tests/detection_renders/dress_flatlay_overlay.png",
+    "crops": [
+      "/Users/kiran/Documents/github/clients/glamify/hybrid_vto_v1/ai/tests/detection_renders/dress_flatlay_crop_0_dress.png"
+    ],
+    "types": [
+      "dress"
+    ],
+    "debug": {
+      "image_size": {
+        "width": 1340,
+        "height": 1785
+      },
+      "raw_detected_count": 1,
+      "parser_split_used": true,
+      "parser_candidates_count": 2,
+      "heuristic_split_used": false,
+      "heuristic_candidates_count": 0,
+      "dedup_removed": 1,
+      "collapsed_same_type": false,
+      "unique_types": [
+        "dress"
+      ],
+      "post_filter_count": 2,
+      "caption_mode": "short",
+      "returned_item_ids": [
+        0
+      ]
+    }
+  },
+  {
+    "case": "top_white_tee",
+    "input": "/Users/kiran/Downloads/000006.jpg",
+    "http_code": "200",
+    "status": "success",
+    "item_count": 1,
+    "overlay": "/Users/kiran/Documents/github/clients/glamify/hybrid_vto_v1/ai/tests/detection_renders/top_white_tee_overlay.png",
+    "crops": [
+      "/Users/kiran/Documents/github/clients/glamify/hybrid_vto_v1/ai/tests/detection_renders/top_white_tee_crop_0_top.png"
+    ],
+    "types": [
+      "top"
+    ],
+    "debug": {
+      "image_size": {
+        "width": 468,
+        "height": 624
+      },
+      "raw_detected_count": 6,
+      "parser_split_used": false,
+      "parser_candidates_count": 0,
+      "heuristic_split_used": false,
+      "heuristic_candidates_count": 0,
+      "dedup_removed": 0,
+      "collapsed_same_type": true,
+      "unique_types": [
+        "top"
+      ],
+      "post_filter_count": 3,
+      "caption_mode": "short",
+      "returned_item_ids": [
+        0
+      ]
+    }
+  },
+  {
+    "case": "dress_navy",
+    "input": "/Users/kiran/Downloads/000011.jpg",
+    "http_code": "200",
+    "status": "success",
+    "item_count": 1,
+    "overlay": "/Users/kiran/Documents/github/clients/glamify/hybrid_vto_v1/ai/tests/detection_renders/dress_navy_overlay.png",
+    "crops": [
+      "/Users/kiran/Documents/github/clients/glamify/hybrid_vto_v1/ai/tests/detection_renders/dress_navy_crop_0_dress.png"
+    ],
+    "types": [
+      "dress"
+    ],
+    "debug": {
+      "image_size": {
+        "width": 351,
+        "height": 468
+      },
+      "raw_detected_count": 1,
+      "parser_split_used": true,
+      "parser_candidates_count": 2,
+      "heuristic_split_used": false,
+      "heuristic_candidates_count": 0,
+      "dedup_removed": 1,
+      "collapsed_same_type": false,
+      "unique_types": [
+        "dress"
+      ],
+      "post_filter_count": 2,
+      "caption_mode": "short",
+      "returned_item_ids": [
+        0
+      ]
+    }
+  },
+  {
+    "case": "man_top_bottom",
+    "input": "/Users/kiran/Downloads/1.jpg",
+    "http_code": "400",
+    "status": "selection_required",
+    "item_count": 2,
+    "overlay": "/Users/kiran/Documents/github/clients/glamify/hybrid_vto_v1/ai/tests/detection_renders/man_top_bottom_overlay.png",
+    "crops": [
+      "/Users/kiran/Documents/github/clients/glamify/hybrid_vto_v1/ai/tests/detection_renders/man_top_bottom_crop_0_top.png",
+      "/Users/kiran/Documents/github/clients/glamify/hybrid_vto_v1/ai/tests/detection_renders/man_top_bottom_crop_1_bottom.png"
+    ],
+    "types": [
+      "top",
+      "bottom"
+    ],
+    "debug": {
+      "image_size": {
+        "width": 864,
+        "height": 1536
+      },
+      "raw_detected_count": 1,
+      "parser_split_used": true,
+      "parser_candidates_count": 2,
+      "heuristic_split_used": false,
+      "heuristic_candidates_count": 0,
+      "dedup_removed": 0,
+      "collapsed_same_type": false,
+      "unique_types": [
+        "bottom",
+        "top"
+      ],
+      "post_filter_count": 2,
+      "caption_mode": "short"
+    }
+  }
+]

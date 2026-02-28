@@ -1,0 +1,23 @@
+fastapi
+uvicorn
+python-multipart
+python-dotenv
+azure-storage-blob
+requests
+torch
+torchvision
+diffusers
+transformers
+accelerate
+peft
+safetensors
+sentencepiece
+pillow
+numpy
+opencv-python-headless
+ultralytics
+einops
+timm
+# Optional accel (Linux only). If build fails, install manually:
+# pip install --no-build-isolation flash-attn
+flash-attn; platform_system == "Linux"
