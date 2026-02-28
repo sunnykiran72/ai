@@ -23,7 +23,7 @@ load_dotenv()
 # Shared Utilities
 from ai.shared.azure_storage import storage
 from ai.shared.image_ops import download_image, bbox_iou, binary_open, binary_close, build_soft_alpha
-from ai.shared.category_mapping import wardrobe_category_from_garment_type as _wardrobe_category_from_garment_type
+from ai.shared.category_mapping import wardrobe_category_from_garment_type as _wardrobe_category_from_garment_type, infer_style_from_text as _infer_style_from_text
 from ai.shared.response_payloads import (
     build_error_payload as _build_error_payload,
     build_success_payload as _build_success_payload,
@@ -1172,7 +1172,7 @@ async def analyze_garment(
             status_code=401,
             result="ERROR",
         )
-        return _json_response(payload)
+        return _multipart_form_response(payload)
 
     # ── INPUT VALIDATION ──
     upload = file or image
@@ -1183,7 +1183,7 @@ async def analyze_garment(
             reason_codes=["INVALID_IMAGE"],
             status_code=400,
         )
-        return _json_response(payload)
+        return _multipart_form_response(payload)
 
     effective_type = garment_type or garmentType
     requested_type = _normalize_garment_type(effective_type)
@@ -1357,8 +1357,12 @@ async def analyze_garment(
                 crop_h = max(1, int(y1) - int(y0))
                 crop_area_ratio = min(1.0, float(crop_w * crop_h) / max(1.0, float(img.width * img.height)))
 
-                # Category mapping
-                category_meta = _wardrobe_category_from_garment_type(resolved_type)
+                # Category mapping from prompt/auto-type
+                style_infer = autotype_meta.get("specific_clothing_style") if autotype_meta else None
+                if not style_infer and prompt_desc:
+                    style_infer = _infer_style_from_text(prompt_desc)
+                
+                category_meta = _wardrobe_category_from_garment_type(resolved_type, style=style_infer)
 
                 items.append({
                     "garment_id": idx,
@@ -1423,10 +1427,25 @@ async def analyze_garment(
                 total_s = round(time.time() - t0, 4)
                 # Build item_breakdown for Flutter
                 item_breakdown = []
+                binary_parts = []
                 for item in items:
                     pub = _to_public_item(item)
                     pub["rank"] = pub.get("garment_id", 0)
+                    mapped_type = item.get("garment_type") or item.get("type", "unknown")
+                    pub["garment_type"] = mapped_type
                     item_breakdown.append(pub)
+
+                    img = item.get("_image_obj")
+                    if img is not None:
+                        buf = io.BytesIO()
+                        img.save(buf, format="PNG")
+                        part_name = f"item_{int(pub['rank'])}"
+                        binary_parts.append({
+                            "name": part_name,
+                            "filename": f"{part_name}.png",
+                            "content_type": "image/png",
+                            "bytes": buf.getvalue(),
+                        })
 
                 data = {
                     "result": "WARNING",
@@ -1445,7 +1464,7 @@ async def analyze_garment(
                     "processing_time_ms": int(total_s * 1000),
                 }
                 payload = _build_success_payload(data=data, status_code=400, message="")
-                return _multipart_form_response(payload)
+                return _multipart_form_response(payload, binary_parts=binary_parts)
 
             selected_item = None
             if selected_index is not None:
@@ -1456,7 +1475,7 @@ async def analyze_garment(
                         reason_codes=["INVALID_SELECTION_TYPE"],
                         status_code=400,
                     )
-                    return _json_response(payload)
+                    return _multipart_form_response(payload)
                 selected_item = items[selected_index]
             elif auto_selected_index is not None:
                 selected_item = items[auto_selected_index]
@@ -1504,7 +1523,7 @@ async def analyze_garment(
                         status_code=500,
                         result="ERROR",
                     )
-                    return _json_response(payload)
+                    return _multipart_form_response(payload)
 
                 try:
                     vton_source_image, vton_bbox, vton_crop_mode = _prepare_vton_source_image(
@@ -1523,7 +1542,7 @@ async def analyze_garment(
                         reason_codes=["INVALID_IMAGE"],
                         status_code=400,
                     )
-                    return _json_response(payload)
+                    return _multipart_form_response(payload)
 
                 if ANALYZE_PROMPT_FROM_EXTRACTED:
                     selected_item["promptDescription"] = ""
@@ -1549,7 +1568,7 @@ async def analyze_garment(
                         reason_codes=["EXTRACTION_FAILED"],
                         status_code=400,
                     )
-                    return _json_response(payload)
+                    return _multipart_form_response(payload)
 
                 if not extracted_url:
                     payload = _build_error_payload(
@@ -1558,7 +1577,7 @@ async def analyze_garment(
                         reason_codes=["EXTRACTION_FAILED"],
                         status_code=400,
                     )
-                    return _json_response(payload)
+                    return _multipart_form_response(payload)
 
                 selected_item["url"] = extracted_url
                 selected_item["output_image_url"] = extracted_url
@@ -1588,7 +1607,7 @@ async def analyze_garment(
                                 reason_codes=["EXTRACTION_FAILED"],
                                 status_code=400,
                             )
-                            return _json_response(payload)
+                            return _multipart_form_response(payload)
                         logger.warning(f"Prompt generation from extracted cloth failed: {caption_err}")
 
                 if forced_type:
@@ -1675,7 +1694,7 @@ async def analyze_garment(
         data["progressId"] = data["wardrobe_progress_id"]
 
         payload = _build_success_payload(data=data, status_code=200, message="")
-        return _json_response(payload)
+        return _multipart_form_response(payload)
 
     except HTTPException as he:
         # Convert old-style HTTPException to Flutter contract envelope
@@ -1688,7 +1707,7 @@ async def analyze_garment(
             status_code=he.status_code,
             result="ERROR" if he.status_code >= 500 else "REJECTED",
         )
-        return _json_response(payload)
+        return _multipart_form_response(payload)
     except Exception as e:
         logger.error(f"Analysis failed: {e}")
         payload = _build_error_payload(
@@ -1699,7 +1718,7 @@ async def analyze_garment(
             result="ERROR",
             message=str(e),
         )
-        return _json_response(payload)
+        return _multipart_form_response(payload)
 
 @app.post("/v1/flux/tryon")
 @app.post("/v1/flux2/tryon")

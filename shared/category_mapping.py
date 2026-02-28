@@ -143,3 +143,14 @@ def wardrobe_category_from_garment_type(garment_type: str, style: Optional[str] 
         "category_key": "unknown",
         "style": style or "Unknown",
     }
+
+def infer_style_from_text(text: str) -> Optional[str]:
+    if not text:
+        return None
+    t = text.lower()
+    matches = []
+    # Reverse sort by length so longer phrases ("long sleeve t-shirt") matched first
+    for style in sorted(STYLE_TO_CATEGORY_KEYS.keys(), key=len, reverse=True):
+        if style in t:
+            return style
+    return None
