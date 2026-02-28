@@ -19,13 +19,12 @@ class HumanParser:
     ):
         self._parser_fn = parser_fn
 
-        # Standard Segformer labels
+        # Segformer B2 Clothes specific labels (mattmdjaga/segformer_b2_clothes)
         self.labels = labels or {
-            "background": 0, "hat": 1, "hair": 2, "glove": 3, "sunglasses": 4,
-            "upper": 5, "dress": 6, "coat": 7, "socks": 8, "pants": 9,
-            "jumpsuit": 10, "scarf": 11, "skirt": 12, "face": 13,
-            "left_arm": 14, "right_arm": 15, "left_leg": 16, "right_leg": 17,
-            "left_shoe": 18, "right_shoe": 19
+            "background": 0, "hat": 1, "hair": 2, "sunglasses": 3, "upper": 4,
+            "skirt": 5, "pants": 6, "dress": 7, "belt": 8, "left_shoe": 9,
+            "right_shoe": 10, "face": 11, "left_leg": 12, "right_leg": 13,
+            "left_arm": 14, "right_arm": 15, "bag": 16, "scarf": 17
         }
 
     def parse(self, image: Image.Image) -> np.ndarray:
@@ -45,10 +44,10 @@ class HumanParser:
         Extracts a binary mask for 'top', 'bottom', 'dress', etc.
         """
         target_ids = []
-        if category == "top": target_ids = [5, 7, 11] # upper, coat, scarf
-        elif category == "bottom": target_ids = [9, 12] # pants, skirt
-        elif category == "dress": target_ids = [6, 10, 7, 11, 12] # dress, jumpsuit, coat, scarf, skirt (handles misclass)
-        elif category == "outer": target_ids = [7] # coat
+        if category == "top": target_ids = [4, 17] # upper, scarf
+        elif category == "bottom": target_ids = [5, 6, 8] # skirt, pants, belt
+        elif category == "dress": target_ids = [7, 4, 5, 6, 17] # dress, plus handling misclass
+        elif category == "outer": target_ids = [4] # treat as upper
         else:
             # Check individual labels
             if category in self.labels:

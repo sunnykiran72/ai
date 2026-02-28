@@ -23,6 +23,20 @@ load_dotenv()
 # Shared Utilities
 from ai.shared.azure_storage import storage
 from ai.shared.image_ops import download_image, bbox_iou, binary_open, binary_close, build_soft_alpha
+from ai.shared.category_mapping import wardrobe_category_from_garment_type as _wardrobe_category_from_garment_type
+from ai.shared.response_payloads import (
+    build_error_payload as _build_error_payload,
+    build_success_payload as _build_success_payload,
+    build_multipart_parts as _build_multipart_parts,
+    json_response as _json_response,
+    multipart_form_response as _multipart_form_response,
+)
+from ai.shared.security import verify_bearer_token as _verify_bearer_token_impl
+
+try:
+    import jwt as jwt_module
+except ImportError:
+    jwt_module = None
 
 # Modular Components
 from ai.modules.vto.prompt_factory import prompt_factory
@@ -39,6 +53,16 @@ from ai.core.human_parser_runner import HumanParserRunner
 # Configuration
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("glamify-ai")
+
+JWT_ACCESS_SECRET = os.getenv("JWT_ACCESS_SECRET", "")
+
+def _verify_bearer_token(authorization: Optional[str]) -> dict:
+    return _verify_bearer_token_impl(
+        authorization,
+        jwt_access_secret=JWT_ACCESS_SECRET,
+        jwt_module=jwt_module,
+        logger=logger,
+    )
 
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name, str(default))
@@ -118,7 +142,7 @@ ANALYZE_GARMENT_TARGET_ASPECT_W = max(1, _env_int("ANALYZE_GARMENT_TARGET_ASPECT
 ANALYZE_GARMENT_TARGET_ASPECT_H = max(1, _env_int("ANALYZE_GARMENT_TARGET_ASPECT_H", 3))
 ANALYZE_GARMENT_ALPHA_THRESHOLD = max(0, min(255, _env_int("ANALYZE_GARMENT_ALPHA_THRESHOLD", 12)))
 ANALYZE_GARMENT_WHITE_THRESHOLD = max(200, min(255, _env_int("ANALYZE_GARMENT_WHITE_THRESHOLD", 246)))
-ANALYZE_GARMENT_ENHANCE_ENABLED = os.getenv("ANALYZE_GARMENT_ENHANCE_ENABLED", "0") == "1"
+ANALYZE_GARMENT_ENHANCE_ENABLED = os.getenv("ANALYZE_GARMENT_ENHANCE_ENABLED", "1") == "1"
 ANALYZE_GARMENT_ENHANCE_SHARPNESS = _env_float("ANALYZE_GARMENT_ENHANCE_SHARPNESS", 1.22)
 ANALYZE_GARMENT_ENHANCE_CONTRAST = _env_float("ANALYZE_GARMENT_ENHANCE_CONTRAST", 1.08)
 ANALYZE_GARMENT_ENHANCE_COLOR = _env_float("ANALYZE_GARMENT_ENHANCE_COLOR", 1.04)
@@ -659,6 +683,16 @@ def _postprocess_extracted_garment_bytes(image_bytes: bytes) -> tuple[bytes, dic
     original_size = (int(image.width), int(image.height))
     bbox = _content_bbox_from_image(image)
     cropped = image.crop(bbox)
+
+    # Upscale small crops to ensure sharpness (min 512px on shortest side)
+    min_dim = min(cropped.width, cropped.height)
+    if min_dim < 512 and min_dim > 0:
+        scale = 512.0 / min_dim
+        new_w = int(cropped.width * scale)
+        new_h = int(cropped.height * scale)
+        cropped = cropped.resize((new_w, new_h), Image.LANCZOS)
+        logger.info(f"Upscaled small garment crop from {min_dim}px to {min(new_w, new_h)}px (scale={scale:.2f})")
+
     processed = cropped
 
     if ANALYZE_GARMENT_POSTPROCESS_ENABLED:
@@ -786,15 +820,29 @@ def _extract_cloth_from_crop(crop: Image.Image, garment_type: str) -> tuple[Imag
         rembg_alpha = np.array(rembg_result)[:, :, 3].astype(np.uint8)
         logger.info(f"rembg alpha coverage: {rembg_alpha.mean():.1f}")
 
-        # STEP 2: HSV Skin Masking (Remove mannequin body)
-        # STEP 2: Sharp Body Part mask (Remove mannequin parts)
-        # We rely purely on the Segformer parser for body part cutoff to preserve colors
+        # STEP 2: Body Part & Cross-Category Kill (Surgical Isolation)
+        # We use Segformer B2 Clothes labels: 4:Upper, 6:Pants, 5:Skirt, 7:Dress, 8:Belt, 9/10:Shoes, 11:Face, 12/13:Legs, 14/15:Arms
         parsing = engine.parser.parse(crop)
         
-        kill_ids = [1, 2, 3, 11, 12, 13, 14, 15, 16, 17]
+        # Always kill body parts, hair, and shoes to isolate the floating garment
+        kill_ids = [1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16]
+        
+        if selected_type == "top":
+            # Keep: Upper(4), Scarf(17)
+            # Kill: Skirt(5), Pants(6), Dress(7), Belt(8)
+            kill_ids.extend([5, 6, 7, 8])
+        elif selected_type == "bottom":
+            # Keep: Skirt(5), Pants(6), Belt(8)
+            # Kill: Upper(4), Dress(7), Scarf(17)
+            kill_ids.extend([4, 7, 17])
+        elif selected_type == "dress":
+            # Keep: Dress(7), Upper(4), Skirt(5), Pants(6), Belt(8), Scarf(17)
+            # (Keeping most for dress as it often blends classes)
+            pass
+
         parser_kill = np.isin(parsing, kill_ids).astype(np.uint8) * 255
-        # Dilate slightly to eat exactly into the garment edge and remove any lingering skin borders
-        parser_kill = cv2.dilate(parser_kill, np.ones((5, 5), np.uint8), iterations=1)
+        # 2x2 dilation is enough to clean skin shadows without eating the cloth
+        parser_kill = cv2.dilate(parser_kill, np.ones((2, 2), np.uint8), iterations=1)
 
         # STEP 3: Fill holes in the rembg mask BEFORE combining
         # This prevents crocheted/mesh tops from being dissolved into fragments
@@ -1094,20 +1142,55 @@ def read_root():
 @app.post("/analyze")
 @app.post("/analzye")
 async def analyze_garment(
-    file: UploadFile = File(...),
+    file: Optional[UploadFile] = File(None),
+    image: Optional[UploadFile] = File(None),
     garment_type: Optional[str] = Form(None, alias="type"),
+    garmentType: Optional[str] = Form(None),
     selected_index: Optional[int] = Form(None),
     debug: bool = Form(False),
     _authorization: Optional[str] = Header(None, alias="Authorization")
 ):
     """
     Digitizes a garment from an image (YOLO + Florence-2).
+    Returns Flutter-contract-compliant responses:
+    - 200 JSON for success (ACCEPTED)
+    - 400 multipart/form-data for multi-item selection
+    - 400 JSON for rejections
+    - 401 JSON for auth failure
+    - 500 JSON for server errors
     """
     t0 = time.time()
-    requested_type = _normalize_garment_type(garment_type)
+
+    # ── AUTH ──
+    try:
+        auth_payload = _verify_bearer_token(_authorization)
+    except PermissionError:
+        payload = _build_error_payload(
+            title="Session Expired",
+            description="Please log in again and try uploading your item.",
+            reason_codes=["UNAUTHORIZED"],
+            status_code=401,
+            result="ERROR",
+        )
+        return _json_response(payload)
+
+    # ── INPUT VALIDATION ──
+    upload = file or image
+    if not upload:
+        payload = _build_error_payload(
+            title="No Image Provided",
+            description="Please upload an image to analyze.",
+            reason_codes=["INVALID_IMAGE"],
+            status_code=400,
+        )
+        return _json_response(payload)
+
+    effective_type = garment_type or garmentType
+    requested_type = _normalize_garment_type(effective_type)
+
     try:
         # 1. Load Image
-        image_bytes = await file.read()
+        image_bytes = await upload.read()
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
         async with gpu_semaphore:
@@ -1274,13 +1357,20 @@ async def analyze_garment(
                 crop_h = max(1, int(y1) - int(y0))
                 crop_area_ratio = min(1.0, float(crop_w * crop_h) / max(1.0, float(img.width * img.height)))
 
+                # Category mapping
+                category_meta = _wardrobe_category_from_garment_type(resolved_type)
+
                 items.append({
                     "garment_id": idx,
                     "type": resolved_type,
+                    "garment_type": resolved_type,
                     "type_source": type_source,
                     "detection_source": detection_source,
                     "promptDescription": prompt_desc,
                     "description": prompt_desc,
+                    "style": category_meta["style"],
+                    "category_key": category_meta["category_key"],
+                    "primary_category_key": category_meta["primary_category_key"],
                     "url": None,
                     "bbox": bbox,
                     "crop": {
@@ -1328,48 +1418,45 @@ async def analyze_garment(
                 if len(matched) == 1:
                     auto_selected_index = matched[0]
 
-            # If multiple garments exist, enforce client-side explicit selection.
+            # ── MULTI-ITEM SELECTION REQUIRED (400 with multipart) ──
             if ANALYZE_REQUIRE_SELECTION and len(items) > 1 and selected_index is None and auto_selected_index is None:
-                detail = {
-                    "status": "selection_required",
-                    "message": "Multiple garments detected. Select one garment and retry with selected_index.",
-                    "requested_type": garment_type,
-                    "requested_type_normalized": requested_type,
-                    "hybrid_verify_enabled": USE_FLORENCE_HYBRID_VERIFY,
-                    "detected_items": len(items),
-                    "selection_field": "selected_index",
-                    "items": [_to_public_item(item) for item in items],
-                    "latency": time.time() - t0,
+                total_s = round(time.time() - t0, 4)
+                # Build item_breakdown for Flutter
+                item_breakdown = []
+                for item in items:
+                    pub = _to_public_item(item)
+                    pub["rank"] = pub.get("garment_id", 0)
+                    item_breakdown.append(pub)
+
+                data = {
+                    "result": "WARNING",
+                    "title": "Multiple Items Found",
+                    "description": "Multiple garments were detected. Please select a type (top, bottom, dress) and re-upload to continue.",
+                    "reason_codes": ["MULTI_ITEM_SELECTION_REQUIRED"],
+                    "selection_required": True,
+                    "total_garments_found": len(items),
+                    "selection_hint": {
+                        "expected_field": "garmentType",
+                        "allowed_types": ["top", "bottom", "dress"],
+                    },
+                    "item_breakdown": item_breakdown,
+                    "multipart_data": _build_multipart_parts(items=item_breakdown),
+                    "latencies": {"total": total_s},
+                    "processing_time_ms": int(total_s * 1000),
                 }
-                if debug:
-                    detail["debug"] = {
-                        "image_size": {"width": img.width, "height": img.height},
-                        "raw_detected_count": raw_detected_count,
-                        "parser_split_used": parser_split_used,
-                        "parser_candidates_count": parser_candidates_count,
-                        "parser_split_reject_reason": parser_split_reject_reason,
-                        "heuristic_split_used": heuristic_split_used,
-                        "heuristic_candidates_count": heuristic_candidates_count,
-                        "dedup_removed": dedup_removed,
-                        "collapsed_same_type": collapsed_same_type,
-                        "unique_types": unique_types,
-                        "post_filter_count": len(instances),
-                        "auto_selected_index": auto_selected_index,
-                        "caption_mode": ANALYZE_CAPTION_MODE,
-                    }
-                raise HTTPException(status_code=400, detail=detail)
+                payload = _build_success_payload(data=data, status_code=400, message="")
+                return _multipart_form_response(payload)
 
             selected_item = None
             if selected_index is not None:
                 if selected_index < 0 or selected_index >= len(items):
-                    raise HTTPException(
+                    payload = _build_error_payload(
+                        title="Invalid Selection",
+                        description=f"selected_index must be between 0 and {max(0, len(items) - 1)}.",
+                        reason_codes=["INVALID_SELECTION_TYPE"],
                         status_code=400,
-                        detail={
-                            "status": "invalid_selection",
-                            "message": f"selected_index must be between 0 and {max(0, len(items) - 1)}.",
-                            "detected_items": len(items),
-                        },
                     )
+                    return _json_response(payload)
                 selected_item = items[selected_index]
             elif auto_selected_index is not None:
                 selected_item = items[auto_selected_index]
@@ -1410,13 +1497,14 @@ async def analyze_garment(
                     selected_item["type_source"] = "requested_type"
 
                 if not ANALYZE_VTON_FALLBACK_ENABLED or not ANALYZE_VTON_CLOTH_ONLY_ENDPOINT:
-                    raise HTTPException(
+                    payload = _build_error_payload(
+                        title="Extraction Not Configured",
+                        description="Garment extraction is not available. Please try again later.",
+                        reason_codes=["EXTRACTION_FAILED"],
                         status_code=500,
-                        detail={
-                            "status": "vton_not_configured",
-                            "message": "VTON extraction is required but not configured.",
-                        },
+                        result="ERROR",
                     )
+                    return _json_response(payload)
 
                 try:
                     vton_source_image, vton_bbox, vton_crop_mode = _prepare_vton_source_image(
@@ -1429,15 +1517,13 @@ async def analyze_garment(
                     selected_item["vton_crop_mode"] = vton_crop_mode
                     selected_crop_url = _write_temp_png(vton_source_image)
                 except Exception as crop_save_err:
-                    raise HTTPException(
+                    payload = _build_error_payload(
+                        title="Invalid Image",
+                        description="Could not process the image. Please upload a clearer photo.",
+                        reason_codes=["INVALID_IMAGE"],
                         status_code=400,
-                        detail={
-                            "status": "invalid_image",
-                            "message": "Please upload a clear image.",
-                            "reason": "source_crop_failed",
-                            "error": str(crop_save_err),
-                        },
                     )
+                    return _json_response(payload)
 
                 if ANALYZE_PROMPT_FROM_EXTRACTED:
                     selected_item["promptDescription"] = ""
@@ -1446,36 +1532,33 @@ async def analyze_garment(
                 extracted_url = ""
                 extraction_meta = {}
                 try:
-                    # Deep Analysis fix: If single item detected, use vto_mode=True to 
+                    # Deep Analysis fix: If single item detected, use vto_mode=True to
                     # preserve person and prevent truncation during extraction.
                     is_single_item = len(items) <= 1
                     fallback = _run_vton_cloth_only_fallback(
-                        selected_crop_url, 
-                        selected_type, 
+                        selected_crop_url,
+                        selected_type,
                         vto_mode=is_single_item
                     )
                     extracted_url = str(fallback.get("url") or "")
                     extraction_meta = dict(fallback.get("meta") or {})
                 except Exception as fallback_err:
-                    raise HTTPException(
+                    payload = _build_error_payload(
+                        title="Extraction Failed",
+                        description="Garment extraction failed. Please retry with a clearer image.",
+                        reason_codes=["EXTRACTION_FAILED"],
                         status_code=400,
-                        detail={
-                            "status": "invalid_image",
-                            "message": "Please upload a clear image.",
-                            "reason": "tryon_failed",
-                            "error": str(fallback_err),
-                        },
                     )
+                    return _json_response(payload)
 
                 if not extracted_url:
-                    raise HTTPException(
+                    payload = _build_error_payload(
+                        title="Extraction Failed",
+                        description="No garment could be extracted. Please upload a clearer image.",
+                        reason_codes=["EXTRACTION_FAILED"],
                         status_code=400,
-                        detail={
-                            "status": "invalid_image",
-                            "message": "Please upload a clear image.",
-                            "reason": "empty_tryon_output",
-                        },
                     )
+                    return _json_response(payload)
 
                 selected_item["url"] = extracted_url
                 selected_item["output_image_url"] = extracted_url
@@ -1499,15 +1582,13 @@ async def analyze_garment(
                         selected_item["description"] = prompt_desc
                     except Exception as caption_err:
                         if ANALYZE_REQUIRE_EXTRACTED_PROMPT:
-                            raise HTTPException(
+                            payload = _build_error_payload(
+                                title="Extraction Failed",
+                                description="Could not generate garment description. Please retry.",
+                                reason_codes=["EXTRACTION_FAILED"],
                                 status_code=400,
-                                detail={
-                                    "status": "invalid_image",
-                                    "message": "Please upload a clear image.",
-                                    "reason": "prompt_generation_failed",
-                                    "error": str(caption_err),
-                                },
                             )
+                            return _json_response(payload)
                         logger.warning(f"Prompt generation from extracted cloth failed: {caption_err}")
 
                 if forced_type:
@@ -1553,50 +1634,72 @@ async def analyze_garment(
                 selected_item["wardrobe_progress_id"] = progress_id
                 selected_item["progress_sync"] = progress_sync
 
+        # ── SUCCESS RESPONSE (200 with JSON) ──
         public_item = _to_public_item(selected_item) if selected_item else None
+        total_s = round(time.time() - t0, 4)
 
-        response = {
-            "status": "success",
-            "requested_type": garment_type,
-            "requested_type_normalized": requested_type,
-            "hybrid_verify_enabled": USE_FLORENCE_HYBRID_VERIFY,
+        # Resolve category mapping for the selected item
+        final_type = str(public_item.get("type", "top")) if public_item else "top"
+        final_style = str(public_item.get("style", "")) if public_item else ""
+        category_meta = _wardrobe_category_from_garment_type(final_type, style=final_style if final_style else None)
+
+        reason_codes = ["SINGLE_ITEM"]
+        extraction_path = str(public_item.get("output_image_source", "")) if public_item else ""
+        if extraction_path == "vton_fallback":
+            reason_codes.append("HIGH_OCCLUSION_FALLBACK")
+
+        data = {
+            "result": "ACCEPTED",
+            "title": "Added To Wardrobe",
+            "description": "Garment extracted successfully and ready for wardrobe save.",
+            "reason_codes": reason_codes,
             "selection_required": False,
-            "detected_items": len(items),
-            "selected_index": selected_index if selected_index is not None else (public_item.get("garment_id") if public_item else None),
-            "item": public_item,
-            "items": [public_item] if public_item else [],
-            "imageUrl": public_item.get("url") if public_item else None,
-            "cropImageUrl": None,
-            "outputImageSource": public_item.get("output_image_source", "crop") if public_item else None,
+            "clothing_type": category_meta["style"],
+            "category_key": category_meta["category_key"],
+            "primary_category_key": category_meta["primary_category_key"],
+            "style": category_meta["style"],
+            "selected_type": final_type,
+            "selected_item": public_item,
+            "cloth_url": public_item.get("url") if public_item else None,
+            "output_image_url": public_item.get("output_image_url", public_item.get("url")) if public_item else None,
+            "extraction_path": extraction_path,
             "promptDescription": public_item.get("promptDescription") if public_item else None,
-            "progressId": public_item.get("wardrobe_progress_id") if public_item else None,
-            "latency": time.time() - t0
+            "wardrobe_progress_id": public_item.get("wardrobe_progress_id") if public_item else None,
+            "total_garments_found": len(items),
+            "latencies": {"total": total_s},
+            "processing_time_ms": int(total_s * 1000),
         }
-        if debug:
-            unique_types_final = [str(public_item.get("type"))] if public_item and public_item.get("type") else []
-            response["debug"] = {
-                "image_size": {"width": img.width, "height": img.height},
-                "raw_detected_count": raw_detected_count,
-                "parser_split_used": parser_split_used,
-                "parser_candidates_count": parser_candidates_count,
-                "parser_split_reject_reason": parser_split_reject_reason,
-                "heuristic_split_used": heuristic_split_used,
-                "heuristic_candidates_count": heuristic_candidates_count,
-                "dedup_removed": dedup_removed,
-                "collapsed_same_type": collapsed_same_type,
-                "unique_types_raw": unique_types,
-                "unique_types_final": unique_types_final,
-                "post_filter_count": len(instances),
-                "caption_mode": ANALYZE_CAPTION_MODE,
-                "returned_item_ids": [item["garment_id"] for item in items],
-            }
 
-        return response
-    except HTTPException:
-        raise
+        # Legacy fields for backward compatibility
+        data["imageUrl"] = data["cloth_url"]
+        data["progressId"] = data["wardrobe_progress_id"]
+
+        payload = _build_success_payload(data=data, status_code=200, message="")
+        return _json_response(payload)
+
+    except HTTPException as he:
+        # Convert old-style HTTPException to Flutter contract envelope
+        detail = he.detail if isinstance(he.detail, dict) else {"message": str(he.detail)}
+        status_msg = str(detail.get("status", detail.get("message", "Request failed")))
+        payload = _build_error_payload(
+            title="Request Failed",
+            description=str(detail.get("message", status_msg)),
+            reason_codes=[str(detail.get("reason", "REQUEST_FAILED")).upper()],
+            status_code=he.status_code,
+            result="ERROR" if he.status_code >= 500 else "REJECTED",
+        )
+        return _json_response(payload)
     except Exception as e:
         logger.error(f"Analysis failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        payload = _build_error_payload(
+            title="Server Error",
+            description="An unexpected error occurred. Please try again.",
+            reason_codes=["SERVER_ERROR"],
+            status_code=500,
+            result="ERROR",
+            message=str(e),
+        )
+        return _json_response(payload)
 
 @app.post("/v1/flux/tryon")
 @app.post("/v1/flux2/tryon")
