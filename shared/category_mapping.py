@@ -1,3 +1,5 @@
+import difflib
+import re
 from typing import Dict, Optional, Tuple
 
 CLOTHING_STYLES = [
@@ -74,6 +76,78 @@ STYLE_TO_CATEGORY_KEYS = {
     "vest": ("outerwear", "vests"),
 }
 
+STYLE_ALIASES = {
+    "tee": "t-shirt",
+    "tee shirt": "t-shirt",
+    "t shirt": "t-shirt",
+    "long sleeve tee": "long sleeve t-shirt",
+    "long sleeve tshirt": "long sleeve t-shirt",
+    "sleeveless tee": "sleeveless t-shirt",
+    "sleeveless tshirt": "sleeveless t-shirt",
+    "tank": "tank top",
+    "cami": "camisole",
+    "button down shirt": "casual shirt",
+    "button-up shirt": "casual shirt",
+    "joggers": "sweatpants",
+    "jogger": "sweatpants",
+    "track pant": "track pants",
+    "slacks": "dress pants",
+    "pant": "trousers",
+    "pants": "trousers",
+    "denim": "jeans",
+    "mini skirt": "mini skirt",
+    "midi skirt": "midi skirt",
+    "maxi skirt": "maxi skirt",
+    "blazer jacket": "blazer",
+    "suit blazer": "blazer",
+    "hooded sweatshirt": "hoodie",
+    "puffer": "puffer jacket",
+    "windbreaker": "sports jacket",
+}
+
+KEYWORD_STYLE_HINTS = {
+    "long sleeve": "long sleeve t-shirt",
+    "sleeveless": "sleeveless t-shirt",
+    "polo": "polo shirt",
+    "tank": "tank top",
+    "camisole": "camisole",
+    "crop": "crop top",
+    "blouse": "blouse",
+    "shirt dress": "shirt dress",
+    "t shirt dress": "t-shirt dress",
+    "sweatshirt dress": "sweatshirt dress",
+    "sweater dress": "sweater dress",
+    "party dress": "party dress",
+    "mini dress": "mini dress",
+    "maxi dress": "maxi dress",
+    "jumpsuit": "jumpsuit",
+    "jeans": "jeans",
+    "trouser": "trousers",
+    "dress pant": "dress pants",
+    "track pant": "track pants",
+    "legging": "leggings",
+    "sweatpant": "sweatpants",
+    "shorts": "shorts",
+    "mini skirt": "mini skirt",
+    "midi skirt": "midi skirt",
+    "maxi skirt": "maxi skirt",
+    "skirt": "skirt",
+    "trench": "trench coat",
+    "coat": "coat",
+    "blazer": "blazer",
+    "varsity": "varsity jacket",
+    "trucker": "trucker jacket",
+    "biker": "biker jacket",
+    "field jacket": "field jacket",
+    "fleece": "fleece jacket",
+    "parka": "parka",
+    "down jacket": "down jacket",
+    "puffer": "puffer jacket",
+    "hoodie": "hoodie",
+    "cardigan": "cardigan",
+    "sweater vest": "sweater vest",
+}
+
 BANNED_CLOTHING = {
     "panties", "bra", "underwear", "undergarment", "lingerie",
     "bikini", "swimwear", "swimsuit", "brassiere", "briefs",
@@ -94,6 +168,69 @@ GARMENT_ALLOWED_PRIMARY_KEYS = {
     "dress": {"dresses"},
 }
 
+def _normalize_style_text(text: Optional[str]) -> str:
+    s = str(text or "").strip().lower()
+    if not s:
+        return ""
+    s = s.replace("_", " ").replace("-", " ").replace("/", " ")
+    s = re.sub(r"[^a-z0-9\s]", " ", s)
+    s = " ".join(s.split())
+    return s
+
+_NORMALIZED_STYLE_INDEX = {
+    _normalize_style_text(style): style
+    for style in STYLE_TO_CATEGORY_KEYS.keys()
+}
+
+def _resolve_canonical_style(style: Optional[str], garment_type: Optional[str] = None) -> Optional[str]:
+    normalized = _normalize_style_text(style)
+    if not normalized:
+        return None
+
+    candidates = []
+    seen = set()
+
+    def _push(canonical: Optional[str]):
+        if not canonical:
+            return
+        if canonical not in STYLE_TO_CATEGORY_KEYS:
+            return
+        if canonical in seen:
+            return
+        seen.add(canonical)
+        candidates.append(canonical)
+
+    # 1) Direct alias/exact matches.
+    _push(STYLE_ALIASES.get(normalized))
+    _push(_NORMALIZED_STYLE_INDEX.get(normalized))
+
+    # 2) Substring/contains matches, preferring longer (more specific) styles.
+    for norm_style, canonical in sorted(_NORMALIZED_STYLE_INDEX.items(), key=lambda kv: len(kv[0]), reverse=True):
+        if norm_style and (norm_style in normalized or normalized in norm_style):
+            _push(canonical)
+
+    # 3) Keyword hints from caption-like descriptions.
+    for key, canonical in sorted(KEYWORD_STYLE_HINTS.items(), key=lambda kv: len(kv[0]), reverse=True):
+        if key in normalized:
+            _push(canonical)
+
+    # 4) Fuzzy fallback.
+    universe = list(_NORMALIZED_STYLE_INDEX.keys()) + list(STYLE_ALIASES.keys())
+    for near in difflib.get_close_matches(normalized, universe, n=4, cutoff=0.72):
+        _push(STYLE_ALIASES.get(near, _NORMALIZED_STYLE_INDEX.get(near)))
+
+    if not candidates:
+        return None
+
+    if garment_type:
+        allowed_primary = allowed_primary_keys_for_garment_type(garment_type)
+        if allowed_primary:
+            for c in candidates:
+                pk, _ = STYLE_TO_CATEGORY_KEYS[c]
+                if pk in allowed_primary:
+                    return c
+    return candidates[0]
+
 def normalize_item_garment_type(garment_type: str) -> str:
     g = (garment_type or "all").lower().strip()
     if g in {"top", "bottom", "dress", "outer"}:
@@ -104,17 +241,17 @@ def allowed_primary_keys_for_garment_type(garment_type: str) -> set:
     g = normalize_item_garment_type(garment_type)
     return set(GARMENT_ALLOWED_PRIMARY_KEYS.get(g, set()))
 
-def style_category_keys(style: Optional[str]) -> Optional[Tuple[str, str]]:
-    if not style:
+def style_category_keys(style: Optional[str], garment_type: Optional[str] = None) -> Optional[Tuple[str, str]]:
+    canonical = _resolve_canonical_style(style, garment_type=garment_type)
+    if not canonical:
         return None
-    style_key = str(style).lower().strip()
-    keys = STYLE_TO_CATEGORY_KEYS.get(style_key)
+    keys = STYLE_TO_CATEGORY_KEYS.get(canonical)
     if not keys:
         return None
     return keys
 
 def is_style_compatible_with_garment_type(style: Optional[str], garment_type: str) -> bool:
-    keys = style_category_keys(style)
+    keys = style_category_keys(style, garment_type=garment_type)
     if not keys:
         return False
     allowed_primary = allowed_primary_keys_for_garment_type(garment_type)
@@ -125,13 +262,14 @@ def is_style_compatible_with_garment_type(style: Optional[str], garment_type: st
 
 def wardrobe_category_from_garment_type(garment_type: str, style: Optional[str] = None) -> Dict[str, str]:
     if style:
-        keys = style_category_keys(style)
-        if keys and is_style_compatible_with_garment_type(style, garment_type):
+        canonical = _resolve_canonical_style(style, garment_type=garment_type)
+        keys = style_category_keys(canonical, garment_type=garment_type)
+        if keys and is_style_compatible_with_garment_type(canonical, garment_type):
             pk, ck = keys
             return {
                 "primary_category_key": pk,
                 "category_key": ck,
-                "style": style,
+                "style": canonical,
             }
 
     g = normalize_item_garment_type(garment_type)
@@ -144,13 +282,5 @@ def wardrobe_category_from_garment_type(garment_type: str, style: Optional[str] 
         "style": style or "Unknown",
     }
 
-def infer_style_from_text(text: str) -> Optional[str]:
-    if not text:
-        return None
-    t = text.lower()
-    matches = []
-    # Reverse sort by length so longer phrases ("long sleeve t-shirt") matched first
-    for style in sorted(STYLE_TO_CATEGORY_KEYS.keys(), key=len, reverse=True):
-        if style in t:
-            return style
-    return None
+def infer_style_from_text(text: str, garment_type: Optional[str] = None) -> Optional[str]:
+    return _resolve_canonical_style(text, garment_type=garment_type)
