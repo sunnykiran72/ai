@@ -1023,6 +1023,7 @@ def _run_vton_cloth_only_fallback(image_url: str, garment_type: str, vto_mode: b
     return {
         "url": public_url,
         "raw_url": mirrored_raw_url or public_url,
+        "_bytes": processed_vton_bytes,
         "meta": {
             "path": extraction_meta.get("path", "vton_fallback"),
             "endpoint": ANALYZE_VTON_CLOTH_ONLY_ENDPOINT,
@@ -1030,14 +1031,14 @@ def _run_vton_cloth_only_fallback(image_url: str, garment_type: str, vto_mode: b
             "vto_mode": vto_mode,
             "showroom_person_enabled": ANALYZE_VTON_USE_SHOWROOM_PERSON,
             "person_image_url": person_image_url,
-            "fashn_raw_url": str(url),
-            "raw_output_url": mirrored_raw_url,
+            "fashn_raw_url": public_url,
+            "raw_output_url": mirrored_raw_url or public_url,
             "mirrored": mirrored_ok,
-            "quality": image_quality,
+            "quality": q_meta,
             "source_similarity": source_similarity,
             "postprocess": postprocess_meta,
             "request_payload": payload,
-            "hybrid_meta": extraction_meta
+            "hybrid_meta": extraction_meta,
         },
     }
 
@@ -1423,21 +1424,35 @@ async def analyze_garment(
                 total_s = round(time.time() - t0, 4)
                 # Build item_breakdown for Flutter
                 item_breakdown = []
+                binary_parts = []
                 for item in items:
                     pub = _to_public_item(item)
-                    pub["rank"] = pub.get("garment_id", 0)
+                    pub["rank"] = int(item.get("garment_id") or 0)
+                    mapped_type = item.get("garment_type") or item.get("type", "unknown")
+                    pub["garment_type"] = mapped_type
                     item_breakdown.append(pub)
 
+                    img = item.get("_image_obj")
+                    if img is not None:
+                        buf = io.BytesIO()
+                        img.save(buf, format="PNG")
+                        part_name = f"item_{int(pub['rank'])}"
+                        binary_parts.append({
+                            "name": part_name,
+                            "filename": f"{part_name}.png",
+                            "content_type": "image/png",
+                            "bytes": buf.getvalue(),
+                        })
+
                 data = {
-                    "result": "WARNING",
+                    "result": "REJECTED",
                     "title": "Multiple Items Found",
-                    "description": "Multiple garments were detected. Please select a type (top, bottom, dress) and re-upload to continue.",
+                    "description": "Multiple garments were detected. Please select one to continue.",
                     "reason_codes": ["MULTI_ITEM_SELECTION_REQUIRED"],
                     "selection_required": True,
                     "total_garments_found": len(items),
                     "selection_hint": {
-                        "expected_field": "garmentType",
-                        "allowed_types": ["top", "bottom", "dress"],
+                        "expected_field": "selected_index",
                     },
                     "item_breakdown": item_breakdown,
                     "multipart_data": _build_multipart_parts(items=item_breakdown),
@@ -1445,7 +1460,7 @@ async def analyze_garment(
                     "processing_time_ms": int(total_s * 1000),
                 }
                 payload = _build_success_payload(data=data, status_code=400, message="")
-                return _multipart_form_response(payload)
+                return _multipart_form_response(payload, binary_parts=binary_parts)
 
             selected_item = None
             if selected_index is not None:
@@ -1561,6 +1576,7 @@ async def analyze_garment(
                     return _json_response(payload)
 
                 selected_item["url"] = extracted_url
+                selected_item["_bytes"] = fallback.get("_bytes")
                 selected_item["output_image_url"] = extracted_url
                 selected_item["output_image_source"] = str(extraction_meta.get("path", "vton_fallback"))
                 selected_item["raw_image_url"] = str(fallback.get("raw_url") or extracted_url)
@@ -1674,8 +1690,24 @@ async def analyze_garment(
         data["imageUrl"] = data["cloth_url"]
         data["progressId"] = data["wardrobe_progress_id"]
 
+        # Ensure multipart metadata includes the extracted cloth part
+        data["multipart_data"] = _build_multipart_parts(
+            items=[],  # No crops needed on final success
+            cloth_url=data["cloth_url"]
+        )
+
         payload = _build_success_payload(data=data, status_code=200, message="")
-        return _json_response(payload)
+        
+        binary_parts = []
+        if selected_item and selected_item.get("_bytes"):
+            binary_parts.append({
+                "name": "extracted_cloth",
+                "filename": "extracted_cloth.png",
+                "content_type": "image/png",
+                "bytes": selected_item["_bytes"],
+            })
+
+        return _multipart_form_response(payload, binary_parts=binary_parts)
 
     except HTTPException as he:
         # Convert old-style HTTPException to Flutter contract envelope
