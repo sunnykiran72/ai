@@ -1035,7 +1035,7 @@ def _run_vton_cloth_only_fallback(image_url: str, garment_type: str, vto_mode: b
             "fashn_raw_url": public_url,
             "raw_output_url": mirrored_raw_url or public_url,
             "mirrored": mirrored_ok,
-            "quality": q_meta,
+            "quality": image_quality,
             "source_similarity": source_similarity,
             "postprocess": postprocess_meta,
             "request_payload": payload,
