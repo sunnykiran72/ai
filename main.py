@@ -7,6 +7,8 @@ import uuid
 import tempfile
 import re
 import hashlib
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 import numpy as np
@@ -53,6 +55,9 @@ from ai.core.human_parser_runner import HumanParserRunner
 # Configuration
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("glamify-ai")
+
+_REMBG_SESSION = None
+_REMBG_SESSION_LOCK = threading.Lock()
 
 JWT_ACCESS_SECRET = os.getenv("JWT_ACCESS_SECRET", "")
 
@@ -123,6 +128,7 @@ ANALYZE_VTON_CUTOUT_FEATHER_PX = max(0, _env_int("ANALYZE_VTON_CUTOUT_FEATHER_PX
 ANALYZE_VTON_ZOOM_PADDING_RATIO = _env_float("ANALYZE_VTON_ZOOM_PADDING_RATIO", 0.12)
 ANALYZE_VTON_ALLOW_SOURCE_FALLBACK = os.getenv("ANALYZE_VTON_ALLOW_SOURCE_FALLBACK", "0") == "1"
 ANALYZE_VTON_REJECT_SOURCE_PASSTHROUGH = os.getenv("ANALYZE_VTON_REJECT_SOURCE_PASSTHROUGH", "1") == "1"
+ANALYZE_VTON_MIRROR_RAW_OUTPUT = os.getenv("ANALYZE_VTON_MIRROR_RAW_OUTPUT", "0") == "1"
 ANALYZE_VTON_MAX_SOURCE_MAE = _env_float("ANALYZE_VTON_MAX_SOURCE_MAE", 2.0)
 ANALYZE_VTON_USE_SHOWROOM_PERSON = os.getenv("ANALYZE_VTON_USE_SHOWROOM_PERSON", "0") == "1"
 ANALYZE_VTON_SHOWROOM_PERSON_IMAGE_URL = os.getenv("ANALYZE_VTON_SHOWROOM_PERSON_IMAGE_URL", "").strip()
@@ -476,6 +482,20 @@ def _suppress_auxiliary_instances(instances: list[dict], image_width: int, image
 def _to_public_item(item: dict) -> dict:
     return {k: v for k, v in item.items() if not str(k).startswith("_")}
 
+def _get_rembg_isnet_session():
+    """
+    Reuse a single rembg ISNet session across requests to avoid per-request
+    model/session initialization overhead.
+    """
+    global _REMBG_SESSION
+    if _REMBG_SESSION is not None:
+        return _REMBG_SESSION
+    with _REMBG_SESSION_LOCK:
+        if _REMBG_SESSION is None:
+            from rembg import new_session
+            _REMBG_SESSION = new_session("isnet-general-use")
+    return _REMBG_SESSION
+
 def _write_temp_png(image: Image.Image) -> str:
     fd, path = tempfile.mkstemp(prefix="analyze_crop_", suffix=".png")
     os.close(fd)
@@ -812,10 +832,10 @@ def _extract_cloth_from_crop(crop: Image.Image, garment_type: str) -> tuple[Imag
 
     try:
         import cv2
-        from rembg import remove, new_session
+        from rembg import remove
 
         # STEP 1: Neural Background Removal (ISNet)
-        session = new_session("isnet-general-use")
+        session = _get_rembg_isnet_session()
         rembg_result = remove(crop.convert("RGB"), session=session, post_process_mask=True)
         rembg_alpha = np.array(rembg_result)[:, :, 3].astype(np.uint8)
         logger.info(f"rembg alpha coverage: {rembg_alpha.mean():.1f}")
@@ -894,6 +914,8 @@ def _extract_cloth_from_crop(crop: Image.Image, garment_type: str) -> tuple[Imag
     return cloth_image, meta
 
 def _run_vton_cloth_only_fallback(image_url: str, garment_type: str, vto_mode: bool = False) -> dict:
+    t_all_start = time.time()
+    t_vton_start = time.time()
     if not ANALYZE_VTON_CLOTH_ONLY_ENDPOINT:
         raise RuntimeError("ANALYZE_VTON_CLOTH_ONLY_ENDPOINT is empty.")
     category = _type_to_vton_category(garment_type)
@@ -939,15 +961,8 @@ def _run_vton_cloth_only_fallback(image_url: str, garment_type: str, vto_mode: b
     }
     response = requests.post(ANALYZE_VTON_CLOTH_ONLY_ENDPOINT, json=payload, timeout=ANALYZE_VTON_TIMEOUT_S)
     if not (200 <= response.status_code < 300):
-        if response.status_code == 400 and "multiple garments" in response.text.lower() and "selected_index" not in str(payload):
-             # Auto-retry with index 0 if multiple garments detected (often happens with patterns)
-             payload["selected_index"] = 0
-             logger.info("Retrying with selected_index=0 due to multiple garment detection.")
-             response = requests.post(ANALYZE_VTON_CLOTH_ONLY_ENDPOINT, json=payload, timeout=ANALYZE_VTON_TIMEOUT_S)
-             if not (200 <= response.status_code < 300):
-                 raise RuntimeError(f"VTON retry failed: {response.status_code} {response.text[:200]}")
-        else:
-            raise RuntimeError(f"VTON cloth-only fallback failed: {response.status_code} {response.text[:200]}")
+        raise RuntimeError(f"VTON cloth-only fallback failed: {response.status_code} {response.text[:200]}")
+    t_vton_s = time.time() - t_vton_start
             
     body = response.json()
     url = body.get("url") or body.get("azure_url")
@@ -962,28 +977,29 @@ def _run_vton_cloth_only_fallback(image_url: str, garment_type: str, vto_mode: b
     processed_vton_bytes = b""
     postprocess_meta = {}
 
-    source_bytes = _fetch_image_bytes(image_url, timeout=45)
-    raw_vton_bytes = _fetch_image_bytes(public_url, timeout=45)
+    t_fetch_start = time.time()
+    # Parallelize source/raw fetches to reduce wall-clock IO time.
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        source_fut = pool.submit(_fetch_image_bytes, image_url, 45)
+        raw_fut = pool.submit(_fetch_image_bytes, public_url, 45)
+        source_bytes = source_fut.result()
+        raw_vton_bytes = raw_fut.result()
+    t_fetch_s = time.time() - t_fetch_start
 
     # --- LOCAL EXTRACTION FROM MANNEQUIN ---
     # We now have the mannequin wearing the garment (raw_vton_bytes).
     # We perform local extraction to isolate the garment and ensure no holes are introduced.
-    try:
-        vton_img_mannequin = Image.open(io.BytesIO(raw_vton_bytes)).convert("RGB")
-        logger.info(f"Loaded VTON mannequin image for local extraction: {vton_img_mannequin.size} {vton_img_mannequin.mode}")
-        
-        extracted_cloth, extraction_meta = _extract_cloth_from_crop(vton_img_mannequin, garment_type)
-        extraction_meta["vto_path"] = "vton_fallback_mannequin_local_parser"
-        
-        # Save as bytes for postprocessing
-        buf = io.BytesIO()
-        extracted_cloth.save(buf, format="PNG")
-        final_vton_bytes = buf.getvalue()
-    except Exception as extract_err:
-        logger.error(f"Local extraction of VTON mannequin failed: {extract_err}", exc_info=True)
-        # Fallback to the raw mannequin result (captured as a solid asset)
-        final_vton_bytes = raw_vton_bytes
-        extraction_meta = {"path": "vton_fallback_mannequin_bypass", "error": str(extract_err)}
+    t_extract_start = time.time()
+    vton_img_mannequin = Image.open(io.BytesIO(raw_vton_bytes)).convert("RGB")
+    logger.info(f"Loaded VTON mannequin image for local extraction: {vton_img_mannequin.size} {vton_img_mannequin.mode}")
+    extracted_cloth, extraction_meta = _extract_cloth_from_crop(vton_img_mannequin, garment_type)
+    extraction_meta["vto_path"] = "vton_fallback_mannequin_local_parser"
+
+    # Save as bytes for postprocessing
+    buf = io.BytesIO()
+    extracted_cloth.save(buf, format="PNG")
+    final_vton_bytes = buf.getvalue()
+    t_extract_s = time.time() - t_extract_start
 
     source_similarity = _compare_image_similarity(source_bytes, final_vton_bytes)
     if ANALYZE_VTON_REJECT_SOURCE_PASSTHROUGH:
@@ -994,18 +1010,22 @@ def _run_vton_cloth_only_fallback(image_url: str, garment_type: str, vto_mode: b
                 f"VTON output too similar to source crop (resized_mae={source_similarity.get('resized_mae')})."
             )
     
+    t_post_start = time.time()
     processed_vton_bytes, postprocess_meta = _postprocess_extracted_garment_bytes(final_vton_bytes)
     image_quality = _validate_vton_output_bytes(processed_vton_bytes)
+    t_post_s = time.time() - t_post_start
 
     # Normalize to publicly consumable URLs
-    mirrored_raw_url = ""
-    try:
-        # Save RAW VTON for explicit user inspection
-        raw_mirrored = _upload_or_raise(raw_vton_bytes)
-        if raw_mirrored:
-            mirrored_raw_url = str(raw_mirrored)
-    except Exception as raw_e:
-        logger.warning(f"Failed to upload raw VTON for debug: {raw_e}")
+    mirrored_raw_url = str(url)
+    t_upload_start = time.time()
+    if ANALYZE_VTON_MIRROR_RAW_OUTPUT:
+        try:
+            # Optional debug mirror for raw VTON payload.
+            raw_mirrored = _upload_or_raise(raw_vton_bytes)
+            if raw_mirrored:
+                mirrored_raw_url = str(raw_mirrored)
+        except Exception as raw_e:
+            logger.warning(f"Failed to upload raw VTON for debug: {raw_e}")
 
     try:
         mirrored = _upload_or_raise(processed_vton_bytes)
@@ -1019,10 +1039,13 @@ def _run_vton_cloth_only_fallback(image_url: str, garment_type: str, vto_mode: b
             raise RuntimeError(f"Could not mirror VTON output URL to public Azure blob: {mirror_err}") from mirror_err
         logger.warning(f"Could not mirror VTON output URL to Azure: {mirror_err}")
         mirrored_ok = False
+    t_upload_s = time.time() - t_upload_start
+    t_all_s = time.time() - t_all_start
 
     return {
         "url": public_url,
         "raw_url": mirrored_raw_url or public_url,
+        "_processed_image_bytes": processed_vton_bytes,
         "meta": {
             "path": extraction_meta.get("path", "vton_fallback"),
             "endpoint": ANALYZE_VTON_CLOTH_ONLY_ENDPOINT,
@@ -1036,6 +1059,14 @@ def _run_vton_cloth_only_fallback(image_url: str, garment_type: str, vto_mode: b
             "quality": image_quality,
             "source_similarity": source_similarity,
             "postprocess": postprocess_meta,
+            "timings": {
+                "total": round(t_all_s, 4),
+                "vton_request": round(t_vton_s, 4),
+                "fetch_io": round(t_fetch_s, 4),
+                "local_extract": round(t_extract_s, 4),
+                "postprocess": round(t_post_s, 4),
+                "upload": round(t_upload_s, 4),
+            },
             "request_payload": payload,
             "hybrid_meta": extraction_meta
         },
@@ -1202,8 +1233,13 @@ async def analyze_garment(
             heuristic_candidates_count = 0
             instances = engine.yolo.detect_instances(img)
             if not instances:
-                # Fallback to full image if no garment detected
-                instances = [{"mask": None, "bbox": (0, 0, img.width, img.height), "label": "garment", "image": img}]
+                payload = _build_error_payload(
+                    title="No Garment Detected",
+                    description="No clothing item was detected in the uploaded image.",
+                    reason_codes=["NO_GARMENT_DETECTED"],
+                    status_code=400,
+                )
+                return _multipart_form_response(payload)
             else:
                 # Finalize crops
                 instances = engine.yolo.get_crops(img, instances)
@@ -1419,7 +1455,8 @@ async def analyze_garment(
                     idx for idx, item in enumerate(items)
                     if _normalize_garment_type(str(item.get("type"))) == requested_type
                 ]
-                if len(matched) == 1:
+                # If type is explicitly requested, proceed with the top-ranked matching candidate.
+                if len(matched) >= 1:
                     auto_selected_index = matched[0]
 
             # ── MULTI-ITEM SELECTION REQUIRED (400 with multipart) ──
@@ -1487,29 +1524,13 @@ async def analyze_garment(
                 forced_type = requested_type if requested_type in {"top", "bottom", "dress", "outer"} else None
                 selected_type = forced_type or _normalize_garment_type(str(selected_item.get("type")))
                 if not selected_type:
-                    caption_guess = _infer_type_from_caption(
-                        str(selected_item.get("promptDescription") or selected_item.get("description") or "")
+                    payload = _build_error_payload(
+                        title="Type Required",
+                        description="Could not determine garment type. Please provide type as top, bottom, dress, or outer.",
+                        reason_codes=["INVALID_SELECTION_TYPE"],
+                        status_code=400,
                     )
-                    if caption_guess:
-                        selected_item["type_original"] = selected_item.get("type")
-                        selected_item["type"] = caption_guess
-                        selected_item["type_source"] = "caption_autotype"
-                        selected_type = caption_guess
-                if not selected_type:
-                    try:
-                        auto_verdict = engine.florence.classify_garment_type(selected_item["_image_obj"], hint_type=requested_type)
-                        auto_type = _normalize_garment_type(str(auto_verdict.get("type")))
-                        if auto_type:
-                            selected_item["type_original"] = selected_item.get("type")
-                            selected_item["type"] = auto_type
-                            selected_item["type_source"] = "florence_autotype"
-                            selected_item["autotype_score"] = float(auto_verdict.get("score", 0.0))
-                            selected_item["autotype_reason"] = str(auto_verdict.get("reason", ""))
-                            selected_type = auto_type
-                    except Exception as auto_type_err:
-                        logger.warning(f"Automatic type resolution failed: {auto_type_err}")
-                if not selected_type:
-                    selected_type = "top"
+                    return _multipart_form_response(payload)
                 if forced_type and str(selected_item.get("type")) != forced_type:
                     selected_item["type_original"] = selected_item.get("type")
                     selected_item["type"] = forced_type
@@ -1550,6 +1571,7 @@ async def analyze_garment(
 
                 extracted_url = ""
                 extraction_meta = {}
+                extracted_image_bytes = b""
                 try:
                     # Deep Analysis fix: If single item detected, use vto_mode=True to
                     # preserve person and prevent truncation during extraction.
@@ -1561,6 +1583,7 @@ async def analyze_garment(
                     )
                     extracted_url = str(fallback.get("url") or "")
                     extraction_meta = dict(fallback.get("meta") or {})
+                    extracted_image_bytes = bytes(fallback.get("_processed_image_bytes") or b"")
                 except Exception as fallback_err:
                     payload = _build_error_payload(
                         title="Extraction Failed",
@@ -1585,12 +1608,16 @@ async def analyze_garment(
                 selected_item["raw_image_url"] = str(fallback.get("raw_url") or extracted_url)
                 selected_item["raw_image_source"] = "vton_raw"
                 selected_item["extraction"] = extraction_meta
+                selected_item["_extracted_image_bytes"] = extracted_image_bytes
                 selected_item["cloth_verified"] = selected_item["output_image_source"] == "vton_fallback"
                 selected_item["cloth_verification_source"] = "vton_extraction"
 
                 if ANALYZE_PROMPT_FROM_EXTRACTED:
                     try:
-                        cloth_image = download_image(extracted_url)
+                        if extracted_image_bytes:
+                            cloth_image = Image.open(io.BytesIO(extracted_image_bytes)).convert("RGBA")
+                        else:
+                            cloth_image = download_image(extracted_url)
                         caption_image = _flatten_rgba_on_white(cloth_image)
                         if ANALYZE_CAPTION_MODE == "detailed":
                             prompt_desc = engine.florence.describe_garment(caption_image)
@@ -1664,7 +1691,10 @@ async def analyze_garment(
 
         reason_codes = ["SINGLE_ITEM"]
         extraction_path = str(public_item.get("output_image_source", "")) if public_item else ""
-        if extraction_path == "vton_fallback":
+        extraction_meta_public = (public_item or {}).get("extraction") or {}
+        if extraction_meta_public.get("endpoint"):
+            reason_codes.append("VTON_USED")
+        if extraction_path.startswith("vton_fallback"):
             reason_codes.append("HIGH_OCCLUSION_FALLBACK")
 
         data = {
@@ -1792,6 +1822,7 @@ def health_check():
             "analyze_vton_fallback_enabled": ANALYZE_VTON_FALLBACK_ENABLED,
             "analyze_vton_segmentation_free": ANALYZE_VTON_SEGMENTATION_FREE,
             "analyze_vton_reject_source_passthrough": ANALYZE_VTON_REJECT_SOURCE_PASSTHROUGH,
+            "analyze_vton_mirror_raw_output": ANALYZE_VTON_MIRROR_RAW_OUTPUT,
             "analyze_vton_use_showroom_person": ANALYZE_VTON_USE_SHOWROOM_PERSON,
             "analyze_vton_dress_use_full_image": ANALYZE_VTON_DRESS_USE_FULL_IMAGE,
             "analyze_vton_single_item_use_full_image": ANALYZE_VTON_SINGLE_ITEM_USE_FULL_IMAGE,

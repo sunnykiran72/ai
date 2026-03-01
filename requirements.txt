@@ -15,6 +15,7 @@ sentencepiece
 pillow
 numpy
 opencv-python-headless
+rembg
 ultralytics
 einops
 timm
