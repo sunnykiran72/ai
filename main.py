@@ -205,6 +205,7 @@ class AIEngine:
 
     def ensure_analyze_ready(self):
         self.yolo_runner.ensure_ready()
+        self.florence._ensure_loaded()
         if self.parser_runner:
             self.parser_runner.ensure_ready()
 
