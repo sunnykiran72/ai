@@ -180,8 +180,13 @@ class FlorenceRunner:
                 trust_remote_code=True, 
                 torch_dtype=self.torch_dtype,
                 attn_implementation="eager",
+                local_files_only=True,
             ).to(self.device)
-            self._processor = AutoProcessor.from_pretrained(self.model_id, trust_remote_code=True)
+            self._processor = AutoProcessor.from_pretrained(
+                self.model_id, 
+                trust_remote_code=True,
+                local_files_only=True,
+            )
             self._apply_generation_compat()
 
     def run_task(
