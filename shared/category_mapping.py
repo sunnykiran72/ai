@@ -1,8 +1,8 @@
 from typing import Dict, Optional, Tuple
 
 CLOTHING_STYLES = [
-    "t-shirt", "long sleeve t-shirt", "sleeveless t-shirt", "polo shirt",
-    "tank top", "camisole", "crop top", "blouse", "casual shirt",
+    "tee", "long sleeve t-shirt", "sleeveless t-shirt", "polo shirt",
+    "tank top", "camisole", "crop top", "blouse", "shirt",
     "sweatshirt", "hoodie", "sweater", "sweater vest", "sports top",
     "bodysuit", "knitwear", "cardigan", "jeans", "trousers", "dress pants",
     "track pants", "leggings", "sweatpants", "shorts", "skirt", "mini skirt",
@@ -15,7 +15,7 @@ CLOTHING_STYLES = [
 ]
 
 STYLE_TO_CATEGORY_KEYS = {
-    "t-shirt": ("tops", "t_shirts"),
+    "tee": ("tops", "t_shirts"),
     "long sleeve t-shirt": ("tops", "long_sleeve_t_shirts"),
     "sleeveless t-shirt": ("tops", "sleeveless_t_shirts"),
     "polo shirt": ("tops", "polo_shirts"),
@@ -23,7 +23,7 @@ STYLE_TO_CATEGORY_KEYS = {
     "camisole": ("tops", "tanks_and_camis"),
     "crop top": ("tops", "crop_tops"),
     "blouse": ("tops", "blouses"),
-    "casual shirt": ("tops", "shirts"),
+    "shirt": ("tops", "shirts"),
     "sweatshirt": ("tops", "sweatshirts"),
     "hoodie": ("outerwear", "zip_up_hoodies"),
     "sweater": ("tops", "sweaters"),
@@ -131,7 +131,7 @@ def wardrobe_category_from_garment_type(garment_type: str, style: Optional[str] 
             return {
                 "primary_category_key": pk,
                 "category_key": ck,
-                "style": style,
+                "style": style.title() if style else "Unknown",
             }
 
     g = normalize_item_garment_type(garment_type)
@@ -143,3 +143,14 @@ def wardrobe_category_from_garment_type(garment_type: str, style: Optional[str] 
         "category_key": "unknown",
         "style": style or "Unknown",
     }
+
+def infer_style_from_text(text: str) -> Optional[str]:
+    if not text:
+        return None
+    t = text.lower()
+    matches = []
+    # Reverse sort by length so longer phrases ("long sleeve t-shirt") matched first
+    for style in sorted(STYLE_TO_CATEGORY_KEYS.keys(), key=len, reverse=True):
+        if style in t:
+            return style
+    return None
