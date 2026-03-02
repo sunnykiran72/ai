@@ -125,9 +125,14 @@ def main() -> int:
 
     # /v1/flux2/tryon
     body = {
-        "user_image_url": args.user_image_url,
-        "garment_image_url": args.garment_image_url,
-        "user_top_description": "black t-shirt",
+        "products": [
+            {
+                "image": args.garment_image_url,
+            }
+        ],
+        "user_image": {
+            "tryonImage": args.user_image_url,
+        },
         "steps": 6,
         "seed": 23,
     }

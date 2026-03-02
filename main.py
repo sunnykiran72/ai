@@ -7,9 +7,8 @@ import uuid
 import tempfile
 import re
 import hashlib
-import threading
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional
+from typing import Optional, List, Tuple
 
 import numpy as np
 import requests
@@ -49,15 +48,14 @@ from ai.modules.wardrobe.human_parser import HumanParser
 # Core Models (Heavy Runners)
 from ai.core.flux2_cvton_runner import Flux2CVTONRunner
 from ai.core.florence_runner import FlorenceRunner
+from ai.core.qwen25vl_runner import Qwen25VLRunner
+from ai.core.joycaption_runner import JoyCaptionRunner
 from ai.core.yolo_runner import YoloRunner
 from ai.core.human_parser_runner import HumanParserRunner
 
 # Configuration
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("glamify-ai")
-
-_REMBG_SESSION = None
-_REMBG_SESSION_LOCK = threading.Lock()
 
 JWT_ACCESS_SECRET = os.getenv("JWT_ACCESS_SECRET", "")
 
@@ -93,6 +91,34 @@ VTO_OUTPUT_CONTAINER = (
 )
 USE_FLORENCE_HYBRID_VERIFY = os.getenv("USE_FLORENCE_HYBRID_VERIFY", "0") == "1"
 USE_FLORENCE_DETAILED_PROMPT = os.getenv("USE_FLORENCE_DETAILED_PROMPT", "0") == "1"
+FLUX2_DESCRIPTOR_BACKEND = os.getenv("FLUX2_DESCRIPTOR_BACKEND", "florence").strip().lower()
+if FLUX2_DESCRIPTOR_BACKEND not in {"florence", "qwen2_5_vl", "joycaption"}:
+    FLUX2_DESCRIPTOR_BACKEND = "florence"
+FLUX2_FIDELITY_BACKEND = os.getenv("FLUX2_FIDELITY_BACKEND", "florence").strip().lower()
+if FLUX2_FIDELITY_BACKEND not in {"florence", "qwen2_5_vl"}:
+    FLUX2_FIDELITY_BACKEND = "florence"
+FLUX2_DESCRIPTOR_COMPARE = os.getenv("FLUX2_DESCRIPTOR_COMPARE", "0") == "1"
+FLUX2_DRESS_SECOND_PASS_ENABLED = os.getenv("FLUX2_DRESS_SECOND_PASS_ENABLED", "1") == "1"
+FLUX2_DRESS_SECOND_PASS_EXTRA_STEPS = max(1, _env_int("FLUX2_DRESS_SECOND_PASS_EXTRA_STEPS", 4))
+FLUX2_DRESS_SECOND_PASS_MAX_STEPS = max(6, _env_int("FLUX2_DRESS_SECOND_PASS_MAX_STEPS", 18))
+FLUX2_QWEN_SECOND_PASS_ENABLED = os.getenv("FLUX2_QWEN_SECOND_PASS_ENABLED", "1") == "1"
+FLUX2_QWEN_SECOND_PASS_EXTRA_STEPS = max(1, _env_int("FLUX2_QWEN_SECOND_PASS_EXTRA_STEPS", 6))
+FLUX2_QWEN_SECOND_PASS_MAX_STEPS = max(8, _env_int("FLUX2_QWEN_SECOND_PASS_MAX_STEPS", 24))
+FLUX2_QWEN_MIN_STEPS = max(4, _env_int("FLUX2_QWEN_MIN_STEPS", 10))
+FLUX2_PRELOAD_QWEN_WITH_FLUX2 = os.getenv("FLUX2_PRELOAD_QWEN_WITH_FLUX2", "1") == "1"
+FLUX2_QWEN_EXTRA_CLASSIFY_PASS = os.getenv("FLUX2_QWEN_EXTRA_CLASSIFY_PASS", "0") == "1"
+FLUX2_UNLOAD_QWEN_BEFORE_FLUX2 = os.getenv("FLUX2_UNLOAD_QWEN_BEFORE_FLUX2", "0") == "1"
+FLUX2_QWEN_PRODUCT_CAPTION_MAX_SIDE = max(384, _env_int("FLUX2_QWEN_PRODUCT_CAPTION_MAX_SIDE", 768))
+FLUX2_QWEN_PRODUCT_CAPTION_MIN_SIDE = max(256, _env_int("FLUX2_QWEN_PRODUCT_CAPTION_MIN_SIDE", 512))
+FLUX2_QWEN_USER_CAPTION_MAX_SIDE = max(384, _env_int("FLUX2_QWEN_USER_CAPTION_MAX_SIDE", 768))
+FLUX2_QWEN_USER_CAPTION_MIN_SIDE = max(256, _env_int("FLUX2_QWEN_USER_CAPTION_MIN_SIDE", 512))
+FLUX2_PRELOAD_JOYCAPTION_WITH_FLUX2 = os.getenv("FLUX2_PRELOAD_JOYCAPTION_WITH_FLUX2", "1") == "1"
+FLUX2_COLOR_LOCK_ENABLED = os.getenv("FLUX2_COLOR_LOCK_ENABLED", "1") == "1"
+FLUX2_COLOR_LOCK_TOP_K = min(5, max(1, _env_int("FLUX2_COLOR_LOCK_TOP_K", 3)))
+FLUX2_DETAIL_LOCK_ENABLED = os.getenv("FLUX2_DETAIL_LOCK_ENABLED", "1") == "1"
+FLUX2_SINGLE_CANDIDATE_MODE = os.getenv("FLUX2_SINGLE_CANDIDATE_MODE", "auto").strip().lower()
+if FLUX2_SINGLE_CANDIDATE_MODE not in {"auto", "base", "dress_strict", "qwen_strict"}:
+    FLUX2_SINGLE_CANDIDATE_MODE = "auto"
 HYBRID_TOP_K = max(1, _env_int("HYBRID_TOP_K", 3))
 ANALYZE_MAX_ITEMS = max(1, _env_int("ANALYZE_MAX_ITEMS", 3))
 HYBRID_MIN_SCORE = _env_float("HYBRID_MIN_SCORE", 0.0)
@@ -110,6 +136,7 @@ ANALYZE_ENABLE_PARSER_SPLIT = os.getenv("ANALYZE_ENABLE_PARSER_SPLIT", "0") == "
 ANALYZE_PARSER_MIN_AREA_RATIO = _env_float("ANALYZE_PARSER_MIN_AREA_RATIO", 0.015)
 ANALYZE_PARSER_PAD = max(0, _env_int("ANALYZE_PARSER_PAD", 12))
 ANALYZE_ENABLE_HUMAN_PARSER = os.getenv("ANALYZE_ENABLE_HUMAN_PARSER", "1") == "1"
+ANALYZE_USE_PARSER_FOR_PREROUTING = os.getenv("ANALYZE_USE_PARSER_FOR_PREROUTING", "0") == "1"
 ANALYZE_ENABLE_HEURISTIC_SPLIT = os.getenv("ANALYZE_ENABLE_HEURISTIC_SPLIT", "1") == "1"
 ANALYZE_TIGHTEN_SPLIT_CROPS = os.getenv("ANALYZE_TIGHTEN_SPLIT_CROPS", "1") == "1"
 ANALYZE_TIGHTEN_SPLIT_PAD = max(0, _env_int("ANALYZE_TIGHTEN_SPLIT_PAD", 8))
@@ -119,6 +146,7 @@ ANALYZE_TIGHTEN_BOTTOM_BOTTOM_EXTRA_RATIO = _env_float("ANALYZE_TIGHTEN_BOTTOM_B
 ANALYZE_TIGHTEN_BOTTOM_TOP_MAX_OVERLAP_PX = max(0, _env_int("ANALYZE_TIGHTEN_BOTTOM_TOP_MAX_OVERLAP_PX", 72))
 ANALYZE_TIGHTEN_BOTTOM_MAX_DOWN_SHIFT_RATIO = max(0.0, _env_float("ANALYZE_TIGHTEN_BOTTOM_MAX_DOWN_SHIFT_RATIO", 0.08))
 ANALYZE_TIGHTEN_BOTTOM_MAX_GAP_FROM_TOP_PX = max(0, _env_int("ANALYZE_TIGHTEN_BOTTOM_MAX_GAP_FROM_TOP_PX", 96))
+ANALYZE_TIGHTEN_BOTTOM_MIN_WIDTH_RATIO = _env_float("ANALYZE_TIGHTEN_BOTTOM_MIN_WIDTH_RATIO", 0.92)
 ANALYZE_HEURISTIC_MIN_HEIGHT_RATIO = _env_float("ANALYZE_HEURISTIC_MIN_HEIGHT_RATIO", 0.78)
 ANALYZE_HEURISTIC_TOP_PORTION = _env_float("ANALYZE_HEURISTIC_TOP_PORTION", 0.52)
 ANALYZE_HEURISTIC_TOP_TRIM_PX = max(0, _env_int("ANALYZE_HEURISTIC_TOP_TRIM_PX", 0))
@@ -126,12 +154,18 @@ ANALYZE_HEURISTIC_BOTTOM_OVERLAP_PX = max(0, _env_int("ANALYZE_HEURISTIC_BOTTOM_
 ANALYZE_HEURISTIC_BOTTOM_OVERLAP_RATIO = _env_float("ANALYZE_HEURISTIC_BOTTOM_OVERLAP_RATIO", 0.11)
 ANALYZE_HEURISTIC_BOTTOM_TRIM_SHORTS_RATIO = _env_float("ANALYZE_HEURISTIC_BOTTOM_TRIM_SHORTS_RATIO", 0.44)
 ANALYZE_HEURISTIC_MAX_WIDTH_RATIO = _env_float("ANALYZE_HEURISTIC_MAX_WIDTH_RATIO", 0.98)
+ANALYZE_PARSER_TOP_DRESS_BACKFILL = os.getenv("ANALYZE_PARSER_TOP_DRESS_BACKFILL", "1") == "1"
+ANALYZE_PARSER_TOP_MIN_RATIO = _env_float("ANALYZE_PARSER_TOP_MIN_RATIO", 0.008)
+ANALYZE_PARSER_DRESS_BACKFILL_MIN_RATIO = _env_float("ANALYZE_PARSER_DRESS_BACKFILL_MIN_RATIO", 0.015)
 ANALYZE_FORCE_FULLBODY_SPLIT_ON_SAME_TYPE = os.getenv("ANALYZE_FORCE_FULLBODY_SPLIT_ON_SAME_TYPE", "1") == "1"
 ANALYZE_FORCE_FULLBODY_SPLIT_MIN_HEIGHT_RATIO = _env_float("ANALYZE_FORCE_FULLBODY_SPLIT_MIN_HEIGHT_RATIO", 0.72)
+ANALYZE_FLORENCE_DRESS_LOCK_MIN_SCORE = _env_float("ANALYZE_FLORENCE_DRESS_LOCK_MIN_SCORE", 0.74)
 ANALYZE_COLLAPSE_SAME_TYPE = os.getenv("ANALYZE_COLLAPSE_SAME_TYPE", "0") == "1"
 ANALYZE_COLLAPSE_SAME_TYPE_MIN_IOU = _env_float("ANALYZE_COLLAPSE_SAME_TYPE_MIN_IOU", 0.85)
+ANALYZE_AUTO_SELECT_MULTI_DRESS = os.getenv("ANALYZE_AUTO_SELECT_MULTI_DRESS", "1") == "1"
 ANALYZE_EXTRACT_CLOTH = os.getenv("ANALYZE_EXTRACT_CLOTH", "1") == "1"
 ANALYZE_PROMPT_FROM_EXTRACTED = os.getenv("ANALYZE_PROMPT_FROM_EXTRACTED", "1") == "1"
+ANALYZE_EXTRACT_PARSER_ONLY = os.getenv("ANALYZE_EXTRACT_PARSER_ONLY", "1") == "1"
 ANALYZE_EXTRACT_MIN_MASK_RATIO = _env_float("ANALYZE_EXTRACT_MIN_MASK_RATIO", 0.01)
 ANALYZE_EXTRACT_RELAXED_RESCUE = os.getenv("ANALYZE_EXTRACT_RELAXED_RESCUE", "1") == "1"
 ANALYZE_EXTRACT_EDGE_FEATHER_PX = max(0, _env_int("ANALYZE_EXTRACT_EDGE_FEATHER_PX", 1))
@@ -141,6 +175,22 @@ ANALYZE_EXTRACT_PARSER_KILL_DILATE = max(1, _env_int("ANALYZE_EXTRACT_PARSER_KIL
 ANALYZE_GARMENT_HOLE_FILL_MAX_PIXELS = max(0, _env_int("ANALYZE_GARMENT_HOLE_FILL_MAX_PIXELS", 7000))
 ANALYZE_EXTRACT_MAX_BODY_RATIO = max(0.0, _env_float("ANALYZE_EXTRACT_MAX_BODY_RATIO", 0.008))
 ANALYZE_EXTRACT_BODY_STRIP_DILATE = max(0, _env_int("ANALYZE_EXTRACT_BODY_STRIP_DILATE", 3))
+ANALYZE_EXTRACT_BODY_STRIP_MAX_RATIO = min(
+    0.95,
+    max(0.01, _env_float("ANALYZE_EXTRACT_BODY_STRIP_MAX_RATIO", 0.28)),
+)
+ANALYZE_SHOWROOM_DELTA_REFINEMENT_ENABLED = os.getenv("ANALYZE_SHOWROOM_DELTA_REFINEMENT_ENABLED", "1") == "1"
+ANALYZE_SHOWROOM_DELTA_THRESHOLD = max(1.0, _env_float("ANALYZE_SHOWROOM_DELTA_THRESHOLD", 12.0))
+ANALYZE_SHOWROOM_DELTA_DILATE = max(0, _env_int("ANALYZE_SHOWROOM_DELTA_DILATE", 2))
+ANALYZE_SHOWROOM_DELTA_MIN_RETAIN_RATIO = min(
+    0.99,
+    max(0.10, _env_float("ANALYZE_SHOWROOM_DELTA_MIN_RETAIN_RATIO", 0.58)),
+)
+ANALYZE_SHOWROOM_DELTA_SKIN_EXTRA = max(0.0, _env_float("ANALYZE_SHOWROOM_DELTA_SKIN_EXTRA", 8.0))
+ANALYZE_TOP_RECOVER_MAX_SKIN_RATIO = min(0.95, max(0.0, _env_float("ANALYZE_TOP_RECOVER_MAX_SKIN_RATIO", 0.30)))
+ANALYZE_TOP_RECOVER_NEAR_DILATE = max(7, _env_int("ANALYZE_TOP_RECOVER_NEAR_DILATE", 31))
+ANALYZE_TOP_SKIN_RIM_CLEANUP = os.getenv("ANALYZE_TOP_SKIN_RIM_CLEANUP", "1") == "1"
+ANALYZE_TOP_SKIN_RIM_MAX_RATIO = min(0.30, max(0.0, _env_float("ANALYZE_TOP_SKIN_RIM_MAX_RATIO", 0.08)))
 ANALYZE_VTON_MAX_SHOWROOM_MAE = max(0.0, _env_float("ANALYZE_VTON_MAX_SHOWROOM_MAE", 3.5))
 ANALYZE_VTON_MIN_SHOWROOM_CHANGE_RATIO = max(0.0, _env_float("ANALYZE_VTON_MIN_SHOWROOM_CHANGE_RATIO", 0.02))
 ANALYZE_VTON_FALLBACK_ENABLED = os.getenv("ANALYZE_VTON_FALLBACK_ENABLED", "1") == "1"
@@ -151,12 +201,14 @@ if ANALYZE_VTON_QUALITY_PRESET not in {"balanced", "high", "max"}:
     ANALYZE_VTON_QUALITY_PRESET = "balanced"
 ANALYZE_VTON_NUM_TIMESTEPS = max(10, _env_int("ANALYZE_VTON_NUM_TIMESTEPS", 28))
 ANALYZE_VTON_GUIDANCE_SCALE = _env_float("ANALYZE_VTON_GUIDANCE_SCALE", 2.2)
+ANALYZE_VTON_SEED = max(0, _env_int("ANALYZE_VTON_SEED", 23))
 ANALYZE_VTON_SEGMENTATION_FREE = os.getenv("ANALYZE_VTON_SEGMENTATION_FREE", "1") == "1"
 ANALYZE_VTON_CUTOUT_FEATHER_PX = max(0, _env_int("ANALYZE_VTON_CUTOUT_FEATHER_PX", 2))
 ANALYZE_VTON_ZOOM_PADDING_RATIO = _env_float("ANALYZE_VTON_ZOOM_PADDING_RATIO", 0.12)
 ANALYZE_VTON_ALLOW_SOURCE_FALLBACK = os.getenv("ANALYZE_VTON_ALLOW_SOURCE_FALLBACK", "0") == "1"
 ANALYZE_VTON_REJECT_SOURCE_PASSTHROUGH = os.getenv("ANALYZE_VTON_REJECT_SOURCE_PASSTHROUGH", "1") == "1"
 ANALYZE_VTON_MIRROR_RAW_OUTPUT = os.getenv("ANALYZE_VTON_MIRROR_RAW_OUTPUT", "0") == "1"
+ANALYZE_VTON_STRICT_SAFETY_CHECKS = os.getenv("ANALYZE_VTON_STRICT_SAFETY_CHECKS", "0") == "1"
 ANALYZE_VTON_MAX_SOURCE_MAE = _env_float("ANALYZE_VTON_MAX_SOURCE_MAE", 2.0)
 ANALYZE_VTON_USE_SHOWROOM_PERSON = os.getenv("ANALYZE_VTON_USE_SHOWROOM_PERSON", "0") == "1"
 ANALYZE_VTON_SHOWROOM_PERSON_IMAGE_URL = os.getenv("ANALYZE_VTON_SHOWROOM_PERSON_IMAGE_URL", "").strip()
@@ -184,6 +236,9 @@ ANALYZE_GARMENT_ENHANCE_CONTRAST = _env_float("ANALYZE_GARMENT_ENHANCE_CONTRAST"
 ANALYZE_GARMENT_ENHANCE_COLOR = _env_float("ANALYZE_GARMENT_ENHANCE_COLOR", 1.04)
 ANALYZE_GARMENT_ENHANCE_BRIGHTNESS = _env_float("ANALYZE_GARMENT_ENHANCE_BRIGHTNESS", 1.02)
 ANALYZE_GARMENT_ENHANCE_LIGHTING_AUTO = os.getenv("ANALYZE_GARMENT_ENHANCE_LIGHTING_AUTO", "0") == "1"
+ANALYZE_GARMENT_OUTPUT_BACKGROUND = os.getenv("ANALYZE_GARMENT_OUTPUT_BACKGROUND", "white").strip().lower()
+if ANALYZE_GARMENT_OUTPUT_BACKGROUND not in {"transparent", "white"}:
+    ANALYZE_GARMENT_OUTPUT_BACKGROUND = "white"
 ENABLE_WARDROBE_PROGRESS_SYNC = os.getenv("ENABLE_WARDROBE_PROGRESS_SYNC", "0") == "1"
 WARDROBE_PROGRESS_API_BASE_URL = os.getenv("WARDROBE_PROGRESS_API_BASE_URL", "").strip()
 WARDROBE_PROGRESS_SYNC_TIMEOUT_S = max(5, _env_int("WARDROBE_PROGRESS_SYNC_TIMEOUT_S", 20))
@@ -232,12 +287,27 @@ class AIEngine:
         self.yolo = YoloCropper(predictor=self.yolo_runner.predict)
         self.parser = HumanParser(parser_fn=self.parser_runner.parse) if self.parser_runner is not None else None
         self.florence = FlorenceRunner()
+        self.qwen25vl = Qwen25VLRunner()
+        self.joycaption = JoyCaptionRunner()
         self.flux2 = Flux2CVTONRunner()
         self.board_builder = BoardBuilder()
         
     def ensure_vto_ready(self):
         self.flux2.ensure_ready()
-        self.florence._ensure_loaded()
+        if FLUX2_DESCRIPTOR_COMPARE:
+            self.florence._ensure_loaded()
+            if FLUX2_PRELOAD_QWEN_WITH_FLUX2:
+                self.qwen25vl.ensure_ready()
+            if FLUX2_PRELOAD_JOYCAPTION_WITH_FLUX2:
+                self.joycaption.ensure_ready()
+        elif FLUX2_DESCRIPTOR_BACKEND == "qwen2_5_vl":
+            if FLUX2_PRELOAD_QWEN_WITH_FLUX2:
+                self.qwen25vl.ensure_ready()
+        elif FLUX2_DESCRIPTOR_BACKEND == "joycaption":
+            if FLUX2_PRELOAD_JOYCAPTION_WITH_FLUX2:
+                self.joycaption.ensure_ready()
+        else:
+            self.florence._ensure_loaded()
 
     def ensure_analyze_ready(self):
         self.yolo_runner.ensure_ready()
@@ -248,6 +318,8 @@ class AIEngine:
         return {
             "flux2_loaded": self.flux2._pipeline is not None,
             "florence_loaded": self.florence._model is not None,
+            "qwen25vl_loaded": self.qwen25vl.is_loaded,
+            "joycaption_loaded": self.joycaption.is_loaded,
             "yolo_loaded": self.yolo_runner.is_loaded,
             "human_parser_loaded": bool(self.parser_runner and self.parser_runner.is_loaded),
         }
@@ -270,6 +342,623 @@ def _normalize_garment_type(raw: Optional[str]) -> Optional[str]:
         return None
     normalized = normalized.replace(" ", "")
     return GARMENT_TYPE_SYNONYMS.get(normalized)
+
+def _sanitize_florence_garment_description(description: str) -> str:
+    """
+    Keep garment attributes and strip scene/mannequin/background chatter.
+    """
+    text = str(description or "").strip()
+    if not text:
+        return ""
+
+    text = re.sub(r"^\s*the image shows\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"\b(?:a|the)?\s*mannequin\s+(?:is\s+)?wearing\s+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    fragments = [frag.strip(" .") for frag in re.split(r"[.]+", text) if frag.strip()]
+    if not fragments:
+        return text
+
+    drop_markers = (
+        "background",
+        "white wall",
+        "set against",
+        "mannequin",
+        "model is standing",
+        "the image",
+    )
+    keep_markers = (
+        "dress",
+        "gown",
+        "top",
+        "shirt",
+        "blouse",
+        "corset",
+        "skirt",
+        "pants",
+        "trousers",
+        "jeans",
+        "jacket",
+        "coat",
+        "fabric",
+        "ruffle",
+        "sleeve",
+        "bodice",
+        "silhouette",
+        "color",
+        "black",
+        "white",
+        "red",
+        "blue",
+        "green",
+    )
+
+    filtered: List[str] = []
+    for frag in fragments:
+        low = frag.lower()
+        if any(marker in low for marker in drop_markers):
+            continue
+        filtered.append(frag)
+
+    cleaned = ". ".join(filtered[:3]).strip(" .")
+    cleaned = cleaned or text
+    # Remove hedging words that weaken transfer constraints.
+    cleaned = re.sub(r"\b(?:likely|possibly|probably|maybe)\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(?:appears to be|seems to be|looks like)\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bthe garment is\b", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,.")
+    return cleaned or text
+
+def _augment_identity_lock(user_description: str) -> str:
+    base = str(user_description or "").strip()
+    lock = (
+        "Keep exact same person identity: face structure, skin tone, hair, hands, "
+        "body shape, pose, and scene lighting."
+    )
+    if not base:
+        return lock
+    if "skin tone" in base.lower() and "face" in base.lower():
+        return base
+    return f"{base} {lock}"
+
+def _infer_flux2_target_type(description: str) -> str:
+    text = str(description or "").lower()
+    dress_terms = (
+        "dress", "gown", "one-piece", "one piece", "maxi", "midi", "mini",
+        "anarkali", "saree", "sari", "lehenga", "jumpsuit", "romper", "kurti",
+    )
+    bottom_terms = (
+        "pant", "pants", "trouser", "trousers", "jean", "jeans", "skirt", "shorts",
+        "palazzo", "chino", "legging", "leggings",
+    )
+    outer_terms = ("jacket", "coat", "blazer", "hoodie", "cardigan", "outerwear", "outer", "shrug")
+    top_terms = ("shirt", "t-shirt", "tee", "top", "blouse", "corset", "sweater", "kurta", "tunic")
+
+    if any(term in text for term in dress_terms):
+        return "dress"
+    if any(term in text for term in bottom_terms):
+        return "bottom"
+    if any(term in text for term in outer_terms):
+        return "outer"
+    if any(term in text for term in top_terms):
+        return "top"
+    return "top"
+
+def _ensure_target_type_in_description(description: str, target_type: str) -> str:
+    text = str(description or "").strip()
+    kind = str(target_type or "").strip().lower()
+    if kind not in {"dress", "top", "bottom", "outer"}:
+        return text
+
+    alias_map = {
+        "dress": ("dress", "gown", "one-piece", "maxi", "midi", "mini", "anarkali", "saree", "sari", "lehenga"),
+        "top": ("top", "shirt", "blouse", "tee", "t-shirt", "kurta", "tunic", "corset", "sweater"),
+        "bottom": ("bottom", "pants", "trousers", "jeans", "skirt", "shorts", "palazzo", "leggings"),
+        "outer": ("outer", "outerwear", "jacket", "coat", "blazer", "hoodie", "cardigan"),
+    }
+    low = text.lower()
+    if any(alias in low for alias in alias_map[kind]):
+        return text
+
+    if not text:
+        return f"{kind} garment"
+    return f"{kind} garment, {text}"
+
+_COLOR_LABEL_RGB: List[Tuple[str, Tuple[int, int, int]]] = [
+    ("black", (20, 20, 20)),
+    ("charcoal", (60, 60, 60)),
+    ("gray", (128, 128, 128)),
+    ("silver", (185, 185, 185)),
+    ("white", (245, 245, 245)),
+    ("ivory", (242, 235, 210)),
+    ("beige", (214, 192, 155)),
+    ("champagne", (233, 214, 170)),
+    ("gold", (212, 175, 55)),
+    ("brown", (112, 74, 43)),
+    ("red", (190, 40, 40)),
+    ("maroon", (120, 35, 45)),
+    ("orange", (220, 125, 35)),
+    ("yellow", (225, 200, 55)),
+    ("green", (52, 135, 64)),
+    ("teal", (45, 138, 137)),
+    ("blue", (55, 96, 185)),
+    ("navy", (35, 52, 95)),
+    ("purple", (120, 72, 155)),
+    ("pink", (214, 120, 165)),
+]
+
+_DETAIL_LOCK_TERMS: List[Tuple[str, str]] = [
+    ("sequined", "sequined surface"),
+    ("sequin", "sequined surface"),
+    ("beaded", "beadwork"),
+    ("beading", "beadwork"),
+    ("embroidery", "embroidery motifs"),
+    ("lace", "lace texture"),
+    ("feather", "feather trims"),
+    ("ruffle", "ruffle placement"),
+    ("pleat", "pleated structure"),
+    ("satin", "satin finish"),
+    ("silk", "silk-like drape"),
+    ("velvet", "velvet texture"),
+    ("sheer", "sheer panels"),
+    ("mesh", "mesh panels"),
+    ("corset", "corset bodice"),
+    ("strapless", "strapless neckline"),
+    ("off-shoulder", "off-shoulder cut"),
+    ("v-neck", "V-neckline"),
+    ("deep v", "deep V-neckline"),
+    ("sleeveless", "sleeveless cut"),
+    ("long sleeve", "long sleeves"),
+    ("train", "long train"),
+    ("slit", "slit placement"),
+    ("mermaid", "mermaid flare profile"),
+    ("high-low", "high-low hem shape"),
+    ("high low", "high-low hem shape"),
+    ("asym", "asymmetric hem contour"),
+    ("tier", "tiered skirt layers"),
+    ("ruffled hem", "ruffled hemline"),
+]
+
+_TEXT_COLOR_TERMS: List[str] = [
+    "rose gold",
+    "blush pink",
+    "dusty pink",
+    "hot pink",
+    "off-white",
+    "ivory",
+    "champagne",
+    "nude",
+    "beige",
+    "tan",
+    "khaki",
+    "silver",
+    "gold",
+    "bronze",
+    "black",
+    "charcoal",
+    "gray",
+    "grey",
+    "white",
+    "red",
+    "maroon",
+    "burgundy",
+    "orange",
+    "yellow",
+    "green",
+    "olive",
+    "teal",
+    "blue",
+    "navy",
+    "purple",
+    "lavender",
+    "pink",
+    "peach",
+]
+
+def _nearest_color_label(rgb_triplet: Tuple[int, int, int]) -> str:
+    vec = np.array(rgb_triplet, dtype=np.float32)
+    best_label = "unknown"
+    best_dist = float("inf")
+    for label, ref_rgb in _COLOR_LABEL_RGB:
+        ref = np.array(ref_rgb, dtype=np.float32)
+        dist = float(np.sum((vec - ref) ** 2))
+        if dist < best_dist:
+            best_dist = dist
+            best_label = label
+    return best_label
+
+def _extract_dominant_color_labels(image: Image.Image, top_k: int = 3) -> List[str]:
+    """
+    Fast palette hinting for stronger color fidelity in Flux2 prompting.
+    """
+    rgb = image.convert("RGB")
+    w, h = rgb.size
+    if w < 4 or h < 4:
+        return []
+
+    # Focus center region to reduce white/neutral studio background dominance.
+    x_pad = int(w * 0.1)
+    y_pad = int(h * 0.1)
+    crop = rgb.crop((x_pad, y_pad, max(x_pad + 1, w - x_pad), max(y_pad + 1, h - y_pad)))
+    crop.thumbnail((192, 192), Image.Resampling.BICUBIC)
+    arr = np.array(crop, dtype=np.uint8)
+    if arr.ndim != 3 or arr.shape[2] != 3:
+        return []
+
+    pixels = arr.reshape(-1, 3)
+    if pixels.size == 0:
+        return []
+
+    near_white = np.all(pixels >= 245, axis=1)
+    non_white_ratio = float(np.mean(~near_white)) if pixels.shape[0] else 0.0
+    if non_white_ratio > 0.20:
+        pixels = pixels[~near_white]
+    if pixels.size == 0:
+        return []
+
+    # Bin colors to make dominant counts stable and cheap.
+    binned = (pixels // 16) * 16
+    unique, counts = np.unique(binned, axis=0, return_counts=True)
+    order = np.argsort(-counts)
+    label_counts = {}
+    for idx in order.tolist():
+        rgb_triplet = tuple(int(v) for v in unique[idx].tolist())
+        label = _nearest_color_label(rgb_triplet)
+        label_counts[label] = label_counts.get(label, 0) + int(counts[idx])
+
+    ordered_labels = sorted(label_counts.items(), key=lambda kv: kv[1], reverse=True)
+    return [name for name, _ in ordered_labels[: max(1, top_k)]]
+
+def _extract_detail_lock_terms(description: str, max_items: int = 6) -> List[str]:
+    low = str(description or "").lower()
+    if not low:
+        return []
+    hits: List[str] = []
+    for needle, phrase in _DETAIL_LOCK_TERMS:
+        if needle in low and phrase not in hits:
+            hits.append(phrase)
+            if len(hits) >= max_items:
+                break
+    return hits
+
+def _has_transparency_signal(text: str) -> bool:
+    low = str(text or "").lower()
+    if not low:
+        return False
+    signals = (
+        "sheer",
+        "mesh",
+        "transparent",
+        "see-through",
+        "see through",
+        "translucent",
+    )
+    return any(sig in low for sig in signals)
+
+def _extract_text_color_terms(description: str, max_items: int = 4) -> List[str]:
+    low = str(description or "").lower()
+    if not low:
+        return []
+    hits: List[str] = []
+    for term in _TEXT_COLOR_TERMS:
+        pattern = r"\b" + re.escape(term).replace(r"\ ", r"\s+") + r"\b"
+        if re.search(pattern, low) and term not in hits:
+            normalized = "gray" if term == "grey" else term
+            hits.append(normalized)
+            if len(hits) >= max_items:
+                break
+    return hits
+
+def _build_flux2_visual_lock_clauses(
+    product_images: List[Image.Image],
+    garment_descriptions: List[str],
+) -> dict:
+    color_hints: List[List[str]] = []
+    if FLUX2_COLOR_LOCK_ENABLED:
+        for idx, img in enumerate(product_images):
+            desc = garment_descriptions[idx] if idx < len(garment_descriptions) else ""
+            text_colors = _extract_text_color_terms(desc, max_items=FLUX2_COLOR_LOCK_TOP_K)
+            if text_colors:
+                color_hints.append(text_colors)
+                continue
+            color_hints.append(_extract_dominant_color_labels(img, top_k=FLUX2_COLOR_LOCK_TOP_K))
+
+    detail_terms: List[str] = []
+    if FLUX2_DETAIL_LOCK_ENABLED:
+        for desc in garment_descriptions:
+            for term in _extract_detail_lock_terms(desc):
+                if term not in detail_terms:
+                    detail_terms.append(term)
+
+    color_clause = ""
+    non_empty_color_hints = [h for h in color_hints if h]
+    if non_empty_color_hints:
+        if len(non_empty_color_hints) == 1:
+            palette = ", ".join(non_empty_color_hints[0])
+            color_clause = (
+                f"Color lock from image 2: keep the garment in {palette} tones only. "
+                "Do not recolor, hue-shift, or replace with a different color family. "
+            )
+        else:
+            per_item = []
+            for idx, colors in enumerate(color_hints, start=1):
+                if colors:
+                    per_item.append(f"item {idx}: {', '.join(colors)}")
+            if per_item:
+                color_clause = (
+                    "Color lock from image 2 for each product: "
+                    + "; ".join(per_item)
+                    + ". Do not recolor any item. "
+                )
+
+    detail_clause = ""
+    if detail_terms:
+        detail_clause = (
+            "Detail lock from image 2: preserve "
+            + ", ".join(detail_terms[:6])
+            + ". Do not simplify or replace these details. "
+        )
+    transparency_lock = any(_has_transparency_signal(desc) for desc in garment_descriptions)
+    transparency_clause = ""
+    if transparency_lock:
+        transparency_clause = (
+            "Transparency lock from image 2: preserve sheer/mesh panel transparency and translucency. "
+            "Keep subtle skin visibility only where the source garment is transparent. "
+            "Do not make sheer panels opaque or overexpose skin beyond those panel regions. "
+        )
+
+    return {
+        "color_clause": color_clause,
+        "detail_clause": detail_clause,
+        "transparency_clause": transparency_clause,
+        "transparency_lock": transparency_lock,
+        "color_hints": color_hints,
+        "detail_terms": detail_terms[:6],
+    }
+
+def _build_flux2_targeted_prompt(
+    garment_descriptions: List[str],
+    user_description: str,
+    target_types: List[str],
+    board_mode: str,
+    color_lock_clause: str = "",
+    detail_lock_clause: str = "",
+    transparency_lock_clause: str = "",
+) -> str:
+    target_hint = ", ".join(garment_descriptions)
+    types = {t for t in target_types if t}
+    is_dress_mode = ("dress" in types) and len(types) == 1 and len(garment_descriptions) == 1
+    is_multi = board_mode == "collage"
+    identity_context = _identity_only_user_context(user_description)
+    if not identity_context or re.search(r"\bis\s*\.\s*$", identity_context, flags=re.IGNORECASE):
+        identity_context = "person in image 1"
+
+    prompt = (
+        "Photorealistic high-fidelity virtual try-on, premium fashion photography, "
+        "sharp details, clean background, 8k resolution. "
+        "Use image 1 as strict identity source for face, body shape, skin tone, and pose. "
+        f"TRANSFER the {target_hint} from image 2 onto the person in image 1. "
+        "Match exact garment attributes from image 2: color tone, print/pattern, neckline, sleeve length, hem length, fit, and trims. "
+        "Do not invent a new garment design, new pattern, or new fabric. "
+    )
+    if color_lock_clause:
+        prompt += color_lock_clause
+    if detail_lock_clause:
+        prompt += detail_lock_clause
+    if transparency_lock_clause:
+        prompt += transparency_lock_clause
+
+    if is_dress_mode:
+        prompt += (
+            "Treat this as full-body outfit replacement with a single dress. "
+            "Replace the original top and bottom garments with the target dress silhouette. "
+            "Do not keep, overlay, or blend previous tops, pants, skirts, or shorts under/over the dress. "
+            "Completely occlude old clothing in the replaced region. "
+            "For lower-body fidelity, match exact skirt architecture from image 2: flare start point, "
+            "ruffle/tier distribution, hem contour (including asymmetry/high-low), slit position, and train length. "
+            "No layering artifacts. Ignore existing clothing design details in image 1 while preserving the person identity. "
+        )
+    else:
+        if "top" in types:
+            prompt += "Replace only the upper-body garment region with the target top. "
+        if "bottom" in types:
+            prompt += "Replace only the lower-body garment region with the target bottom. "
+        if "outer" in types:
+            prompt += "Replace/add the outerwear layer according to the target item. "
+        prompt += (
+            "Preserve untargeted garments from image 1 unless a target item explicitly replaces that region. "
+        )
+
+    if is_multi:
+        prompt += (
+            "Image 2 is a multi-item outfit board; apply all listed items together with coherent layering and fit. "
+        )
+
+    if is_dress_mode:
+        prompt += (
+            f"Identity reference from image 1: {identity_context}. "
+            "Keep exact same person identity: facial features, skin tone, hair, hands, body proportions, "
+            "and scene lighting. "
+            "Ensure realistic fabric drape, seams, folds, and shadows."
+        )
+    else:
+        prompt += (
+            f"Person and current outfit reference from image 1: {user_description}. "
+            "Keep exact same person identity: facial features, skin tone, hair, hands, body proportions, "
+            "and scene lighting. "
+            "Ensure realistic fabric drape, seams, folds, and shadows."
+        )
+    return prompt
+
+def _normalize_descriptor_backend(raw: Optional[str]) -> str:
+    value = str(raw or FLUX2_DESCRIPTOR_BACKEND).strip().lower()
+    return value if value in {"florence", "qwen2_5_vl", "joycaption"} else "florence"
+
+def _resize_for_qwen_caption(image: Image.Image, max_side: int, min_side: int) -> Image.Image:
+    """
+    Reduce visual tokens for Qwen while preserving garment/person detail.
+    Never upscales small images.
+    """
+    rgb = image.convert("RGB")
+    w, h = rgb.size
+    if w <= 0 or h <= 0:
+        return rgb
+
+    longest = max(w, h)
+    shortest = min(w, h)
+    scale = min(1.0, float(max_side) / float(longest))
+
+    # Prevent over-downscaling thin details.
+    if shortest > min_side and (shortest * scale) < min_side:
+        scale = min(1.0, float(min_side) / float(shortest))
+
+    if scale >= 0.999:
+        return rgb
+
+    new_w = max(1, int(round(w * scale)))
+    new_h = max(1, int(round(h * scale)))
+    return rgb.resize((new_w, new_h), Image.BICUBIC)
+
+def _describe_garment_with_backend(image: Image.Image, backend: str) -> str:
+    resolved = _normalize_descriptor_backend(backend)
+    if resolved == "joycaption":
+        try:
+            return str(engine.joycaption.describe_garment(image)).strip()
+        except Exception as err:
+            logger.warning(f"JoyCaption garment description failed; fallback to Florence. error={err}")
+    if resolved == "qwen2_5_vl":
+        try:
+            qwen_img = _resize_for_qwen_caption(
+                image=image,
+                max_side=FLUX2_QWEN_PRODUCT_CAPTION_MAX_SIDE,
+                min_side=FLUX2_QWEN_PRODUCT_CAPTION_MIN_SIDE,
+            )
+            return str(engine.qwen25vl.describe_garment(qwen_img)).strip()
+        except Exception as err:
+            logger.warning(f"Qwen2.5-VL garment description failed; fallback to Florence. error={err}")
+    return str(engine.florence.describe_garment(image)).strip()
+
+def _describe_user_image_for_flux2(user_img: Image.Image, backend: str = "florence") -> str:
+    """
+    Ask selected descriptor model for a full-person detailed description.
+    """
+    resolved = _normalize_descriptor_backend(backend)
+    if resolved == "joycaption":
+        # JoyCaption in this pipeline is garment-focused; keep user lock generic
+        # unless user promptDescription is explicitly provided in request.
+        return ""
+    if resolved == "qwen2_5_vl":
+        try:
+            qwen_img = _resize_for_qwen_caption(
+                image=user_img,
+                max_side=FLUX2_QWEN_USER_CAPTION_MAX_SIDE,
+                min_side=FLUX2_QWEN_USER_CAPTION_MIN_SIDE,
+            )
+            return str(engine.qwen25vl.describe_person_and_outfit(qwen_img)).strip()
+        except Exception as err:
+            logger.warning(f"Qwen2.5-VL user description failed; fallback to Florence. error={err}")
+
+    try:
+        return str(
+            engine.florence.run_task(
+                image=user_img,
+                task_prompt="<DETAILED_CAPTION>",
+                text_input=" Describe the person's identity cues and all worn garments with colors and fit.",
+                max_new_tokens=engine.florence.detailed_max_tokens,
+                num_beams=engine.florence.detailed_num_beams,
+                use_cache_generate=False,
+            )
+        ).strip()
+    except Exception as err:
+        logger.warning(f"Detailed user-image description fallback to Florence describe_garment due error: {err}")
+        return str(engine.florence.describe_garment(user_img)).strip()
+
+def _identity_only_user_context(user_description: str) -> str:
+    """
+    Remove clothing-specific mentions from user description to avoid conflicting replacement cues.
+    """
+    text = str(user_description or "").strip()
+    if not text:
+        return ""
+
+    apparel_terms = (
+        "wearing", "outfit", "dress", "gown", "top", "shirt", "blouse", "jacket", "coat",
+        "pants", "trousers", "jeans", "skirt", "shorts", "sneaker", "shoe", "sleeve", "bodice",
+    )
+    identity_terms = (
+        "face", "facial", "hair", "skin", "complexion", "body", "build", "shape", "pose",
+        "hand", "arm", "leg", "height", "age", "eyes", "nose", "mouth", "jaw", "lighting",
+        "background", "scene",
+    )
+
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+    kept: List[str] = []
+    for sentence in sentences:
+        low = sentence.lower()
+        has_apparel = any(term in low for term in apparel_terms)
+        has_identity = any(term in low for term in identity_terms)
+        if has_identity and not has_apparel:
+            kept.append(sentence.strip(" ."))
+
+    if kept:
+        cleaned = ". ".join(kept).strip(" .")
+        return cleaned
+
+    # Fallback: aggressively strip outfit clauses.
+    fallback = re.sub(r"\b(?:wearing|wears|dressed in)\b[^.]*\.?", "", text, flags=re.IGNORECASE)
+    fallback = re.sub(
+        r"\b(?:dress|gown|top|shirt|blouse|jacket|coat|pants|trousers|jeans|skirt|shorts|sneakers?|shoes?)\b[^.]*\.?",
+        "",
+        fallback,
+        flags=re.IGNORECASE,
+    )
+    fallback = re.sub(r"\s+", " ", fallback).strip(" ,.")
+    if re.search(r"\bis\s*\.\s*$", fallback, flags=re.IGNORECASE) or len(fallback) < 20:
+        return "person in image 1"
+    return fallback
+
+_FIDELITY_STOPWORDS = {
+    "a", "an", "the", "and", "or", "with", "of", "in", "on", "to", "for", "is", "are", "from", "image", "person",
+    "wearing", "shows", "showing", "standing", "front", "background", "white", "black", "color",
+}
+
+def _extract_fidelity_terms(text: str) -> set[str]:
+    words = re.findall(r"[a-zA-Z][a-zA-Z\\-]+", str(text or "").lower())
+    return {w for w in words if len(w) >= 4 and w not in _FIDELITY_STOPWORDS}
+
+def _score_tryon_garment_fidelity(
+    output_image: Image.Image,
+    target_description: str,
+    descriptor_backend: str,
+) -> tuple[float, str]:
+    """
+    Lightweight text-overlap score between target garment description and output garment description.
+    Higher is better.
+    """
+    try:
+        output_desc = _sanitize_florence_garment_description(
+            _describe_garment_with_backend(output_image, descriptor_backend)
+        )
+    except Exception:
+        output_desc = ""
+
+    target_terms = _extract_fidelity_terms(target_description)
+    output_terms = _extract_fidelity_terms(output_desc)
+    if not target_terms:
+        return (0.0, output_desc)
+
+    overlap = len(target_terms.intersection(output_terms)) / float(len(target_terms))
+
+    # Penalize obvious layering mismatches for dress targets.
+    output_low = output_desc.lower()
+    if "dress" in target_description.lower() or "gown" in target_description.lower():
+        if any(token in output_low for token in ("pants", "trousers", "jeans", "shorts", "skirt and top")):
+            overlap *= 0.75
+
+    return (float(overlap), output_desc)
 
 def _focus_score(image: Image.Image) -> float:
     """
@@ -519,6 +1208,47 @@ def _tighten_instances_with_parser_masks(image: Image.Image, instances: list[dic
         logger.warning(f"Parser-based crop tightening skipped due parser error: {err}")
         return instances
 
+    def _mask_shape_ok(mask_obj: Optional[np.ndarray]) -> bool:
+        return bool(
+            mask_obj is not None
+            and isinstance(mask_obj, np.ndarray)
+            and mask_obj.shape[:2] == (image.height, image.width)
+        )
+
+    def _fallback_bottom_mask_from_dress(x0: int, y0: int, x1: int, y1: int) -> Optional[np.ndarray]:
+        """
+        If parser misses the explicit bottom class (common on one-piece/dress-like silhouettes),
+        derive a bottom-support mask from dress mask while removing top region.
+        """
+        dress_mask = category_masks.get("dress")
+        if not _mask_shape_ok(dress_mask):
+            return None
+
+        fallback = dress_mask.astype(bool).copy()
+        if fallback.size == 0 or int(fallback.sum()) <= 0:
+            return None
+
+        top_like = np.zeros_like(fallback, dtype=bool)
+        for key in ("top", "outer"):
+            mk = category_masks.get(key)
+            if _mask_shape_ok(mk):
+                top_like |= mk.astype(bool)
+
+        # Remove parser top/outer region plus a small buffer so bottom starts closer to waist.
+        local_top = top_like[y0:y1, x0:x1]
+        if local_top.size > 0 and int(local_top.sum()) > 0:
+            ys, _ = np.where(local_top)
+            if len(ys):
+                top_end = y0 + int(ys.max())
+                cut_y = min(image.height - 1, top_end + max(4, ANALYZE_TIGHTEN_SPLIT_PAD // 2))
+                fallback[:cut_y, :] = False
+
+        # Keep only the lower section relative to current split box to avoid pulling torso remnants.
+        local_fallback = fallback[y0:y1, x0:x1]
+        if local_fallback.size == 0 or int(local_fallback.sum()) <= 0:
+            return None
+        return fallback
+
     top_boxes: list[tuple[int, int, int, int]] = []
     for inst in instances:
         inst_type = _normalize_garment_type(str(inst.get("label") or inst.get("type") or ""))
@@ -555,6 +1285,19 @@ def _tighten_instances_with_parser_masks(image: Image.Image, instances: list[dic
         y0 = max(0, min(y0, image.height - 1))
         x1 = max(x0 + 1, min(x1, image.width))
         y1 = max(y0 + 1, min(y1, image.height))
+        used_bottom_fallback_mask = False
+
+        if inst_type == "bottom":
+            primary_ok = _mask_shape_ok(mask)
+            primary_region_has_pixels = False
+            if primary_ok:
+                primary_region = mask[y0:y1, x0:x1]
+                primary_region_has_pixels = bool(primary_region.size > 0 and int(primary_region.sum()) > 0)
+            if (not primary_ok) or (not primary_region_has_pixels):
+                fb = _fallback_bottom_mask_from_dress(x0, y0, x1, y1)
+                if fb is not None:
+                    mask = fb
+                    used_bottom_fallback_mask = True
 
         updated = dict(inst)
         if mask is None or mask.shape[:2] != (image.height, image.width):
@@ -594,6 +1337,8 @@ def _tighten_instances_with_parser_masks(image: Image.Image, instances: list[dic
             ty0 = max(0, ty0 - top_extra)
             ty1 = min(image.height, ty1 + bottom_extra)
             bottom_adjustments.append("bottom_context_expanded")
+            if used_bottom_fallback_mask:
+                bottom_adjustments.append("bottom_mask_fallback_dress")
 
             # Guard against parser under-segmentation: keep lower-body crop from shifting too far down.
             base_h = max(1, y1 - y0)
@@ -622,6 +1367,26 @@ def _tighten_instances_with_parser_masks(image: Image.Image, instances: list[dic
                 if ty0 < min_ty0:
                     ty0 = min_ty0
                     bottom_adjustments.append("top_overlap_clamped")
+
+            # Preserve horizontal coverage for bottoms. Parser fallback can under-segment
+            # draped/ruffled side fabric and clip one side too aggressively.
+            orig_w = max(1, x1 - x0)
+            min_width_ratio = max(0.60, min(1.0, ANALYZE_TIGHTEN_BOTTOM_MIN_WIDTH_RATIO))
+            min_w = max(1, int(orig_w * min_width_ratio))
+            cur_w = max(1, tx1 - tx0)
+            if used_bottom_fallback_mask:
+                tx0, tx1 = x0, x1
+                bottom_adjustments.append("bottom_width_preserved")
+            elif cur_w < min_w:
+                cx = (tx0 + tx1) // 2
+                half = max(1, min_w // 2)
+                nx0 = max(x0, cx - half)
+                nx1 = min(x1, nx0 + min_w)
+                if (nx1 - nx0) < min_w:
+                    nx1 = x1
+                    nx0 = max(x0, nx1 - min_w)
+                tx0, tx1 = nx0, nx1
+                bottom_adjustments.append("bottom_width_recovered")
 
         if (tx1 - tx0) < ANALYZE_TIGHTEN_SPLIT_MIN_PIXELS or (ty1 - ty0) < ANALYZE_TIGHTEN_SPLIT_MIN_PIXELS:
             updated["bbox"] = [x0, y0, x1, y1]
@@ -820,20 +1585,6 @@ def _suppress_auxiliary_instances(instances: list[dict], image_width: int, image
 def _to_public_item(item: dict) -> dict:
     return {k: v for k, v in item.items() if not str(k).startswith("_")}
 
-def _get_rembg_isnet_session():
-    """
-    Reuse a single rembg ISNet session across requests to avoid per-request
-    model/session initialization overhead.
-    """
-    global _REMBG_SESSION
-    if _REMBG_SESSION is not None:
-        return _REMBG_SESSION
-    with _REMBG_SESSION_LOCK:
-        if _REMBG_SESSION is None:
-            from rembg import new_session
-            _REMBG_SESSION = new_session("isnet-general-use")
-    return _REMBG_SESSION
-
 def _write_temp_png(image: Image.Image) -> str:
     fd, path = tempfile.mkstemp(prefix="analyze_crop_", suffix=".png")
     os.close(fd)
@@ -907,6 +1658,602 @@ def _content_bbox_from_image(image: Image.Image) -> tuple[int, int, int, int]:
     x0, x1 = int(xs.min()), int(xs.max()) + 1
     y0, y1 = int(ys.min()), int(ys.max()) + 1
     return (x0, y0, x1, y1)
+
+def _parser_runtime_id2label() -> dict[int, str]:
+    out: dict[int, str] = {}
+    try:
+        if engine.parser_runner and isinstance(engine.parser_runner.id2label, dict):
+            for k, v in engine.parser_runner.id2label.items():
+                try:
+                    out[int(k)] = str(v).strip().lower().replace(" ", "_")
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    try:
+        runtime_fn = getattr(engine.parser, "_runtime_labels", None)
+        runtime = runtime_fn() if callable(runtime_fn) else {}
+        if isinstance(runtime, dict):
+            for name, idx in runtime.items():
+                try:
+                    out[int(idx)] = str(name).strip().lower().replace(" ", "_")
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return out
+
+def _square_bbox_from_bbox(
+    bbox: list[int],
+    image_width: int,
+    image_height: int,
+    padding_ratio: float,
+) -> list[int]:
+    x0, y0, x1, y1 = [int(v) for v in bbox]
+    bw = max(1, x1 - x0)
+    bh = max(1, y1 - y0)
+    safe_pad = max(0.0, min(0.8, float(padding_ratio)))
+    side = int(round(max(bw, bh) * (1.0 + (2.0 * safe_pad))))
+    side = max(2, side)
+
+    cx = float(x0 + x1) / 2.0
+    cy = float(y0 + y1) / 2.0
+    sx0 = int(round(cx - (side / 2.0)))
+    sy0 = int(round(cy - (side / 2.0)))
+    return [sx0, sy0, sx0 + side, sy0 + side]
+
+def _crop_square_with_padding(
+    image: Image.Image,
+    square_bbox: list[int],
+    fill_rgb: tuple[int, int, int] = (255, 255, 255),
+) -> Image.Image:
+    x0, y0, x1, y1 = [int(v) for v in square_bbox]
+    side = max(2, int(x1 - x0), int(y1 - y0))
+    canvas = Image.new("RGB", (side, side), fill_rgb)
+
+    ix0 = max(0, x0)
+    iy0 = max(0, y0)
+    ix1 = min(image.width, x1)
+    iy1 = min(image.height, y1)
+    if ix1 <= ix0 or iy1 <= iy0:
+        return canvas
+
+    src_crop = image.crop((ix0, iy0, ix1, iy1)).convert("RGB")
+    paste_x = int(ix0 - x0)
+    paste_y = int(iy0 - y0)
+    canvas.paste(src_crop, (paste_x, paste_y))
+    return canvas
+
+def _expand_section_bbox_by_type(
+    bbox: list[int],
+    garment_type: str,
+    image_width: int,
+    image_height: int,
+) -> list[int]:
+    x0, y0, x1, y1 = [int(v) for v in bbox]
+    bw = max(1, x1 - x0)
+    bh = max(1, y1 - y0)
+
+    gt = _normalize_garment_type(garment_type) or "top"
+    if gt == "top":
+        x_pad = int(bw * 0.03)
+        y_pad_top = int(bh * 0.02)
+        y_pad_bottom = int(bh * 0.06)
+    elif gt == "bottom":
+        x_pad = int(bw * 0.03)
+        y_pad_top = int(bh * 0.06)
+        y_pad_bottom = int(bh * 0.04)
+    elif gt == "dress":
+        x_pad = int(bw * 0.03)
+        y_pad_top = int(bh * 0.02)
+        y_pad_bottom = int(bh * 0.04)
+    else:
+        x_pad = int(bw * 0.03)
+        y_pad_top = int(bh * 0.02)
+        y_pad_bottom = int(bh * 0.04)
+
+    ex0 = max(0, x0 - x_pad)
+    ey0 = max(0, y0 - y_pad_top)
+    ex1 = min(image_width, x1 + x_pad)
+    ey1 = min(image_height, y1 + y_pad_bottom)
+    return [ex0, ey0, ex1, ey1]
+
+def _mask_connected_components(mask: np.ndarray, min_pixels: int) -> list[dict]:
+    clean = np.asarray(mask).astype(bool)
+    if clean.size == 0:
+        return []
+    if int(clean.sum()) < max(1, int(min_pixels)):
+        return []
+
+    try:
+        import cv2
+    except Exception:
+        cv2 = None
+
+    out: list[dict] = []
+    if cv2 is None:
+        bbox = _bbox_from_mask(clean)
+        if bbox is None:
+            return []
+        out.append({"bbox": bbox, "area": int(clean.sum()), "mask": clean})
+        return out
+
+    num_l, labels_l, stats_l, _ = cv2.connectedComponentsWithStats((clean.astype(np.uint8) * 255), connectivity=8)
+    for i in range(1, int(num_l)):
+        area = int(stats_l[i, cv2.CC_STAT_AREA])
+        if area < max(1, int(min_pixels)):
+            continue
+        x = int(stats_l[i, cv2.CC_STAT_LEFT])
+        y = int(stats_l[i, cv2.CC_STAT_TOP])
+        w = int(stats_l[i, cv2.CC_STAT_WIDTH])
+        h = int(stats_l[i, cv2.CC_STAT_HEIGHT])
+        if w < 8 or h < 8:
+            continue
+        out.append(
+            {
+                "bbox": [x, y, x + w, y + h],
+                "area": area,
+                "mask": labels_l == i,
+            }
+        )
+    out.sort(key=lambda item: int(item.get("area", 0)), reverse=True)
+    return out
+
+def _bbox_y_overlap_ratio(a: list[int], b: list[int]) -> float:
+    ay0, ay1 = int(a[1]), int(a[3])
+    by0, by1 = int(b[1]), int(b[3])
+    inter = max(0, min(ay1, by1) - max(ay0, by0))
+    ha = max(1, ay1 - ay0)
+    hb = max(1, by1 - by0)
+    return float(inter) / float(max(1, min(ha, hb)))
+
+def _bbox_x_gap(a: list[int], b: list[int]) -> int:
+    ax0, ax1 = int(a[0]), int(a[2])
+    bx0, bx1 = int(b[0]), int(b[2])
+    if ax1 >= bx0 and bx1 >= ax0:
+        return 0
+    if ax1 < bx0:
+        return int(bx0 - ax1)
+    return int(ax0 - bx1)
+
+def _bbox_x_overlap_ratio(a: list[int], b: list[int]) -> float:
+    ax0, ax1 = int(a[0]), int(a[2])
+    bx0, bx1 = int(b[0]), int(b[2])
+    inter = max(0, min(ax1, bx1) - max(ax0, bx0))
+    wa = max(1, ax1 - ax0)
+    wb = max(1, bx1 - bx0)
+    return float(inter) / float(max(1, min(wa, wb)))
+
+def _filter_parser_candidates_by_consistency(
+    candidates: list[dict],
+    image_width: int,
+    image_height: int,
+) -> list[dict]:
+    """
+    Remove parser false-positives using garment-structure priors.
+    This is intentionally applied only to parser-joycaption candidate discovery.
+    """
+    if not candidates:
+        return candidates
+
+    def _area_ratio(item: dict) -> float:
+        return float(item.get("parser_component_area_ratio", 0.0) or 0.0)
+
+    def _bbox(item: dict) -> list[int]:
+        b = item.get("bbox") or [0, 0, image_width, image_height]
+        return [int(v) for v in b]
+
+    all_x0 = [int(_bbox(c)[0]) for c in candidates]
+    all_x1 = [int(_bbox(c)[2]) for c in candidates]
+    person_x0 = min(all_x0) if all_x0 else 0
+    person_x1 = max(all_x1) if all_x1 else image_width
+    person_w = max(1, person_x1 - person_x0)
+    person_cx = int((person_x0 + person_x1) * 0.5)
+
+    top_items = [c for c in candidates if str(c.get("type")) == "top"]
+    bottom_items = [c for c in candidates if str(c.get("type")) == "bottom"]
+    best_top = max(top_items, key=_area_ratio) if top_items else None
+    best_bottom = max(bottom_items, key=_area_ratio) if bottom_items else None
+
+    filtered: list[dict] = []
+    for item in candidates:
+        t = str(item.get("type") or "")
+        b = _bbox(item)
+        x0, y0, x1, y1 = [int(v) for v in b]
+        bw = max(1, x1 - x0)
+        bh = max(1, y1 - y0)
+        cy = 0.5 * (y0 + y1)
+        area_ratio = _area_ratio(item)
+
+        keep = True
+        if t == "bottom":
+            # Prevent upper-body fragments being returned as bottoms.
+            if cy < (image_height * 0.44) and area_ratio < 0.10:
+                keep = False
+
+        elif t == "dress":
+            # Generic dress plausibility.
+            if bh < int(image_height * 0.36):
+                keep = False
+            if bw < int(max(32, person_w * 0.28)):
+                keep = False
+
+            # If strong top+bottom exist, require dress to actually bridge them and
+            # cover center torso width; this suppresses sleeve-only dress false positives.
+            if keep and best_top is not None and best_bottom is not None:
+                tb = _bbox(best_top)
+                bb = _bbox(best_bottom)
+                max_tb_area = max(_area_ratio(best_top), _area_ratio(best_bottom))
+                waist_mid_y = int((int(tb[3]) + int(bb[1])) * 0.5)
+                spans_waist = y0 <= waist_mid_y <= y1
+                centered_cover = (
+                    x0 <= int(person_cx - person_w * 0.12)
+                    and x1 >= int(person_cx + person_w * 0.12)
+                )
+                x_overlap_top = _bbox_x_overlap_ratio(b, tb)
+                x_overlap_bottom = _bbox_x_overlap_ratio(b, bb)
+                if not (
+                    spans_waist
+                    and centered_cover
+                    and x_overlap_top >= 0.22
+                    and x_overlap_bottom >= 0.22
+                    and area_ratio >= max(0.045, max_tb_area * 0.55)
+                ):
+                    keep = False
+
+        if keep:
+            filtered.append(item)
+
+    if not filtered:
+        return candidates
+
+    # Final guard: if top+bottom are both strong, keep dress only when truly dominant/central.
+    top_kept = [c for c in filtered if str(c.get("type")) == "top"]
+    bottom_kept = [c for c in filtered if str(c.get("type")) == "bottom"]
+    if top_kept and bottom_kept:
+        best_top_k = max(top_kept, key=_area_ratio)
+        best_bottom_k = max(bottom_kept, key=_area_ratio)
+        top_area = _area_ratio(best_top_k)
+        bottom_area = _area_ratio(best_bottom_k)
+        if top_area >= 0.04 and bottom_area >= 0.04:
+            max_tb_area = max(top_area, bottom_area)
+            tmp: list[dict] = []
+            for item in filtered:
+                if str(item.get("type")) != "dress":
+                    tmp.append(item)
+                    continue
+                b = _bbox(item)
+                x0, _, x1, _ = [int(v) for v in b]
+                centered_cover = (
+                    x0 <= int(person_cx - person_w * 0.12)
+                    and x1 >= int(person_cx + person_w * 0.12)
+                )
+                if _area_ratio(item) >= max(0.08, max_tb_area * 0.75) and centered_cover:
+                    tmp.append(item)
+            if tmp:
+                filtered = tmp
+
+    return filtered
+
+def _merge_bottom_components_if_same_item(
+    components: list[dict],
+    image_width: int,
+    image_height: int,
+) -> list[dict]:
+    """
+    Merge fragmented bottom components (for example left/right pant legs)
+    when parser splits a single garment into adjacent blobs.
+    """
+    if len(components) <= 1:
+        return components
+
+    n = len(components)
+    parent = list(range(n))
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    x_gap_limit = max(28, int(image_width * 0.05))
+    # Secondary thresholds for wide-leg / stride poses where parser splits one pants
+    # into two blobs with limited vertical overlap but nearly aligned lower hems.
+    x_gap_limit_relaxed = max(x_gap_limit, int(image_width * 0.16))
+    bottom_edge_align_limit = max(18, int(image_height * 0.08))
+    y_center_align_ratio = 0.24
+    for i in range(n):
+        bi = components[i].get("bbox") or [0, 0, image_width, image_height]
+        i_x0, i_y0, i_x1, i_y1 = [int(v) for v in bi]
+        hi = max(1, int(bi[3]) - int(bi[1]))
+        i_cy = 0.5 * (i_y0 + i_y1)
+        for j in range(i + 1, n):
+            bj = components[j].get("bbox") or [0, 0, image_width, image_height]
+            j_x0, j_y0, j_x1, j_y1 = [int(v) for v in bj]
+            hj = max(1, int(bj[3]) - int(bj[1]))
+            j_cy = 0.5 * (j_y0 + j_y1)
+            y_overlap = _bbox_y_overlap_ratio(bi, bj)
+            x_gap = _bbox_x_gap(bi, bj)
+            height_ratio = float(max(hi, hj)) / float(max(1, min(hi, hj)))
+            bottom_edge_delta = abs(i_y1 - j_y1)
+            y_center_delta = abs(i_cy - j_cy)
+            aligned_bottom_halves = (
+                x_gap <= x_gap_limit_relaxed
+                and bottom_edge_delta <= bottom_edge_align_limit
+                and y_center_delta <= (max(hi, hj) * y_center_align_ratio)
+                and height_ratio <= 2.8
+            )
+            if (y_overlap >= 0.60 and x_gap <= x_gap_limit and height_ratio <= 2.4) or aligned_bottom_halves:
+                union(i, j)
+
+    groups: dict[int, list[int]] = {}
+    for idx in range(n):
+        root = find(idx)
+        groups.setdefault(root, []).append(idx)
+
+    merged: list[dict] = []
+    for idxs in groups.values():
+        if len(idxs) == 1:
+            comp = dict(components[idxs[0]])
+            comp["merged_component_count"] = int(comp.get("merged_component_count", 1))
+            merged.append(comp)
+            continue
+
+        merged_mask = np.zeros((image_height, image_width), dtype=bool)
+        bbox_union = [image_width, image_height, 0, 0]
+        merged_area_fallback = 0
+        for idx in idxs:
+            comp = components[idx]
+            b = comp.get("bbox") or [0, 0, image_width, image_height]
+            bbox_union[0] = min(bbox_union[0], int(b[0]))
+            bbox_union[1] = min(bbox_union[1], int(b[1]))
+            bbox_union[2] = max(bbox_union[2], int(b[2]))
+            bbox_union[3] = max(bbox_union[3], int(b[3]))
+            merged_area_fallback += int(comp.get("area", 0))
+            m = comp.get("mask")
+            if isinstance(m, np.ndarray) and m.shape[:2] == (image_height, image_width):
+                merged_mask |= m.astype(bool)
+
+        merged_bbox = _bbox_from_mask(merged_mask)
+        if merged_bbox is None:
+            merged_bbox = [int(v) for v in bbox_union]
+            merged_area = int(merged_area_fallback)
+            merged_mask_out = merged_mask if int(merged_mask.sum()) > 0 else None
+        else:
+            merged_area = int(merged_mask.sum())
+            merged_mask_out = merged_mask
+
+        merged.append(
+            {
+                "bbox": [int(v) for v in merged_bbox],
+                "area": merged_area,
+                "mask": merged_mask_out,
+                "merged_component_count": len(idxs),
+            }
+        )
+
+    merged.sort(key=lambda item: int(item.get("area", 0)), reverse=True)
+    return merged
+
+def _robust_bbox_from_component_mask(component_mask: np.ndarray, fallback_bbox: list[int]) -> list[int]:
+    """
+    Tighten component bbox by ignoring tiny sparse outlier pixels on edges.
+    This still uses parser mask only; it does not use detector boxes.
+    """
+    try:
+        mask = np.asarray(component_mask).astype(bool)
+        if mask.ndim != 2 or mask.size == 0 or int(mask.sum()) <= 0:
+            return [int(v) for v in fallback_bbox]
+
+        h, w = mask.shape
+        row_counts = mask.sum(axis=1)
+        col_counts = mask.sum(axis=0)
+
+        # Keep rows/cols that have meaningful support, not isolated specks.
+        row_min = max(1, int(w * 0.006))
+        col_min = max(1, int(h * 0.006))
+
+        valid_rows = np.where(row_counts >= row_min)[0]
+        valid_cols = np.where(col_counts >= col_min)[0]
+        if len(valid_rows) == 0 or len(valid_cols) == 0:
+            return [int(v) for v in fallback_bbox]
+
+        x0 = int(valid_cols.min())
+        y0 = int(valid_rows.min())
+        x1 = int(valid_cols.max()) + 1
+        y1 = int(valid_rows.max()) + 1
+        if x1 <= x0 or y1 <= y0:
+            return [int(v) for v in fallback_bbox]
+        return [x0, y0, x1, y1]
+    except Exception:
+        return [int(v) for v in fallback_bbox]
+
+def _component_label_summary(
+    parsing: np.ndarray,
+    component_mask: np.ndarray,
+    id2label: dict[int, str],
+    top_k: int = 3,
+) -> list[dict]:
+    if parsing.size == 0 or component_mask.size == 0:
+        return []
+    selected = parsing[component_mask]
+    if selected.size == 0:
+        return []
+
+    ids, counts = np.unique(selected, return_counts=True)
+    total = float(max(1, int(counts.sum())))
+    pairs = sorted(zip(ids.tolist(), counts.tolist()), key=lambda x: int(x[1]), reverse=True)
+    out: list[dict] = []
+    for idx, count in pairs[: max(1, int(top_k))]:
+        label = id2label.get(int(idx), f"class_{int(idx)}")
+        out.append(
+            {
+                "id": int(idx),
+                "label": str(label),
+                "ratio": round(float(count) / total, 4),
+            }
+        )
+    return out
+
+def _build_parser_square_candidates(
+    image: Image.Image,
+    requested_type: Optional[str],
+    min_component_area_ratio: float,
+    square_padding_ratio: float,
+) -> list[dict]:
+    if engine.parser is None:
+        raise RuntimeError("Human parser is not enabled.")
+
+    parsing = engine.parser.parse(image)
+    h, w = parsing.shape[:2]
+    total_pixels = float(max(1, w * h))
+    min_ratio = max(0.0005, min(0.25, float(min_component_area_ratio)))
+    min_pixels = max(96, int(total_pixels * min_ratio))
+    id2label = _parser_runtime_id2label()
+
+    normalized_type = _normalize_garment_type(requested_type)
+    if normalized_type in {"top", "bottom", "dress", "outer"}:
+        target_types = [normalized_type]
+    else:
+        target_types = ["top", "bottom", "dress"]
+
+    candidates: list[dict] = []
+    for garment_type in target_types:
+        keep_ids = _parser_extraction_keep_ids(garment_type)
+        if not keep_ids:
+            continue
+
+        type_mask = np.isin(parsing, keep_ids)
+        if int(type_mask.sum()) < min_pixels:
+            continue
+        type_mask = binary_open(type_mask, 3)
+        type_mask = binary_close(type_mask, 3)
+
+        components = _mask_connected_components(type_mask, min_pixels=min_pixels)
+        if garment_type == "bottom" and len(components) > 1:
+            components = _merge_bottom_components_if_same_item(
+                components,
+                image_width=w,
+                image_height=h,
+            )
+        for component in components:
+            bbox = component.get("bbox") or [0, 0, w, h]
+            area = int(component.get("area", 0))
+            component_mask = component.get("mask")
+            if area <= 0 or component_mask is None:
+                continue
+            bbox = _robust_bbox_from_component_mask(component_mask, bbox)
+
+            section_bbox = _expand_section_bbox_by_type(
+                bbox=bbox,
+                garment_type=garment_type,
+                image_width=w,
+                image_height=h,
+            )
+            square_bbox = _square_bbox_from_bbox(
+                bbox=section_bbox,
+                image_width=w,
+                image_height=h,
+                padding_ratio=square_padding_ratio,
+            )
+            sx0, sy0, sx1, sy1 = [int(v) for v in square_bbox]
+            side = max(2, int(sx1 - sx0), int(sy1 - sy0))
+            square_area = float(max(1, side * side))
+            label_summary = _component_label_summary(parsing, component_mask, id2label=id2label, top_k=3)
+            ex0, ey0, ex1, ey1 = [int(v) for v in section_bbox]
+            rect_crop = image.crop((ex0, ey0, ex1, ey1)).convert("RGB")
+            raw_square_crop = _crop_square_with_padding(image, square_bbox)
+
+            subtype = ""
+            if garment_type == "bottom":
+                for entry in label_summary:
+                    lbl = str(entry.get("label", "")).strip().lower()
+                    if lbl in {"skirt", "pants", "trousers", "shorts"}:
+                        subtype = lbl
+                        break
+            category_text = _parser_candidate_category_text(garment_type, subtype)
+
+            candidates.append(
+                {
+                    "type": garment_type,
+                    "subtype": subtype,
+                    "category_text": category_text,
+                    "bbox": [int(v) for v in bbox],
+                    "parser_bbox": [int(v) for v in bbox],
+                    "section_bbox": [int(v) for v in section_bbox],
+                    "square_bbox": square_bbox,
+                    "crop_mode": "tight_rect_parser_context",
+                    "parser_component_area_ratio": round(float(area) / total_pixels, 6),
+                    "component_coverage_in_square": round(float(area) / square_area, 6),
+                    "merged_component_count": int(component.get("merged_component_count", 1)),
+                    "parser_labels": label_summary,
+                    "_crop_image": rect_crop,
+                    "_square_crop_image": raw_square_crop,
+                }
+            )
+
+    candidates = _filter_parser_candidates_by_consistency(
+        candidates,
+        image_width=w,
+        image_height=h,
+    )
+
+    candidates.sort(
+        key=lambda item: (
+            float(item.get("parser_component_area_ratio", 0.0)),
+            float(item.get("component_coverage_in_square", 0.0)),
+        ),
+        reverse=True,
+    )
+    for idx, candidate in enumerate(candidates):
+        candidate["garment_id"] = idx
+    return candidates
+
+def _parser_candidate_category_text(garment_type: str, subtype: Optional[str] = None) -> str:
+    gt = _normalize_garment_type(garment_type) or "top"
+    st = str(subtype or "").strip().lower()
+    if gt == "bottom":
+        if st in {"pants", "trousers"}:
+            return "pants"
+        if st == "shorts":
+            return "shorts"
+        if st == "skirt":
+            return "skirt"
+        return "bottom"
+    if gt in {"top", "dress", "outer"}:
+        return gt
+    return "garment"
+
+def _build_flux2_garment_only_prompt(
+    garment_type: str,
+    prompt_description: str,
+    category_text: Optional[str] = None,
+) -> str:
+    clean_desc = " ".join(str(prompt_description or "").split()).strip()
+    item_phrase = {
+        "top": "top garment",
+        "bottom": "bottom garment",
+        "dress": "dress",
+        "outer": "outerwear piece",
+    }.get(_normalize_garment_type(garment_type) or "top", "garment")
+    explicit_category = str(category_text or _parser_candidate_category_text(garment_type)).strip().lower()
+    return (
+        "Generate a standalone product shot of the garment only (no person, no mannequin, no body parts). "
+        "Use a clean pure white studio background only (RGB 255,255,255), with no props and no scene context. "
+        "Center a single garment in frame with full silhouette visible and edge-to-edge clarity. "
+        f"Generate only a single {explicit_category} category garment and no other categories. "
+        f"Reconstruct the exact {item_phrase} from the reference crop with strict fidelity to silhouette, "
+        "neckline/waist/hem geometry, fit, fabric texture, transparency level, print/embellishment placement, "
+        f"and color palette. Garment details: {clean_desc}"
+    )
+
+def _to_public_parser_candidate(item: dict) -> dict:
+    return {k: v for k, v in item.items() if not str(k).startswith("_")}
 
 def _fit_image_to_aspect(image: Image.Image, aspect_w: int, aspect_h: int) -> Image.Image:
     iw, ih = image.size
@@ -1027,7 +2374,7 @@ def _enhance_garment_image(image: Image.Image) -> Image.Image:
     res.putalpha(alpha)
     return res
 
-def _postprocess_extracted_garment_bytes(image_bytes: bytes) -> tuple[bytes, dict]:
+def _postprocess_extracted_garment_bytes(image_bytes: bytes, garment_type: str = "") -> tuple[bytes, dict]:
     image = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
     
     # 0. Safe Hole Filling (Fixes 'missing cloth patches' on patterned garments)
@@ -1085,6 +2432,71 @@ def _postprocess_extracted_garment_bytes(image_bytes: bytes) -> tuple[bytes, dic
         )
         processed = _enhance_garment_image(processed)
 
+    # Top-only rim cleanup: trims skin-like fringe on neckline/lower edge without touching sleeves.
+    if ANALYZE_TOP_SKIN_RIM_CLEANUP and _normalize_garment_type(garment_type) in {"top", "outer"}:
+        try:
+            import cv2
+
+            rgba = processed.convert("RGBA")
+            arr = np.asarray(rgba).copy()
+            alpha = arr[:, :, 3].astype(np.uint8)
+            visible = alpha > max(12, ANALYZE_GARMENT_ALPHA_THRESHOLD)
+            if np.any(visible):
+                skin = _skin_like_mask(arr[:, :, :3]) & visible
+                vis_u8 = (visible.astype(np.uint8) * 255)
+                eroded = cv2.erode(vis_u8, np.ones((3, 3), np.uint8), iterations=1) > 0
+                edge = visible & (~eroded)
+                edge = cv2.dilate(edge.astype(np.uint8), np.ones((5, 5), np.uint8), iterations=1) > 0
+
+                ys, _ = np.where(visible)
+                y0, y1 = int(ys.min()), int(ys.max()) + 1
+                h = max(1, y1 - y0)
+                yy = np.indices(alpha.shape)[0]
+                band = (yy <= (y0 + int(h * 0.32))) | (yy >= (y0 + int(h * 0.68)))
+
+                rim = skin & edge & band
+                rim_ratio = float(np.sum(rim)) / float(max(1, np.sum(visible)))
+                if rim_ratio <= ANALYZE_TOP_SKIN_RIM_MAX_RATIO:
+                    alpha[rim] = 0
+                    alpha = build_soft_alpha(alpha > max(12, ANALYZE_GARMENT_ALPHA_THRESHOLD), feather_px=1).astype(np.uint8)
+                    arr[:, :, 3] = alpha
+                    processed = Image.fromarray(arr, mode="RGBA")
+        except Exception as rim_e:
+            logger.warning(f"Top skin-rim cleanup skipped: {rim_e}")
+
+    # Optional final render mode for frontend-facing outputs.
+    # White background is more forgiving for minor alpha-edge artifacts.
+    if ANALYZE_GARMENT_OUTPUT_BACKGROUND == "white":
+        try:
+            import cv2
+
+            rgba = processed.convert("RGBA")
+            arr = np.asarray(rgba).copy()
+            alpha = arr[:, :, 3].astype(np.uint8)
+            mask = alpha > max(18, ANALYZE_GARMENT_ALPHA_THRESHOLD + 6)
+            mask = binary_open(mask, 3)
+            mask = binary_close(mask, 3)
+
+            # Drop tiny disconnected islands that often correspond to residual body fragments.
+            num_l, labels_l, stats_l, _ = cv2.connectedComponentsWithStats((mask.astype(np.uint8) * 255))
+            clean = np.zeros_like(mask, dtype=bool)
+            min_area = max(96, int(mask.size * max(0.0, ANALYZE_EXTRACT_COMPONENT_MIN_RATIO) * 0.35))
+            for i in range(1, num_l):
+                if int(stats_l[i, cv2.CC_STAT_AREA]) >= min_area:
+                    clean[labels_l == i] = True
+            alpha_clean = build_soft_alpha(clean, feather_px=1).astype(np.uint8)
+            arr[:, :, 3] = alpha_clean
+            rgba_clean = Image.fromarray(arr, mode="RGBA")
+
+            white = Image.new("RGB", rgba_clean.size, (255, 255, 255))
+            white.paste(rgba_clean, mask=rgba_clean.split()[-1])
+            processed = white
+        except Exception as white_e:
+            logger.warning(f"White background render cleanup failed: {white_e}")
+            base = Image.new("RGB", processed.size, (255, 255, 255))
+            base.paste(processed.convert("RGBA"), mask=processed.convert("RGBA").split()[-1])
+            processed = base
+
     out = io.BytesIO()
     processed.save(out, format="PNG")
     return out.getvalue(), {
@@ -1095,6 +2507,35 @@ def _postprocess_extracted_garment_bytes(image_bytes: bytes) -> tuple[bytes, dic
         "output_size": {"width": int(processed.width), "height": int(processed.height)},
         "target_aspect": f"{ANALYZE_GARMENT_TARGET_ASPECT_W}:{ANALYZE_GARMENT_TARGET_ASPECT_H}",
         "enhance_enabled": ANALYZE_GARMENT_ENHANCE_ENABLED,
+        "output_background": ANALYZE_GARMENT_OUTPUT_BACKGROUND,
+        "top_skin_rim_cleanup": bool(
+            ANALYZE_TOP_SKIN_RIM_CLEANUP and _normalize_garment_type(garment_type) in {"top", "outer"}
+        ),
+    }
+
+def _crop_and_fit_garment_bytes(image_bytes: bytes) -> tuple[bytes, dict]:
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+    original_size = (int(image.width), int(image.height))
+    bbox = _content_bbox_from_image(image)
+    cropped = image.crop(bbox)
+    processed = cropped
+    if ANALYZE_GARMENT_POSTPROCESS_ENABLED:
+        processed = _fit_image_to_aspect(
+            processed,
+            aspect_w=ANALYZE_GARMENT_TARGET_ASPECT_W,
+            aspect_h=ANALYZE_GARMENT_TARGET_ASPECT_H,
+        )
+    out = io.BytesIO()
+    processed.save(out, format="PNG")
+    return out.getvalue(), {
+        "enabled": ANALYZE_GARMENT_POSTPROCESS_ENABLED,
+        "mode": "crop_then_aspect_only",
+        "original_size": {"width": original_size[0], "height": original_size[1]},
+        "content_bbox": [int(v) for v in bbox],
+        "content_size": {"width": int(cropped.width), "height": int(cropped.height)},
+        "output_size": {"width": int(processed.width), "height": int(processed.height)},
+        "target_aspect": f"{ANALYZE_GARMENT_TARGET_ASPECT_W}:{ANALYZE_GARMENT_TARGET_ASPECT_H}",
+        "output_background": "transparent",
     }
 
 def _fetch_image_bytes(url: str, timeout: int = 45) -> bytes:
@@ -1135,6 +2576,77 @@ def _pixel_change_ratio(source_bytes: bytes, output_bytes: bytes, size: int = 25
         return 0.0
     diff = np.mean(np.abs(src_arr - out_arr), axis=2)
     return float(np.mean(diff > float(delta)))
+
+def _refine_with_showroom_delta(
+    extracted_rgba: Image.Image,
+    raw_vton_bytes: bytes,
+    showroom_bytes: bytes,
+    garment_type: str = "",
+) -> tuple[Image.Image, dict]:
+    try:
+        import cv2
+
+        ex = extracted_rgba.convert("RGBA")
+        ex_arr = np.asarray(ex).copy()
+        alpha = ex_arr[:, :, 3]
+        visible = alpha > max(8, ANALYZE_GARMENT_ALPHA_THRESHOLD)
+        visible_px = int(np.sum(visible))
+        if visible_px <= 0:
+            return ex, {"enabled": True, "applied": False, "reason": "empty_alpha"}
+
+        raw_img = _flatten_rgba_on_white(Image.open(io.BytesIO(raw_vton_bytes)))
+        show_img = _flatten_rgba_on_white(Image.open(io.BytesIO(showroom_bytes)))
+        if show_img.size != raw_img.size:
+            show_img = show_img.resize(raw_img.size, Image.BICUBIC)
+        if ex.size != raw_img.size:
+            ex = ex.resize(raw_img.size, Image.LANCZOS).convert("RGBA")
+            ex_arr = np.asarray(ex).copy()
+            alpha = ex_arr[:, :, 3]
+            visible = alpha > max(8, ANALYZE_GARMENT_ALPHA_THRESHOLD)
+            visible_px = int(np.sum(visible))
+            if visible_px <= 0:
+                return ex, {"enabled": True, "applied": False, "reason": "empty_after_resize"}
+
+        raw_arr = np.asarray(raw_img, dtype=np.float32)
+        show_arr = np.asarray(show_img, dtype=np.float32)
+        diff = np.mean(np.abs(raw_arr - show_arr), axis=2)
+        delta_threshold = np.full(diff.shape, float(ANALYZE_SHOWROOM_DELTA_THRESHOLD), dtype=np.float32)
+        # For tops/outerwear, be stricter on skin-like regions to suppress residual body strips.
+        if _normalize_garment_type(garment_type) in {"top", "outer"}:
+            skin_like = _skin_like_mask(raw_arr.astype(np.uint8))
+            delta_threshold[skin_like] = float(ANALYZE_SHOWROOM_DELTA_THRESHOLD + ANALYZE_SHOWROOM_DELTA_SKIN_EXTRA)
+        delta_mask = diff >= delta_threshold
+        if ANALYZE_SHOWROOM_DELTA_DILATE > 0:
+            k = int(ANALYZE_SHOWROOM_DELTA_DILATE)
+            delta_mask = cv2.dilate(delta_mask.astype(np.uint8), np.ones((k, k), np.uint8), iterations=1) > 0
+
+        refined_mask = visible & delta_mask
+        refined_px = int(np.sum(refined_mask))
+        retain_ratio = float(refined_px) / float(max(1, visible_px))
+
+        meta = {
+            "enabled": True,
+            "applied": False,
+            "visible_before": visible_px,
+            "visible_after": refined_px,
+            "retain_ratio": round(retain_ratio, 6),
+            "threshold": float(ANALYZE_SHOWROOM_DELTA_THRESHOLD),
+            "skin_extra_threshold": float(ANALYZE_SHOWROOM_DELTA_SKIN_EXTRA),
+            "dilate": int(ANALYZE_SHOWROOM_DELTA_DILATE),
+            "min_retain_ratio": float(ANALYZE_SHOWROOM_DELTA_MIN_RETAIN_RATIO),
+        }
+
+        if retain_ratio < ANALYZE_SHOWROOM_DELTA_MIN_RETAIN_RATIO:
+            meta["reason"] = "retain_ratio_too_low"
+            return ex, meta
+
+        alpha_new = np.where(refined_mask, alpha, 0).astype(np.uint8)
+        alpha_new = build_soft_alpha(alpha_new > max(8, ANALYZE_GARMENT_ALPHA_THRESHOLD), feather_px=ANALYZE_EXTRACT_EDGE_FEATHER_PX).astype(np.uint8)
+        ex_arr[:, :, 3] = alpha_new
+        meta["applied"] = True
+        return Image.fromarray(ex_arr, mode="RGBA"), meta
+    except Exception as exc:
+        return extracted_rgba, {"enabled": True, "applied": False, "reason": f"error:{exc}"}
 
 def _type_to_vton_category(garment_type: str) -> str:
     g = (_normalize_garment_type(garment_type) or garment_type or "dress").strip().lower()
@@ -1192,6 +2704,86 @@ def _validate_vton_output_bytes(image_bytes: bytes) -> dict:
         "height": int(img.height),
     }
 
+def _parser_category_ids(category: str, fallback: Optional[list[int]] = None) -> list[int]:
+    if engine.parser is not None and hasattr(engine.parser, "category_ids"):
+        try:
+            ids = list(getattr(engine.parser, "category_ids")(category) or [])
+            if ids:
+                return [int(v) for v in ids]
+        except Exception:
+            pass
+    return [int(v) for v in (fallback or [])]
+
+
+def _parser_runtime_label2id() -> dict[str, int]:
+    if engine.parser is None:
+        return {}
+    out: dict[str, int] = {}
+    try:
+        runner = getattr(getattr(engine.parser, "_parser_fn", None), "__self__", None)
+        runtime = getattr(runner, "label2id", None)
+        if isinstance(runtime, dict):
+            for k, v in runtime.items():
+                try:
+                    key = str(k).strip().lower().replace("-", "_").replace(" ", "_")
+                    out[key] = int(v)
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    if out:
+        return out
+    try:
+        runtime_fn = getattr(engine.parser, "_runtime_labels", None)
+        runtime = runtime_fn() if callable(runtime_fn) else {}
+        if isinstance(runtime, dict):
+            for k, v in runtime.items():
+                try:
+                    key = str(k).strip().lower().replace("-", "_").replace(" ", "_")
+                    out[key] = int(v)
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return out
+
+
+def _parser_extraction_keep_ids(garment_type: str) -> list[int]:
+    """
+    Extraction-only mapping for the 18-class FASHN parser.
+    Keeps category domains explicit:
+      - top: top/upper
+      - bottom: pants/skirt/shorts (+belt)
+      - dress: dress
+    """
+    g = _normalize_garment_type(garment_type) or "top"
+    label2id = _parser_runtime_label2id()
+
+    alias_map = {
+        "top": ["top", "upper_clothes", "upper"],
+        "outer": ["outerwear", "outer", "coat", "jacket", "blazer", "top", "upper_clothes", "upper"],
+        "bottom": ["pants", "skirt", "shorts", "trousers", "belt"],
+        "dress": ["dress"],
+    }
+    aliases = alias_map.get(g, alias_map["top"])
+    ids = []
+    for alias in aliases:
+        key = str(alias).strip().lower().replace("-", "_").replace(" ", "_")
+        if key in label2id:
+            ids.append(int(label2id[key]))
+    ids = sorted(set(ids))
+    if ids:
+        return ids
+
+    # Fallback to existing parser category logic only if runtime labels are unavailable.
+    fallback_map = {
+        "top": [4, 17],
+        "outer": [4, 17, 8],
+        "bottom": [5, 6, 8],
+        "dress": [7],
+    }
+    return _parser_category_ids(g, fallback_map.get(g, [4, 17]))
+
 def _body_leakage_stats(rgba_image: Image.Image) -> dict:
     if engine.parser is None:
         return {"ratio": 0.0, "visible_pixels": 0, "body_pixels": 0, "body_mask": None}
@@ -1206,8 +2798,8 @@ def _body_leakage_stats(rgba_image: Image.Image) -> dict:
 
     parse_input = _flatten_rgba_on_white(rgba)
     parsing = engine.parser.parse(parse_input)
-    # Segformer labels: exclude all body/face/hair/limbs/shoes pixels.
-    body_ids = [1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16]
+    # Use parser semantic labels (works across model variants).
+    body_ids = _parser_category_ids("body", [1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16])
     body_mask = np.isin(parsing, body_ids) & visible_mask
     body_pixels = int(np.sum(body_mask))
     ratio = float(body_pixels) / float(max(1, visible_pixels))
@@ -1218,11 +2810,53 @@ def _body_leakage_stats(rgba_image: Image.Image) -> dict:
         "body_mask": body_mask,
     }
 
-def _extract_cloth_from_crop(crop: Image.Image, garment_type: str) -> tuple[Image.Image, dict]:
+def _skin_like_mask(rgb_image: np.ndarray) -> np.ndarray:
+    try:
+        import cv2
+
+        rgb = np.asarray(rgb_image, dtype=np.uint8)
+        if rgb.ndim != 3 or rgb.shape[2] != 3:
+            return np.zeros((0, 0), dtype=bool)
+
+        hsv = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+        ycrcb = cv2.cvtColor(rgb, cv2.COLOR_RGB2YCrCb)
+
+        h = hsv[:, :, 0]
+        s = hsv[:, :, 1]
+        v = hsv[:, :, 2]
+        skin_hsv = (((h <= 25) | (h >= 160)) & (s >= 20) & (s <= 200) & (v >= 35))
+
+        cr = ycrcb[:, :, 1]
+        cb = ycrcb[:, :, 2]
+        skin_ycrcb = (cr >= 133) & (cr <= 173) & (cb >= 77) & (cb <= 127)
+
+        r = rgb[:, :, 0].astype(np.int16)
+        g = rgb[:, :, 1].astype(np.int16)
+        b = rgb[:, :, 2].astype(np.int16)
+        skin_rgb = (
+            (r > 95) & (g > 40) & (b > 20)
+            & ((np.maximum(np.maximum(r, g), b) - np.minimum(np.minimum(r, g), b)) > 15)
+            & (np.abs(r - g) > 15)
+            & (r > g) & (r > b)
+        )
+
+        # Keep mask conservative to avoid stripping light/skin-like garments.
+        mask = (skin_hsv & skin_ycrcb) | (skin_ycrcb & skin_rgb)
+        mask = binary_open(mask, 3)
+        mask = binary_close(mask, 3)
+        return mask.astype(bool)
+    except Exception:
+        h, w = rgb_image.shape[:2]
+        return np.zeros((h, w), dtype=bool)
+
+def _extract_cloth_from_crop(
+    crop: Image.Image,
+    garment_type: str,
+    enforce_safety_guards: bool = True,
+) -> tuple[Image.Image, dict]:
     """
     High-quality garment extraction from a person/mannequin image.
-    Uses rembg neural model for pixel-accurate background removal,
-    followed by HSV skin-tone masking and parser masking to remove the mannequin body.
+    Primary path uses type-aware human parser masks for garment isolation.
     """
     selected_type = _normalize_garment_type(garment_type) or "top"
     total_pixels = float(max(1, crop.width * crop.height))
@@ -1231,60 +2865,101 @@ def _extract_cloth_from_crop(crop: Image.Image, garment_type: str) -> tuple[Imag
 
     try:
         import cv2
-        from rembg import remove
 
-        # STEP 1: Neural Background Removal (ISNet)
-        session = _get_rembg_isnet_session()
-        rembg_result = remove(crop.convert("RGB"), session=session, post_process_mask=True)
-        rembg_alpha = np.array(rembg_result)[:, :, 3].astype(np.uint8)
-        logger.info(f"rembg alpha coverage: {rembg_alpha.mean():.1f}")
-
-        # STEP 2: Body Part & Cross-Category Kill (Surgical Isolation)
+        # STEP 1: Type-aware parser setup.
         # We use Segformer B2 Clothes labels: 4:Upper, 6:Pants, 5:Skirt, 7:Dress, 8:Belt, 9/10:Shoes, 11:Face, 12/13:Legs, 14/15:Arms
         parsing = engine.parser.parse(crop)
 
-        # Always kill body parts, hair, and shoes to isolate the floating garment.
-        base_body_kill_ids = [1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16]
+        strict_keep_ids = _parser_extraction_keep_ids(selected_type)
+        strict_keep_ids = sorted(set(int(v) for v in strict_keep_ids))
+        keep_adjustment = {}
+
+        # Some FASHN parser outputs place upper garments under dress-like class IDs.
+        # For top extraction only, backfill with dress ID when top mask is too small.
+        if ANALYZE_PARSER_TOP_DRESS_BACKFILL and selected_type in {"top", "outer"}:
+            label2id = _parser_runtime_label2id()
+            top_id = label2id.get("top")
+            dress_id = label2id.get("dress")
+            if top_id is not None and dress_id is not None and int(dress_id) not in strict_keep_ids:
+                top_ratio = float(np.mean(parsing == int(top_id)))
+                dress_ratio = float(np.mean(parsing == int(dress_id)))
+                if top_ratio < ANALYZE_PARSER_TOP_MIN_RATIO and dress_ratio >= ANALYZE_PARSER_DRESS_BACKFILL_MIN_RATIO:
+                    strict_keep_ids = sorted(set(strict_keep_ids + [int(dress_id)]))
+                    keep_adjustment = {
+                        "top_id": int(top_id),
+                        "dress_id": int(dress_id),
+                        "top_ratio": round(top_ratio, 6),
+                        "dress_ratio": round(dress_ratio, 6),
+                        "applied": True,
+                    }
+
+        if ANALYZE_EXTRACT_PARSER_ONLY:
+            # Strict parser-only extraction: keep only the requested garment region
+            # from the try-on frame, then pass that output to enhancement.
+            seed_mask = np.isin(parsing, strict_keep_ids)
+            keep_dilate = max(0, int(ANALYZE_EXTRACT_KEEP_DILATE))
+            if keep_dilate > 0:
+                seed_mask = cv2.dilate(
+                    (seed_mask.astype(np.uint8) * 255),
+                    np.ones((keep_dilate, keep_dilate), np.uint8),
+                    iterations=1,
+                ) > 0
+            seed_mask = binary_open(seed_mask, 3)
+            seed_mask = binary_close(seed_mask, 3)
+
+            # Remove tiny islands while preserving the parser-selected garment body.
+            num_l, labels_l, stats_l, _ = cv2.connectedComponentsWithStats((seed_mask.astype(np.uint8) * 255))
+            clean_mask = np.zeros_like(seed_mask, dtype=bool)
+            area_min = max(160, int(total_pixels * ANALYZE_EXTRACT_COMPONENT_MIN_RATIO))
+            for j in range(1, num_l):
+                if int(stats_l[j, cv2.CC_STAT_AREA]) >= area_min:
+                    clean_mask[labels_l == j] = True
+
+            alpha = build_soft_alpha(clean_mask, feather_px=ANALYZE_EXTRACT_EDGE_FEATHER_PX).astype(np.uint8)
+            final_mask = alpha > max(8, ANALYZE_EXTRACT_EDGE_FEATHER_PX * 6)
+            final_area_ratio = float(final_mask.sum()) / total_pixels
+            if final_area_ratio <= 0.0:
+                raise RuntimeError(f"Parser-only extraction produced empty result for: {selected_type}")
+
+            alpha_plane = alpha[:, :, None]
+            cloth_rgba = np.concatenate([img_np, alpha_plane], axis=2)
+            cloth_image = Image.fromarray(cloth_rgba, mode="RGBA")
+            return cloth_image, {
+                "path": "parser_type_only",
+                "mask_area_ratio": round(final_area_ratio, 6),
+                "rescue_mode": "none",
+                "parser_only": True,
+                "keep_ids": strict_keep_ids,
+                "keep_adjustment": keep_adjustment,
+            }
+
+        # Non-parser-only mode still uses parser masks only.
+        base_body_kill_ids = _parser_category_ids("body", [1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16])
         kill_ids = list(base_body_kill_ids)
         rescue_mode = "strict"
-        type_keep_map = {
-            "top": [4, 17],
-            "outer": [4, 17, 8],
-            "bottom": [5, 6, 8],
-            "dress": [7, 4, 5, 6, 8, 17],
-        }
-        strict_keep_ids = type_keep_map.get(selected_type, [4, 5, 6, 7, 8, 17])
 
         if selected_type == "top":
-            # Keep: Upper(4), Scarf(17)
-            # Kill: Skirt(5), Pants(6), Dress(7), Belt(8)
-            kill_ids.extend([5, 6, 7, 8])
+            # Kill opposite garment classes for stronger separation.
+            kill_ids.extend(_parser_category_ids("bottom", [5, 6, 8]))
+            kill_ids.extend(_parser_category_ids("dress", [7]))
         elif selected_type == "bottom":
-            # Keep: Skirt(5), Pants(6), Belt(8)
-            # Kill: Upper(4), Dress(7), Scarf(17)
-            kill_ids.extend([4, 7, 17])
+            kill_ids.extend(_parser_category_ids("top", [4, 17]))
+            kill_ids.extend(_parser_category_ids("dress", [7]))
         elif selected_type == "dress":
-            # Keep: Dress(7), Upper(4), Skirt(5), Pants(6), Belt(8), Scarf(17)
-            # (Keeping most for dress as it often blends classes)
+            # Dress already keeps broad clothing regions.
             pass
 
-        # STEP 3: Fill holes in the rembg mask BEFORE combining
-        # This prevents crocheted/mesh tops from being dissolved into fragments
-        inv_rembg = cv2.bitwise_not(rembg_alpha)
-        num_labels, labels_im, stats, _ = cv2.connectedComponentsWithStats(inv_rembg)
-        rembg_filled = rembg_alpha.copy()
-        for i in range(1, num_labels):
-            if stats[i, cv2.CC_STAT_AREA] < 5000:
-                rembg_filled[labels_im == i] = 255
+        kill_ids = sorted(set(int(v) for v in kill_ids))
 
-        def _compose_alpha_from_seed(seed_alpha: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
-            seed_mask = seed_alpha > 0
+        path_name = "parser_type_guided"
+
+        def _compose_alpha_from_seed(seed_mask: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
             seed_mask = binary_open(seed_mask, 3)
             seed_mask = binary_close(seed_mask, 3)
 
             # Dust removal (eliminate isolated floating specks).
             num_l, labels_l, stats_l, _ = cv2.connectedComponentsWithStats((seed_mask.astype(np.uint8) * 255))
-            clean_alpha = np.zeros_like(seed_alpha, dtype=np.uint8)
+            clean_alpha = np.zeros_like(seed_mask, dtype=np.uint8)
             area_min = max(160, int(total_pixels * ANALYZE_EXTRACT_COMPONENT_MIN_RATIO))
             for j in range(1, num_l):
                 if int(stats_l[j, cv2.CC_STAT_AREA]) >= area_min:
@@ -1296,27 +2971,43 @@ def _extract_cloth_from_crop(crop: Image.Image, garment_type: str) -> tuple[Imag
             return alpha_local, final_mask_local, area_ratio_local
 
         def _compose_alpha_with_kill(active_kill_ids: list[int]) -> tuple[np.ndarray, np.ndarray, float]:
-            parser_kill = np.isin(parsing, active_kill_ids).astype(np.uint8) * 255
+            parser_kill = np.isin(parsing, active_kill_ids)
             kill_k = max(1, int(ANALYZE_EXTRACT_PARSER_KILL_DILATE))
-            parser_kill = cv2.dilate(parser_kill, np.ones((kill_k, kill_k), np.uint8), iterations=1)
-
-            final_alpha = rembg_filled.copy()
-            final_alpha[parser_kill > 0] = 0
+            parser_kill = cv2.dilate(
+                (parser_kill.astype(np.uint8) * 255),
+                np.ones((kill_k, kill_k), np.uint8),
+                iterations=1,
+            ) > 0
 
             # Type-aware keep-region gating removes residual body at waist/hands/legs.
-            keep_mask = np.isin(parsing, strict_keep_ids).astype(np.uint8) * 255
+            keep_mask = np.isin(parsing, strict_keep_ids)
             keep_dilate = max(0, int(ANALYZE_EXTRACT_KEEP_DILATE))
             if keep_dilate > 0:
-                keep_mask = cv2.dilate(keep_mask, np.ones((keep_dilate, keep_dilate), np.uint8), iterations=1)
-            final_alpha[keep_mask == 0] = 0
-            return _compose_alpha_from_seed(final_alpha)
+                keep_mask = cv2.dilate(
+                    (keep_mask.astype(np.uint8) * 255),
+                    np.ones((keep_dilate, keep_dilate), np.uint8),
+                    iterations=1,
+                ) > 0
+            seed_mask = keep_mask & (~parser_kill)
+            return _compose_alpha_from_seed(seed_mask)
 
         def _compose_alpha_with_keep(keep_ids: list[int]) -> tuple[np.ndarray, np.ndarray, float]:
-            keep_mask = np.isin(parsing, keep_ids).astype(np.uint8) * 255
-            keep_mask = cv2.dilate(keep_mask, np.ones((2, 2), np.uint8), iterations=1)
-            final_alpha = rembg_filled.copy()
-            final_alpha[keep_mask == 0] = 0
-            return _compose_alpha_from_seed(final_alpha)
+            keep_mask = np.isin(parsing, keep_ids)
+            keep_mask = cv2.dilate((keep_mask.astype(np.uint8) * 255), np.ones((2, 2), np.uint8), iterations=1) > 0
+            return _compose_alpha_from_seed(keep_mask)
+
+        def _compose_alpha_body_only() -> tuple[np.ndarray, np.ndarray, float]:
+            garment_ids = _parser_category_ids("garment_fallback", [4, 5, 6, 7, 8, 17])
+            garment_mask = np.isin(parsing, garment_ids)
+            body_mask = np.isin(parsing, base_body_kill_ids)
+            kill_k = max(1, int(ANALYZE_EXTRACT_PARSER_KILL_DILATE))
+            body_mask = cv2.dilate(
+                (body_mask.astype(np.uint8) * 255),
+                np.ones((kill_k, kill_k), np.uint8),
+                iterations=1,
+            ) > 0
+            seed_mask = garment_mask & (~body_mask)
+            return _compose_alpha_from_seed(seed_mask)
 
         # STEP 4/5/6: strict parser-aware extraction.
         alpha, final_mask, final_area_ratio = _compose_alpha_with_kill(kill_ids)
@@ -1349,7 +3040,7 @@ def _extract_cloth_from_crop(crop: Image.Image, garment_type: str) -> tuple[Imag
                     rescue_mode = "body_only"
 
             # Spatial guard for broad rescue masks on two-piece categories.
-            if rescue_mode in {"body_only", "rembg_only"} and final_area_ratio > 0.0:
+            if rescue_mode == "body_only" and final_area_ratio > 0.0:
                 ys, xs = np.where(final_mask)
                 if len(xs) and len(ys):
                     y0, y1 = int(ys.min()), int(ys.max()) + 1
@@ -1368,44 +3059,26 @@ def _extract_cloth_from_crop(crop: Image.Image, garment_type: str) -> tuple[Imag
                         rescue_mode = f"{rescue_mode}_lower_guard"
 
             if final_area_ratio <= 0.0:
-                rembg_only_alpha = cv2.GaussianBlur(rembg_filled, (3, 3), 0)
-                rembg_only_mask = rembg_only_alpha > 10
-                rembg_only_area = float(rembg_only_mask.sum()) / total_pixels
-                if rembg_only_area > final_area_ratio:
+                alpha_body, mask_body, area_body = _compose_alpha_body_only()
+                if area_body > final_area_ratio:
                     logger.warning(
-                        "Extraction mask still empty after parser/body rescue (type=%s). Using rembg-only rescue %.6f.",
+                        "Extraction mask empty after strict/keep rescue (type=%s). Using parser body-only rescue %.6f.",
                         selected_type,
-                        rembg_only_area,
+                        area_body,
                     )
-                    alpha, final_mask, final_area_ratio = rembg_only_alpha, rembg_only_mask, rembg_only_area
-                    rescue_mode = "rembg_only"
-
-            if rescue_mode == "rembg_only" and final_area_ratio > 0.0:
-                ys, xs = np.where(final_mask)
-                if len(xs) and len(ys):
-                    y0, y1 = int(ys.min()), int(ys.max()) + 1
-                    h_mask = max(1, y1 - y0)
-                    if selected_type in {"top", "outer"}:
-                        cut_y = y0 + int(h_mask * 0.72)
-                        final_mask[cut_y:, :] = False
-                        alpha = np.where(final_mask, alpha, 0).astype(np.uint8)
-                        final_area_ratio = float(final_mask.sum()) / total_pixels
-                        rescue_mode = "rembg_only_upper_guard"
-                    elif selected_type == "bottom":
-                        cut_y = y0 + int(h_mask * 0.28)
-                        final_mask[:cut_y, :] = False
-                        alpha = np.where(final_mask, alpha, 0).astype(np.uint8)
-                        final_area_ratio = float(final_mask.sum()) / total_pixels
-                        rescue_mode = "rembg_only_lower_guard"
-
-        path_name = "rembg_isnet_premium"
+                    alpha, final_mask, final_area_ratio = alpha_body, mask_body, area_body
+                    rescue_mode = "body_only"
 
     except Exception as e:
-        logger.warning(f"rembg extraction failed, falling back to parser: {e}")
+        if ANALYZE_EXTRACT_PARSER_ONLY:
+            raise RuntimeError(f"Parser-only extraction failed: {e}")
+        logger.warning(f"Primary extraction path failed, falling back to parser: {e}")
         try:
             parsing = engine.parser.parse(crop)
-            garment_mask = np.isin(parsing, [5, 6, 7, 8, 9, 10, 11, 12])
-            kill_mask = np.isin(parsing, [1, 2, 3, 4, 13, 14, 15, 16, 17, 18, 19])
+            garment_ids = _parser_category_ids("garment_fallback", [4, 5, 6, 7, 8, 17])
+            kill_ids_fallback = _parser_category_ids("kill_fallback", [1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16])
+            garment_mask = np.isin(parsing, garment_ids)
+            kill_mask = np.isin(parsing, kill_ids_fallback)
             final_mask = garment_mask & (~kill_mask) & (parsing != 0)
             alpha = build_soft_alpha(final_mask, feather_px=max(1, ANALYZE_EXTRACT_EDGE_FEATHER_PX))
             path_name = "parser_fallback"
@@ -1424,6 +3097,7 @@ def _extract_cloth_from_crop(crop: Image.Image, garment_type: str) -> tuple[Imag
 
     body_guard = {
         "enabled": bool(engine.parser is not None),
+        "enforce": bool(enforce_safety_guards),
         "max_body_ratio": float(ANALYZE_EXTRACT_MAX_BODY_RATIO),
     }
     if engine.parser is not None:
@@ -1445,19 +3119,48 @@ def _extract_cloth_from_crop(crop: Image.Image, garment_type: str) -> tuple[Imag
 
                     rgba_arr = np.asarray(cloth_image.convert("RGBA")).copy()
                     alpha_arr = rgba_arr[:, :, 3].astype(np.uint8)
-                    alpha_arr[body_mask_u8 > 0] = 0
-                    cleaned_mask = alpha_arr > max(8, ANALYZE_GARMENT_ALPHA_THRESHOLD)
-                    alpha_arr = build_soft_alpha(cleaned_mask, feather_px=ANALYZE_EXTRACT_EDGE_FEATHER_PX).astype(np.uint8)
-                    rgba_arr[:, :, 3] = alpha_arr
-                    cloth_image = Image.fromarray(rgba_arr, mode="RGBA")
+                    visible_before = int(np.sum(alpha_arr > max(8, ANALYZE_GARMENT_ALPHA_THRESHOLD)))
+                    skin_mask = _skin_like_mask(rgba_arr[:, :, :3])
+                    strip_mask = (body_mask_u8 > 0) & skin_mask & (alpha_arr > max(8, ANALYZE_GARMENT_ALPHA_THRESHOLD))
+                    strip_pixels = int(np.sum(strip_mask))
+                    strip_ratio = float(strip_pixels) / float(max(1, visible_before))
+                    body_guard["strip_mode"] = "skin_gated"
+                    body_guard["strip_pixels_candidate"] = int(np.sum(body_mask_u8 > 0))
+                    body_guard["strip_pixels_applied"] = strip_pixels
+                    body_guard["strip_ratio_applied"] = round(strip_ratio, 6)
 
-                    leak_after = _body_leakage_stats(cloth_image)
+                    skip_reason = None
+                    if strip_pixels <= 0:
+                        skip_reason = "no_skin_overlap"
+                    elif strip_ratio > ANALYZE_EXTRACT_BODY_STRIP_MAX_RATIO:
+                        skip_reason = f"overbroad:{strip_ratio:.6f}"
+
+                    if skip_reason:
+                        body_guard["warning"] = f"body_strip_skipped:{skip_reason}"
+                        if enforce_safety_guards:
+                            raise RuntimeError(
+                                f"Extraction has body leakage but cleanup is unsafe ({skip_reason})."
+                            )
+                        leak_after = leak_before
+                    else:
+                        alpha_arr[strip_mask] = 0
+                        cleaned_mask = alpha_arr > max(8, ANALYZE_GARMENT_ALPHA_THRESHOLD)
+                        alpha_arr = build_soft_alpha(cleaned_mask, feather_px=ANALYZE_EXTRACT_EDGE_FEATHER_PX).astype(np.uint8)
+                        rgba_arr[:, :, 3] = alpha_arr
+                        cloth_image = Image.fromarray(rgba_arr, mode="RGBA")
+                        leak_after = _body_leakage_stats(cloth_image)
+
                     body_guard["ratio_after"] = round(float(leak_after.get("ratio", 0.0)), 6)
                     body_guard["body_pixels_after"] = int(leak_after.get("body_pixels", 0))
 
                     if float(leak_after.get("ratio", 0.0)) > ANALYZE_EXTRACT_MAX_BODY_RATIO:
-                        raise RuntimeError(
-                            f"Extraction contains mannequin/body remnants (ratio={leak_after.get('ratio'):.6f})."
+                        if enforce_safety_guards:
+                            raise RuntimeError(
+                                f"Extraction contains mannequin/body remnants (ratio={leak_after.get('ratio'):.6f})."
+                            )
+                        body_guard["warning"] = (
+                            "body_ratio_above_threshold:"
+                            f"{float(leak_after.get('ratio', 0.0)):.6f}"
                         )
         except Exception as guard_err:
             if isinstance(guard_err, RuntimeError):
@@ -1480,6 +3183,8 @@ def _extract_cloth_from_crop(crop: Image.Image, garment_type: str) -> tuple[Imag
 def _run_vton_cloth_only_fallback(image_url: str, garment_type: str, vto_mode: bool = False) -> dict:
     t_all_start = time.time()
     t_vton_start = time.time()
+    strict_safety = bool(ANALYZE_VTON_STRICT_SAFETY_CHECKS)
+    guard_warnings: list[str] = []
     if not ANALYZE_VTON_CLOTH_ONLY_ENDPOINT:
         raise RuntimeError("ANALYZE_VTON_CLOTH_ONLY_ENDPOINT is empty.")
     category = _type_to_vton_category(garment_type)
@@ -1508,6 +3213,7 @@ def _run_vton_cloth_only_fallback(image_url: str, garment_type: str, vto_mode: b
         "quality_preset": ANALYZE_VTON_QUALITY_PRESET,
         "num_timesteps": ANALYZE_VTON_NUM_TIMESTEPS,
         "guidance_scale": ANALYZE_VTON_GUIDANCE_SCALE,
+        "seed": ANALYZE_VTON_SEED,
         "skip_cfg_last_n_steps": 1,
         "num_samples": 1,
         "segmentation_free": bool(ANALYZE_VTON_SEGMENTATION_FREE),
@@ -1564,16 +3270,24 @@ def _run_vton_cloth_only_fallback(image_url: str, garment_type: str, vto_mode: b
             6,
         )
         if showroom_similarity.get("exact_bytes"):
-            raise RuntimeError("VTON returned showroom model image unchanged (exact match).")
+            msg = "VTON returned showroom model image unchanged (exact match)."
+            if strict_safety:
+                raise RuntimeError(msg)
+            guard_warnings.append("showroom_exact_match")
+            logger.warning(msg)
         if (
             float(showroom_similarity.get("resized_mae", 999.0)) <= ANALYZE_VTON_MAX_SHOWROOM_MAE
             and float(showroom_similarity.get("change_ratio", 0.0)) < ANALYZE_VTON_MIN_SHOWROOM_CHANGE_RATIO
         ):
-            raise RuntimeError(
+            msg = (
                 "VTON returned showroom-like output "
                 f"(resized_mae={showroom_similarity.get('resized_mae')}, "
                 f"change_ratio={showroom_similarity.get('change_ratio')})."
             )
+            if strict_safety:
+                raise RuntimeError(msg)
+            guard_warnings.append("showroom_similarity_high")
+            logger.warning(msg)
 
     # --- LOCAL EXTRACTION FROM MANNEQUIN ---
     # We now have the mannequin wearing the garment (raw_vton_bytes).
@@ -1581,8 +3295,44 @@ def _run_vton_cloth_only_fallback(image_url: str, garment_type: str, vto_mode: b
     t_extract_start = time.time()
     vton_img_mannequin = Image.open(io.BytesIO(raw_vton_bytes)).convert("RGB")
     logger.info(f"Loaded VTON mannequin image for local extraction: {vton_img_mannequin.size} {vton_img_mannequin.mode}")
-    extracted_cloth, extraction_meta = _extract_cloth_from_crop(vton_img_mannequin, garment_type)
-    extraction_meta["vto_path"] = "vton_fallback_mannequin_local_parser"
+    extraction_meta = {}
+    try:
+        extracted_cloth, extraction_meta = _extract_cloth_from_crop(
+            vton_img_mannequin,
+            garment_type,
+            enforce_safety_guards=strict_safety,
+        )
+        extraction_meta["parser_input_source"] = "vton_raw_tryon_frame"
+        extraction_meta["parser_input_size"] = {
+            "width": int(vton_img_mannequin.width),
+            "height": int(vton_img_mannequin.height),
+        }
+        if (
+            ANALYZE_SHOWROOM_DELTA_REFINEMENT_ENABLED
+            and ANALYZE_VTON_USE_SHOWROOM_PERSON
+            and bool(showroom_bytes)
+            and bool(raw_vton_bytes)
+        ):
+            extracted_cloth, showroom_delta_meta = _refine_with_showroom_delta(
+                extracted_cloth,
+                raw_vton_bytes=raw_vton_bytes,
+                showroom_bytes=showroom_bytes,
+                garment_type=garment_type,
+            )
+            extraction_meta["showroom_delta_refine"] = showroom_delta_meta
+        extraction_meta["vto_path"] = "vton_fallback_mannequin_local_parser"
+    except Exception as extract_err:
+        if strict_safety or ANALYZE_EXTRACT_PARSER_ONLY:
+            raise
+        logger.warning(f"Local extraction failed in relaxed mode, using raw VTON frame: {extract_err}")
+        guard_warnings.append(f"extract_fallback_raw:{str(extract_err)[:120]}")
+        extracted_cloth = vton_img_mannequin.convert("RGBA")
+        extraction_meta = {
+            "path": "vton_raw_passthrough_relaxed",
+            "rescue_mode": "raw_frame",
+            "warning": str(extract_err),
+            "vto_path": "vton_raw_passthrough_relaxed",
+        }
 
     # Save as bytes for postprocessing
     buf = io.BytesIO()
@@ -1593,15 +3343,49 @@ def _run_vton_cloth_only_fallback(image_url: str, garment_type: str, vto_mode: b
     source_similarity = _compare_image_similarity(source_bytes, final_vton_bytes)
     if ANALYZE_VTON_REJECT_SOURCE_PASSTHROUGH:
         if source_similarity.get("exact_bytes"):
-            raise RuntimeError("VTON output is byte-identical to source crop (passthrough).")
+            msg = "VTON output is byte-identical to source crop (passthrough)."
+            if strict_safety:
+                raise RuntimeError(msg)
+            guard_warnings.append("source_exact_match")
+            logger.warning(msg)
         if float(source_similarity.get("resized_mae", 999.0)) <= ANALYZE_VTON_MAX_SOURCE_MAE:
-            raise RuntimeError(
-                f"VTON output too similar to source crop (resized_mae={source_similarity.get('resized_mae')})."
-            )
+            msg = f"VTON output too similar to source crop (resized_mae={source_similarity.get('resized_mae')})."
+            if strict_safety:
+                raise RuntimeError(msg)
+            guard_warnings.append("source_similarity_high")
+            logger.warning(msg)
     
     t_post_start = time.time()
-    processed_vton_bytes, postprocess_meta = _postprocess_extracted_garment_bytes(final_vton_bytes)
-    image_quality = _validate_vton_output_bytes(processed_vton_bytes)
+    if bool(extraction_meta.get("parser_only")):
+        # Keep parser-only extraction, but still apply final content-crop + 2:3 framing.
+        try:
+            processed_vton_bytes, postprocess_meta = _crop_and_fit_garment_bytes(final_vton_bytes)
+            postprocess_meta["mode"] = "parser_only_crop_then_aspect"
+        except Exception as parser_pp_err:
+            logger.warning(f"Parser-only crop/aspect step failed, returning raw parser extraction: {parser_pp_err}")
+            processed_vton_bytes = final_vton_bytes
+            postprocess_meta = {
+                "enabled": False,
+                "bypassed": "parser_only_direct",
+                "output_background": "transparent",
+                "warning": str(parser_pp_err),
+            }
+    else:
+        processed_vton_bytes, postprocess_meta = _postprocess_extracted_garment_bytes(
+            final_vton_bytes,
+            garment_type=garment_type,
+        )
+    try:
+        image_quality = _validate_vton_output_bytes(processed_vton_bytes)
+    except Exception as quality_err:
+        if strict_safety:
+            raise
+        logger.warning(f"VTON output quality validation skipped in relaxed mode: {quality_err}")
+        guard_warnings.append(f"quality_validation_skipped:{str(quality_err)[:120]}")
+        image_quality = {
+            "validated": False,
+            "warning": str(quality_err),
+        }
     t_post_s = time.time() - t_post_start
 
     # Normalize to publicly consumable URLs
@@ -1658,6 +3442,8 @@ def _run_vton_cloth_only_fallback(image_url: str, garment_type: str, vto_mode: b
             "source_similarity": source_similarity,
             "showroom_similarity": showroom_similarity,
             "postprocess": postprocess_meta,
+            "strict_safety": strict_safety,
+            "guard_warnings": guard_warnings,
             "timings": {
                 "total": round(t_all_s, 4),
                 "vton_request": round(t_vton_s, 4),
@@ -1753,6 +3539,35 @@ class VTORequest(BaseModel):
     steps: int = Field(default=6, ge=4, le=30)
     seed: int = Field(default=23, ge=0, le=2147483647)
 
+class Flux2TryonProduct(BaseModel):
+    image: str
+    promptDescription: Optional[str] = None
+
+class Flux2TryonUserImage(BaseModel):
+    tryonImage: str
+    promptDescription: Optional[str] = None
+
+class Flux2TryonRequest(BaseModel):
+    products: List[Flux2TryonProduct]
+    user_image: Flux2TryonUserImage
+    description_backend: Optional[str] = None
+    description_compare: bool = False
+    steps: int = Field(default=6, ge=4, le=30)
+    seed: int = Field(default=23, ge=0, le=2147483647)
+
+class ParserJoyCaptionAnalyzeRequest(BaseModel):
+    image_url: str
+    garment_type: Optional[str] = None
+    selected_index: Optional[int] = Field(default=None, ge=0)
+    square_padding_ratio: float = Field(default=0.12, ge=0.0, le=0.60)
+    min_component_area_ratio: float = Field(default=0.01, ge=0.0005, le=0.25)
+    upload_candidate_previews: bool = True
+    run_flux_garment_only: bool = False
+    flux_steps: int = Field(default=8, ge=4, le=30)
+    flux_seed: int = Field(default=23, ge=0, le=2147483647)
+    flux_extract_only: bool = False
+    flux_extract_strict_safety: bool = True
+
 # --- Endpoints ---
 @app.on_event("startup")
 async def startup_load():
@@ -1768,6 +3583,221 @@ async def startup_load():
 @app.get("/")
 def read_root():
     return {"status": "ok", "engine": "Glamify-AI-Unified", "ready": True}
+
+@app.post("/v1/analyze/parser-joycaption")
+async def analyze_parser_joycaption(request: ParserJoyCaptionAnalyzeRequest):
+    """
+    New parser-first garment analysis API.
+    This route is isolated and does not modify /analyze or /v1/flux/tryon behavior.
+    """
+    t0 = time.time()
+    stage_timings = {
+        "download_image_s": 0.0,
+        "parser_detect_s": 0.0,
+        "preview_upload_s": 0.0,
+        "joycaption_s": 0.0,
+        "selected_upload_s": 0.0,
+        "flux_garment_gen_s": 0.0,
+        "flux_extract_s": 0.0,
+        "flux_upload_s": 0.0,
+    }
+    try:
+        image_url = str(request.image_url or "").strip()
+        if not image_url:
+            raise HTTPException(status_code=422, detail="image_url is required")
+
+        requested_type_raw = str(request.garment_type or "").strip()
+        requested_type = _normalize_garment_type(requested_type_raw) if requested_type_raw else None
+        if requested_type_raw and requested_type is None:
+            raise HTTPException(status_code=422, detail="garment_type must be one of top, bottom, dress, outer")
+        if engine.parser is None:
+            raise HTTPException(status_code=503, detail="human parser is not available")
+
+        t_stage = time.time()
+        source_img = download_image(image_url).convert("RGB")
+        stage_timings["download_image_s"] = round(time.time() - t_stage, 4)
+
+        async with gpu_semaphore:
+            t_stage = time.time()
+            candidates = _build_parser_square_candidates(
+                image=source_img,
+                requested_type=requested_type,
+                min_component_area_ratio=request.min_component_area_ratio,
+                square_padding_ratio=request.square_padding_ratio,
+            )
+            stage_timings["parser_detect_s"] = round(time.time() - t_stage, 4)
+
+            if not candidates:
+                raise HTTPException(status_code=400, detail="No garment component found for the requested type")
+
+            preview_upload_start = time.time()
+            if request.upload_candidate_previews:
+                for candidate in candidates:
+                    crop_image = candidate.get("_crop_image")
+                    if crop_image is None:
+                        continue
+                    crop_buf = io.BytesIO()
+                    crop_image.save(crop_buf, format="PNG")
+                    candidate["preview_url"] = _upload_or_raise(crop_buf.getvalue(), container=VTO_OUTPUT_CONTAINER)
+            stage_timings["preview_upload_s"] = round(time.time() - preview_upload_start, 4)
+
+            selection_required = len(candidates) > 1 and request.selected_index is None
+            if selection_required:
+                return {
+                    "status": "selection_required",
+                    "selection_required": True,
+                    "requested_garment_type": requested_type,
+                    "total_candidates": len(candidates),
+                    "candidates": [_to_public_parser_candidate(c) for c in candidates],
+                    "stageTimings": stage_timings,
+                    "total_latency": round(time.time() - t0, 4),
+                }
+
+            selected_index = int(request.selected_index) if request.selected_index is not None else 0
+            if selected_index < 0 or selected_index >= len(candidates):
+                raise HTTPException(status_code=422, detail=f"selected_index must be between 0 and {len(candidates) - 1}")
+
+            selected = candidates[selected_index]
+            selected_crop = selected.get("_crop_image")
+            if selected_crop is None:
+                sx0, sy0, sx1, sy1 = [int(v) for v in selected.get("square_bbox", [0, 0, source_img.width, source_img.height])]
+                selected_crop = _crop_square_with_padding(source_img, [sx0, sy0, sx1, sy1])
+
+            selected_type = str(selected.get("type") or requested_type or "top")
+            selected_category_text = str(
+                selected.get("category_text") or _parser_candidate_category_text(selected_type, str(selected.get("subtype") or ""))
+            ).strip()
+            joy_instruction = (
+                f"The image is a section crop with person context. Describe only the selected {selected_category_text} garment "
+                "for virtual try-on, not the person/background. "
+                "Return a single detailed line with exact attributes: garment type, silhouette, fit, neckline, sleeves, "
+                "waistline, hem shape/length, fabric, texture, transparency, pattern, embellishments, and dominant colors. "
+                "Do not repeat words or phrases."
+            )
+            t_stage = time.time()
+            prompt_description = engine.joycaption.describe_garment(
+                selected_crop,
+                instruction_override=joy_instruction,
+            )
+            stage_timings["joycaption_s"] = round(time.time() - t_stage, 4)
+            prompt_description = " ".join(str(prompt_description or "").split()).strip()
+            if not prompt_description:
+                # Fallback only for this endpoint to avoid hard failures on occasional JoyCaption empty output.
+                try:
+                    prompt_description = " ".join(
+                        str(engine.florence.describe_garment_short(selected_crop) or "").split()
+                    ).strip()
+                except Exception as fallback_err:
+                    logger.warning(f"Florence fallback failed in parser-joycaption endpoint: {fallback_err}")
+                    color_terms = _extract_dominant_color_labels(selected_crop, top_k=3)
+                    color_text = ", ".join(color_terms) if color_terms else "unknown colors"
+                    prompt_description = (
+                        f"{selected_category_text} garment with full silhouette visible, "
+                        f"dominant colors: {color_text}, preserve exact shape, fabric texture, "
+                        "embellishments, and hem/neckline geometry from the reference crop."
+                    )
+            if not prompt_description:
+                raise HTTPException(status_code=502, detail="Caption models did not return a garment description")
+
+            selected_upload_start = time.time()
+            selected_buf = io.BytesIO()
+            selected_crop.save(selected_buf, format="PNG")
+            selected_crop_url = _upload_or_raise(selected_buf.getvalue(), container=VTO_OUTPUT_CONTAINER)
+            stage_timings["selected_upload_s"] = round(time.time() - selected_upload_start, 4)
+
+            flux_prompt = _build_flux2_garment_only_prompt(
+                selected_type,
+                prompt_description,
+                category_text=selected_category_text,
+            )
+            flux_result_payload = None
+            if bool(request.run_flux_garment_only):
+                t_flux = time.time()
+                flux_result = engine.flux2.run_tryon(
+                    person_image=selected_crop,
+                    board_image=selected_crop,
+                    prompt=flux_prompt,
+                    steps=int(request.flux_steps),
+                    seed=int(request.flux_seed),
+                )
+                stage_timings["flux_garment_gen_s"] = round(time.time() - t_flux, 4)
+
+                flux_raw_img = flux_result["image"].convert("RGB")
+                flux_raw_buf = io.BytesIO()
+                flux_raw_img.save(flux_raw_buf, format="PNG")
+                flux_raw_bytes = flux_raw_buf.getvalue()
+
+                extraction_meta = {}
+                postprocess_meta = {}
+                extraction_warning = ""
+                final_flux_bytes = flux_raw_bytes
+                if bool(request.flux_extract_only):
+                    t_extract = time.time()
+                    try:
+                        extracted_rgba, extraction_meta = _extract_cloth_from_crop(
+                            flux_raw_img,
+                            selected_type,
+                            enforce_safety_guards=bool(request.flux_extract_strict_safety),
+                        )
+                        ext_buf = io.BytesIO()
+                        extracted_rgba.save(ext_buf, format="PNG")
+                        extracted_bytes = ext_buf.getvalue()
+                        final_flux_bytes, postprocess_meta = _postprocess_extracted_garment_bytes(
+                            extracted_bytes,
+                            garment_type=selected_type,
+                        )
+                    except Exception as flux_extract_err:
+                        if bool(request.flux_extract_strict_safety):
+                            raise HTTPException(
+                                status_code=502,
+                                detail=f"Flux garment extraction failed: {flux_extract_err}",
+                            )
+                        extraction_warning = str(flux_extract_err)
+                    stage_timings["flux_extract_s"] = round(time.time() - t_extract, 4)
+
+                t_upload = time.time()
+                flux_raw_url = _upload_or_raise(flux_raw_bytes, container=VTO_OUTPUT_CONTAINER)
+                flux_final_url = _upload_or_raise(final_flux_bytes, container=VTO_OUTPUT_CONTAINER)
+                stage_timings["flux_upload_s"] = round(time.time() - t_upload, 4)
+
+                flux_result_payload = {
+                    "status": "success",
+                    "steps": int(request.flux_steps),
+                    "seed": int(request.flux_seed),
+                    "latency": round(float(flux_result.get("latency", 0.0)), 4),
+                    "prompt": flux_prompt,
+                    "raw_output_url": flux_raw_url,
+                    "output_url": flux_final_url or flux_raw_url,
+                    "extract_only": bool(request.flux_extract_only),
+                    "extract_strict_safety": bool(request.flux_extract_strict_safety),
+                    "extraction_warning": extraction_warning or None,
+                    "extraction_meta": extraction_meta or {},
+                    "postprocess_meta": postprocess_meta or {},
+                }
+
+            return {
+                "status": "success",
+                "selection_required": False,
+                "requested_garment_type": requested_type,
+                "selected_index": selected_index,
+                "total_candidates": len(candidates),
+                "selected_item": {
+                    **_to_public_parser_candidate(selected),
+                    "preview_url": selected.get("preview_url") or selected_crop_url,
+                    "selected_category_text": selected_category_text,
+                    "promptDescription": prompt_description,
+                    "fluxGarmentOnlyPrompt": flux_prompt,
+                    "fluxGarmentGeneration": flux_result_payload,
+                },
+                "candidates": [_to_public_parser_candidate(c) for c in candidates],
+                "stageTimings": stage_timings,
+                "total_latency": round(time.time() - t0, 4),
+            }
+    except HTTPException:
+        raise
+    except Exception as err:
+        logger.error(f"Parser JoyCaption analyze failed: {err}")
+        raise HTTPException(status_code=500, detail=str(err))
 
 @app.post("/analyze")
 @app.post("/analzye")
@@ -1857,9 +3887,14 @@ async def analyze_garment(
                 # Finalize crops
                 instances = engine.yolo.get_crops(img, instances)
 
-            # 2a. If YOLO returns only one person-like crop, use parser split candidates.
+            # 2a. Optional parser split fallback (disabled by default for routing stability).
             raw_detected_count = len(instances)
-            if ANALYZE_ENABLE_PARSER_SPLIT and engine.parser is not None and len(instances) <= 1:
+            if (
+                ANALYZE_USE_PARSER_FOR_PREROUTING
+                and ANALYZE_ENABLE_PARSER_SPLIT
+                and engine.parser is not None
+                and len(instances) <= 1
+            ):
                 try:
                     parser_candidates = _parser_split_candidates(img)
                     parser_candidates_count = len(parser_candidates)
@@ -1891,7 +3926,13 @@ async def analyze_garment(
                     if trigger_split:
                         classify = engine.florence.classify_garment_type(base_inst["image"], hint_type=requested_type)
                         base_type = str(classify.get("type") or "").strip().lower()
-                        allow_split = base_type != "dress" or requested_type in {"top", "bottom"}
+                        base_score = float(classify.get("score", 0.0) or 0.0)
+                        dress_locked = (
+                            base_type == "dress"
+                            and base_score >= ANALYZE_FLORENCE_DRESS_LOCK_MIN_SCORE
+                            and requested_type not in {"top", "bottom"}
+                        )
+                        allow_split = not dress_locked
                         if allow_split:
                             heuristics = _heuristic_split_candidates(img, base_inst)
                             heuristic_candidates_count = max(heuristic_candidates_count, len(heuristics))
@@ -1901,8 +3942,8 @@ async def analyze_garment(
                 except Exception as heur_err:
                     logger.warning(f"Heuristic split fallback failed: {heur_err}")
 
-            # 2b.1 Tighten split boxes with parser masks for cleaner top/bottom crops.
-            if len(instances) >= 1 and engine.parser is not None:
+            # 2b.1 Optional parser tightening. Keep disabled for first-step routing by default.
+            if ANALYZE_USE_PARSER_FOR_PREROUTING and len(instances) >= 1 and engine.parser is not None:
                 try:
                     instances = _tighten_instances_with_parser_masks(img, instances)
                 except Exception as tighten_err:
@@ -2127,6 +4168,23 @@ async def analyze_garment(
                 # If type is explicitly requested, proceed with the top-ranked matching candidate.
                 if len(matched) >= 1:
                     auto_selected_index = matched[0]
+            elif (
+                selected_index is None
+                and not requested_type
+                and len(items) > 1
+                and ANALYZE_AUTO_SELECT_MULTI_DRESS
+            ):
+                normalized_types = [
+                    _normalize_garment_type(str(item.get("type") or "")) for item in items
+                ]
+                unique_norm_types = sorted({t for t in normalized_types if t})
+                # If detector+Florence agree this is effectively a dress-only scene,
+                # select the highest-ranked item instead of forcing a manual selection.
+                if len(unique_norm_types) == 1 and unique_norm_types[0] == "dress":
+                    auto_selected_index = max(
+                        range(len(items)),
+                        key=lambda idx: _item_rank_score(items[idx]),
+                    )
 
             # ── MULTI-ITEM SELECTION REQUIRED (400 with multipart) ──
             if ANALYZE_REQUIRE_SELECTION and len(items) > 1 and selected_index is None and auto_selected_index is None:
@@ -2272,30 +4330,73 @@ async def analyze_garment(
                     is_single_item = len(items) <= 1
                     fallback = None
                     last_fallback_err = None
-                    for attempt in range(2):
-                        try:
-                            fallback = _run_vton_cloth_only_fallback(
-                                selected_crop_url,
-                                selected_type,
-                                vto_mode=is_single_item
-                            )
+                    requested_type_forced = bool(forced_type)
+                    candidate_types: list[str] = [selected_type]
+                    if not requested_type_forced:
+                        # Auto mode guard: recover from parser-empty masks by trying
+                        # nearby garment families before returning 502.
+                        if selected_type == "dress":
+                            candidate_types.extend(["top", "bottom"])
+                        else:
+                            candidate_types.append("dress")
+                    # Keep order stable while removing duplicates.
+                    candidate_types = list(dict.fromkeys(candidate_types))
+
+                    active_type = selected_type
+                    for candidate_idx, candidate_type in enumerate(candidate_types):
+                        active_type = candidate_type
+                        max_attempts = 2 if candidate_idx == 0 else 1
+                        for attempt in range(max_attempts):
+                            try:
+                                fallback = _run_vton_cloth_only_fallback(
+                                    selected_crop_url,
+                                    candidate_type,
+                                    vto_mode=is_single_item
+                                )
+                                if candidate_type != selected_type:
+                                    logger.info(
+                                        "Auto extraction type fallback applied: %s -> %s",
+                                        selected_type,
+                                        candidate_type,
+                                    )
+                                break
+                            except Exception as run_err:
+                                last_fallback_err = run_err
+                                logger.warning(
+                                    "VTON extract attempt %d failed (type=%s, bbox=%s): %s",
+                                    attempt + 1,
+                                    candidate_type,
+                                    selected_item.get("bbox"),
+                                    run_err,
+                                )
+                                if attempt < (max_attempts - 1):
+                                    time.sleep(0.35)
+                                    continue
+                                # Only auto-fallback on parser-empty errors.
+                                if (
+                                    not requested_type_forced
+                                    and candidate_idx < (len(candidate_types) - 1)
+                                    and "Parser-only extraction produced empty result" in str(run_err)
+                                ):
+                                    break
+                        if fallback is not None:
                             break
-                        except Exception as run_err:
-                            last_fallback_err = run_err
-                            logger.warning(
-                                "VTON extract attempt %d failed (type=%s, bbox=%s): %s",
-                                attempt + 1,
-                                selected_type,
-                                selected_item.get("bbox"),
-                                run_err,
-                            )
-                            if attempt == 0:
-                                time.sleep(0.35)
-                                continue
+
                     if fallback is None and last_fallback_err is not None:
                         raise last_fallback_err
                     extracted_url = str(fallback.get("url") or "")
                     extraction_meta = dict(fallback.get("meta") or {})
+                    if (
+                        fallback is not None
+                        and active_type != selected_type
+                        and not requested_type_forced
+                    ):
+                        extraction_meta["auto_type_fallback_from"] = selected_type
+                        extraction_meta["auto_type_fallback_to"] = active_type
+                        selected_type = active_type
+                        selected_item["type_original"] = selected_item.get("type")
+                        selected_item["type"] = active_type
+                        selected_item["type_source"] = "auto_extract_fallback"
                     extracted_image_bytes = bytes(fallback.get("_processed_image_bytes") or b"")
                 except Exception as fallback_err:
                     logger.error(
@@ -2520,11 +4621,370 @@ async def analyze_garment(
         )
         return _multipart_form_response(payload)
 
-@app.post("/v1/flux/tryon")
 @app.post("/v1/flux2/tryon")
-async def vto_tryon(request: VTORequest):
+async def vto_tryon_flux2(request: Flux2TryonRequest):
     """
     Performs Virtual Try-On using Vision-Guided Prompting (Flux 2.0).
+    """
+    t0 = time.time()
+    stage_timings = {
+        "download_user_image_s": 0.0,
+        "download_products_s": 0.0,
+        "product_prompt_generation_total_s": 0.0,
+        "product_prompt_generation_per_item_s": [],
+        "user_prompt_generation_s": 0.0,
+        "board_build_s": 0.0,
+        "prompt_build_s": 0.0,
+        "flux_generation_sum_s": 0.0,
+        "upload_s": 0.0,
+    }
+    try:
+        if not request.products:
+            raise HTTPException(status_code=422, detail="products must contain at least one item")
+
+        user_image_url = str(request.user_image.tryonImage or "").strip()
+        if not user_image_url:
+            raise HTTPException(status_code=422, detail="user_image.tryonImage is required")
+
+        product_urls: List[str] = []
+        for idx, product in enumerate(request.products):
+            product_url = str(product.image or "").strip()
+            if not product_url:
+                raise HTTPException(status_code=422, detail=f"products[{idx}].image is required")
+            product_urls.append(product_url)
+
+        # 1. Download Images
+        t_stage = time.time()
+        user_img = download_image(user_image_url)
+        stage_timings["download_user_image_s"] = round(time.time() - t_stage, 4)
+
+        t_stage = time.time()
+        product_imgs = [download_image(url) for url in product_urls]
+        stage_timings["download_products_s"] = round(time.time() - t_stage, 4)
+        descriptor_backend = _normalize_descriptor_backend(request.description_backend)
+        descriptor_compare_enabled = bool(request.description_compare or FLUX2_DESCRIPTOR_COMPARE)
+        descriptor_comparisons = {"products": [], "user_image": {}} if descriptor_compare_enabled else None
+
+        async with gpu_semaphore:
+            # 2. Resolve product prompt descriptions (request-provided or selected model backend)
+            product_descriptions: List[str] = []
+            product_target_types: List[str] = []
+            generated_product_prompt_indices: List[int] = []
+            for idx, (product, product_img) in enumerate(zip(request.products, product_imgs)):
+                provided_prompt = str(product.promptDescription or "").strip()
+                resolved_target_type = "top"
+                item_prompt_gen_s = 0.0
+                if provided_prompt:
+                    cleaned_desc = _sanitize_florence_garment_description(provided_prompt)
+                else:
+                    generated_product_prompt_indices.append(idx)
+                    t_desc = time.time()
+                    generated_desc = _describe_garment_with_backend(product_img, descriptor_backend)
+                    item_prompt_gen_s += time.time() - t_desc
+                    cleaned_desc = _sanitize_florence_garment_description(generated_desc)
+                resolved_target_type = _infer_flux2_target_type(cleaned_desc)
+                if (
+                    not provided_prompt
+                    and descriptor_backend == "qwen2_5_vl"
+                    and FLUX2_QWEN_EXTRA_CLASSIFY_PASS
+                ):
+                    try:
+                        t_desc = time.time()
+                        qwen_type = engine.qwen25vl.classify_garment_type(product_img)
+                        item_prompt_gen_s += time.time() - t_desc
+                        if qwen_type in {"dress", "top", "bottom", "outer"}:
+                            resolved_target_type = qwen_type
+                    except Exception as type_err:
+                        logger.warning(f"Qwen garment type classification failed for products[{idx}]: {type_err}")
+                stage_timings["product_prompt_generation_per_item_s"].append(round(item_prompt_gen_s, 4))
+                stage_timings["product_prompt_generation_total_s"] += item_prompt_gen_s
+                cleaned_desc = _ensure_target_type_in_description(cleaned_desc, resolved_target_type)
+                product_descriptions.append(cleaned_desc)
+                product_target_types.append(resolved_target_type)
+                if descriptor_compare_enabled and not provided_prompt:
+                    compare_item = {}
+                    for backend_name in ("florence", "qwen2_5_vl"):
+                        try:
+                            if backend_name == descriptor_backend:
+                                compare_item[backend_name] = cleaned_desc
+                            else:
+                                alt_desc = _describe_garment_with_backend(product_img, backend_name)
+                                compare_item[backend_name] = _sanitize_florence_garment_description(alt_desc)
+                        except Exception as cmp_err:
+                            compare_item[backend_name] = f"[error] {cmp_err}"
+                    descriptor_comparisons["products"].append(compare_item)
+                elif descriptor_compare_enabled:
+                    descriptor_comparisons["products"].append({
+                        "provided": cleaned_desc,
+                    })
+
+            # 3. Resolve user prompt description for stronger preservation constraints
+            user_prompt_raw = str(request.user_image.promptDescription or "").strip()
+            user_prompt_generated = False
+            if not user_prompt_raw:
+                t_desc = time.time()
+                user_prompt_raw = _describe_user_image_for_flux2(user_img, backend=descriptor_backend)
+                stage_timings["user_prompt_generation_s"] = round(time.time() - t_desc, 4)
+                user_prompt_generated = True
+            if descriptor_compare_enabled and user_prompt_generated:
+                compare_user = {}
+                for backend_name in ("florence", "qwen2_5_vl"):
+                    try:
+                        if backend_name == descriptor_backend:
+                            compare_user[backend_name] = user_prompt_raw
+                        else:
+                            compare_user[backend_name] = _describe_user_image_for_flux2(user_img, backend=backend_name)
+                    except Exception as cmp_err:
+                        compare_user[backend_name] = f"[error] {cmp_err}"
+                descriptor_comparisons["user_image"] = compare_user
+            elif descriptor_compare_enabled:
+                descriptor_comparisons["user_image"] = {"provided": user_prompt_raw}
+
+            user_prompt_description = user_prompt_raw
+            user_prompt_description = _augment_identity_lock(user_prompt_description)
+
+            # Keep Qwen warm by default to avoid per-request cold starts.
+            # Enable FLUX2_UNLOAD_QWEN_BEFORE_FLUX2=1 only when VRAM pressure requires it.
+            if (
+                FLUX2_UNLOAD_QWEN_BEFORE_FLUX2
+                and descriptor_backend == "qwen2_5_vl"
+                and getattr(engine.qwen25vl, "device", "cpu") == "cuda"
+                and engine.qwen25vl.is_loaded
+            ):
+                engine.qwen25vl.unload()
+
+            # 4. Build board only for multi-product try-on
+            t_stage = time.time()
+            if len(product_imgs) > 1:
+                board = engine.board_builder.build_board(product_imgs)
+                board_mode = "collage"
+            else:
+                board = product_imgs[0]
+                board_mode = "single"
+            stage_timings["board_build_s"] = round(time.time() - t_stage, 4)
+            visual_locks = _build_flux2_visual_lock_clauses(
+                product_images=product_imgs,
+                garment_descriptions=product_descriptions,
+            )
+
+            # 5. Build flux2-only target-aware prompt (dress = replacement, not layering)
+            t_stage = time.time()
+            prompt = _build_flux2_targeted_prompt(
+                garment_descriptions=product_descriptions,
+                user_description=user_prompt_description,
+                target_types=product_target_types,
+                board_mode=board_mode,
+                color_lock_clause=str(visual_locks.get("color_clause") or ""),
+                detail_lock_clause=str(visual_locks.get("detail_clause") or ""),
+                transparency_lock_clause=str(visual_locks.get("transparency_clause") or ""),
+            )
+            stage_timings["prompt_build_s"] = round(time.time() - t_stage, 4)
+            target_desc = " | ".join(product_descriptions)
+            candidate_runs: List[dict] = []
+
+            def _run_candidate(candidate_prompt: str, candidate_steps: int, candidate_seed: int, label: str):
+                candidate_result = engine.flux2.run_tryon(
+                    person_image=user_img,
+                    board_image=board,
+                    prompt=candidate_prompt,
+                    steps=candidate_steps,
+                    seed=candidate_seed,
+                )
+                fidelity_score, output_desc = _score_tryon_garment_fidelity(
+                    output_image=candidate_result["image"],
+                    target_description=target_desc,
+                    descriptor_backend=FLUX2_FIDELITY_BACKEND,
+                )
+                candidate_runs.append({
+                    "label": label,
+                    "steps": candidate_steps,
+                    "seed": candidate_seed,
+                    "latency": float(candidate_result["latency"]),
+                    "fidelity_score": float(fidelity_score),
+                    "output_description": output_desc,
+                })
+                return candidate_result
+
+            is_single_dress = (
+                board_mode == "single"
+                and len(product_target_types) == 1
+                and product_target_types[0] == "dress"
+            )
+            is_single_item = board_mode == "single" and len(product_target_types) == 1
+            dress_strict_prompt = (
+                prompt
+                + " Source product image may include mannequin/body; transfer only the garment piece, never mannequin skin/body parts."
+                + " Match exact neckline, bodice shape, and ruffle distribution from the source garment."
+                + " Lock lower section fidelity: preserve exact hemline shape, flare profile, skirt volume, "
+                + "and bottom-edge asymmetry/high-low geometry from image 2."
+            )
+            dress_strict_steps = min(
+                FLUX2_DRESS_SECOND_PASS_MAX_STEPS,
+                max(request.steps, request.steps + FLUX2_DRESS_SECOND_PASS_EXTRA_STEPS),
+            )
+            dress_strict_seed = min(2147483647, request.seed + 1)
+
+            qwen_strict_prompt = (
+                prompt
+                + " Enforce strict garment fidelity from image 2 only."
+                + " Keep exact print placement, texture, seams, neckline, sleeve shape, and hemline."
+                + " Avoid any mixed-layer artifacts from original clothes in image 1."
+            )
+            if product_target_types and product_target_types[0] == "dress":
+                qwen_strict_prompt += (
+                    " This is a dress replacement: remove prior top and bottom garments completely, no overlap."
+                )
+            qwen_strict_steps = min(
+                FLUX2_QWEN_SECOND_PASS_MAX_STEPS,
+                max(request.steps, request.steps + FLUX2_QWEN_SECOND_PASS_EXTRA_STEPS, FLUX2_QWEN_MIN_STEPS),
+            )
+            qwen_strict_seed = min(2147483647, request.seed + 11)
+
+            selected_prompt = prompt
+            selected_candidate_index = 0
+            mode = FLUX2_SINGLE_CANDIDATE_MODE
+
+            # 6. Inference (Flux 2.0): either single selected candidate or auto multi-candidate
+            if mode == "base":
+                result = _run_candidate(
+                    candidate_prompt=prompt,
+                    candidate_steps=request.steps,
+                    candidate_seed=request.seed,
+                    label="base",
+                )
+            elif mode == "dress_strict" and is_single_dress:
+                result = _run_candidate(
+                    candidate_prompt=dress_strict_prompt,
+                    candidate_steps=dress_strict_steps,
+                    candidate_seed=dress_strict_seed,
+                    label="dress_strict",
+                )
+                selected_prompt = dress_strict_prompt
+            elif (
+                mode == "qwen_strict"
+                and is_single_item
+                and descriptor_backend == "qwen2_5_vl"
+            ):
+                result = _run_candidate(
+                    candidate_prompt=qwen_strict_prompt,
+                    candidate_steps=qwen_strict_steps,
+                    candidate_seed=qwen_strict_seed,
+                    label="qwen_strict",
+                )
+                selected_prompt = qwen_strict_prompt
+            else:
+                # Fallback to existing auto-selection behavior.
+                if mode != "auto":
+                    logger.warning(
+                        "Requested FLUX2_SINGLE_CANDIDATE_MODE=%s is not applicable for this request; using auto mode.",
+                        mode,
+                    )
+
+                result = _run_candidate(
+                    candidate_prompt=prompt,
+                    candidate_steps=request.steps,
+                    candidate_seed=request.seed,
+                    label="base",
+                )
+
+                if is_single_dress and FLUX2_DRESS_SECOND_PASS_ENABLED:
+                    strict_result = _run_candidate(
+                        candidate_prompt=dress_strict_prompt,
+                        candidate_steps=dress_strict_steps,
+                        candidate_seed=dress_strict_seed,
+                        label="dress_strict",
+                    )
+
+                    base_score = float(candidate_runs[0]["fidelity_score"])
+                    strict_score = float(candidate_runs[1]["fidelity_score"])
+                    if strict_score >= base_score:
+                        result = strict_result
+                        selected_candidate_index = 1
+                        selected_prompt = dress_strict_prompt
+
+                if (
+                    is_single_item
+                    and descriptor_backend == "qwen2_5_vl"
+                    and FLUX2_QWEN_SECOND_PASS_ENABLED
+                ):
+                    qwen_strict_result = _run_candidate(
+                        candidate_prompt=qwen_strict_prompt,
+                        candidate_steps=qwen_strict_steps,
+                        candidate_seed=qwen_strict_seed,
+                        label="qwen_strict",
+                    )
+                    qwen_index = len(candidate_runs) - 1
+                    current_best_score = float(candidate_runs[selected_candidate_index]["fidelity_score"])
+                    qwen_score = float(candidate_runs[qwen_index]["fidelity_score"])
+                    if qwen_score >= current_best_score:
+                        result = qwen_strict_result
+                        selected_candidate_index = qwen_index
+                        selected_prompt = qwen_strict_prompt
+
+            # 7. Upload selected result
+            stage_timings["flux_generation_sum_s"] = round(
+                sum(float(run.get("latency", 0.0)) for run in candidate_runs), 4
+            )
+            t_stage = time.time()
+            res_buf = io.BytesIO()
+            result["image"].save(res_buf, format="PNG")
+            result_url = _upload_or_raise(res_buf.getvalue(), container=VTO_OUTPUT_CONTAINER)
+            stage_timings["upload_s"] = round(time.time() - t_stage, 4)
+
+        total_latency = time.time() - t0
+        stage_timings["product_prompt_generation_total_s"] = round(
+            float(stage_timings["product_prompt_generation_total_s"]), 4
+        )
+        stage_timings["api_total_s"] = round(total_latency, 4)
+        logger.info(
+            "flux2_tryon_timing "
+            f"total={stage_timings['api_total_s']}s "
+            f"qwen_products={stage_timings['product_prompt_generation_total_s']}s "
+            f"qwen_user={stage_timings['user_prompt_generation_s']}s "
+            f"flux_sum={stage_timings['flux_generation_sum_s']}s "
+            f"upload={stage_timings['upload_s']}s "
+            f"backend={descriptor_backend} "
+            f"product_count={len(product_descriptions)} "
+            f"user_prompt_generated={user_prompt_generated}"
+        )
+
+        return {
+            "status": "success",
+            "result_url": result_url,
+            "promptDescription": " | ".join(product_descriptions),
+            "productPromptDescriptions": product_descriptions,
+            "userPromptDescription": user_prompt_description,
+            "productColorHints": visual_locks.get("color_hints", []),
+            "productDetailHints": visual_locks.get("detail_terms", []),
+            "transparencyLockApplied": bool(visual_locks.get("transparency_lock")),
+            "prompt": selected_prompt,
+            "latency": result["latency"],
+            "total_latency": total_latency,
+            "boardMode": board_mode,
+            "productTargetTypes": product_target_types,
+            "descriptionBackend": descriptor_backend,
+            "fidelityBackend": FLUX2_FIDELITY_BACKEND,
+            "descriptionCompareEnabled": descriptor_compare_enabled,
+            "descriptionComparisons": descriptor_comparisons,
+            "singleCandidateMode": FLUX2_SINGLE_CANDIDATE_MODE,
+            "singleCandidateApplied": len(candidate_runs) == 1,
+            "stageTimings": stage_timings,
+            "candidateRuns": candidate_runs,
+            "selectedCandidateIndex": selected_candidate_index,
+            "generatedProductPromptIndices": generated_product_prompt_indices,
+            "userPromptGenerated": user_prompt_generated,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Try-on failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/v1/flux/tryon")
+async def vto_tryon_flux(request: VTORequest):
+    """
+    Legacy Flux try-on route kept separate from /v1/flux2/tryon so
+    flux2-specific changes do not affect other APIs.
     """
     t0 = time.time()
     try:
@@ -2534,7 +4994,6 @@ async def vto_tryon(request: VTORequest):
 
         async with gpu_semaphore:
             # 2. Vision Integration (Florence-2)
-            # We "look" at the garment to get a precise description
             if USE_FLORENCE_DETAILED_PROMPT:
                 garment_desc = engine.florence.describe_garment(garment_img)
             else:
@@ -2543,7 +5002,7 @@ async def vto_tryon(request: VTORequest):
             # 3. Build Board (Collage)
             board = engine.board_builder.build_board([garment_img])
 
-            # 4. Defensive Prompting (The Fix for Color Bleed)
+            # 4. Defensive Prompting
             prompt = prompt_factory.build_dynamic_prompt(
                 garment_descriptions=[garment_desc],
                 user_description=request.user_top_description
@@ -2582,31 +5041,72 @@ def health_check():
         "gpu_concurrency": GPU_CONCURRENCY,
         "gpu_available": torch.cuda.is_available(),
         "vram_allocated": torch.cuda.memory_allocated() if torch.cuda.is_available() else 0,
-        "feature_flags": {
-            "use_florence_hybrid_verify": USE_FLORENCE_HYBRID_VERIFY,
-            "use_florence_detailed_prompt": USE_FLORENCE_DETAILED_PROMPT,
-            "analyze_extract_cloth": ANALYZE_EXTRACT_CLOTH,
+            "feature_flags": {
+                "use_florence_hybrid_verify": USE_FLORENCE_HYBRID_VERIFY,
+                "use_florence_detailed_prompt": USE_FLORENCE_DETAILED_PROMPT,
+                "flux2_descriptor_backend": FLUX2_DESCRIPTOR_BACKEND,
+                "flux2_fidelity_backend": FLUX2_FIDELITY_BACKEND,
+                "flux2_descriptor_compare": FLUX2_DESCRIPTOR_COMPARE,
+                "flux2_dress_second_pass_enabled": FLUX2_DRESS_SECOND_PASS_ENABLED,
+                "flux2_dress_second_pass_extra_steps": FLUX2_DRESS_SECOND_PASS_EXTRA_STEPS,
+                "flux2_dress_second_pass_max_steps": FLUX2_DRESS_SECOND_PASS_MAX_STEPS,
+                "flux2_qwen_second_pass_enabled": FLUX2_QWEN_SECOND_PASS_ENABLED,
+                "flux2_qwen_second_pass_extra_steps": FLUX2_QWEN_SECOND_PASS_EXTRA_STEPS,
+                "flux2_qwen_second_pass_max_steps": FLUX2_QWEN_SECOND_PASS_MAX_STEPS,
+                "flux2_qwen_min_steps": FLUX2_QWEN_MIN_STEPS,
+                "flux2_preload_qwen_with_flux2": FLUX2_PRELOAD_QWEN_WITH_FLUX2,
+                "flux2_qwen_extra_classify_pass": FLUX2_QWEN_EXTRA_CLASSIFY_PASS,
+                "flux2_unload_qwen_before_flux2": FLUX2_UNLOAD_QWEN_BEFORE_FLUX2,
+                "flux2_qwen_product_caption_max_side": FLUX2_QWEN_PRODUCT_CAPTION_MAX_SIDE,
+                "flux2_qwen_product_caption_min_side": FLUX2_QWEN_PRODUCT_CAPTION_MIN_SIDE,
+                "flux2_qwen_user_caption_max_side": FLUX2_QWEN_USER_CAPTION_MAX_SIDE,
+                "flux2_qwen_user_caption_min_side": FLUX2_QWEN_USER_CAPTION_MIN_SIDE,
+                "flux2_preload_joycaption_with_flux2": FLUX2_PRELOAD_JOYCAPTION_WITH_FLUX2,
+                "flux2_single_candidate_mode": FLUX2_SINGLE_CANDIDATE_MODE,
+                "flux2_color_lock_enabled": FLUX2_COLOR_LOCK_ENABLED,
+                "flux2_color_lock_top_k": FLUX2_COLOR_LOCK_TOP_K,
+                "flux2_detail_lock_enabled": FLUX2_DETAIL_LOCK_ENABLED,
+                "analyze_extract_cloth": ANALYZE_EXTRACT_CLOTH,
             "analyze_extract_mode": "forced_vton",
+            "analyze_extract_parser_only": ANALYZE_EXTRACT_PARSER_ONLY,
             "analyze_require_extracted_prompt": ANALYZE_REQUIRE_EXTRACTED_PROMPT,
             "analyze_require_mirrored_vton_url": ANALYZE_REQUIRE_MIRRORED_VTON_URL,
             "analyze_vton_fallback_enabled": ANALYZE_VTON_FALLBACK_ENABLED,
             "analyze_vton_segmentation_free": ANALYZE_VTON_SEGMENTATION_FREE,
             "analyze_vton_reject_source_passthrough": ANALYZE_VTON_REJECT_SOURCE_PASSTHROUGH,
+            "analyze_vton_strict_safety_checks": ANALYZE_VTON_STRICT_SAFETY_CHECKS,
             "analyze_vton_mirror_raw_output": ANALYZE_VTON_MIRROR_RAW_OUTPUT,
             "analyze_vton_use_showroom_person": ANALYZE_VTON_USE_SHOWROOM_PERSON,
             "analyze_vton_dress_use_full_image": ANALYZE_VTON_DRESS_USE_FULL_IMAGE,
             "analyze_vton_single_item_use_full_image": ANALYZE_VTON_SINGLE_ITEM_USE_FULL_IMAGE,
+            "analyze_vton_num_timesteps": ANALYZE_VTON_NUM_TIMESTEPS,
+            "analyze_vton_guidance_scale": ANALYZE_VTON_GUIDANCE_SCALE,
+            "analyze_vton_seed": ANALYZE_VTON_SEED,
             "analyze_vton_crop_top_extra_ratio_bottom": ANALYZE_VTON_CROP_TOP_EXTRA_RATIO_BOTTOM,
             "analyze_vton_crop_top_extra_ratio_bottom_multi": ANALYZE_VTON_CROP_TOP_EXTRA_RATIO_BOTTOM_MULTI,
+            "analyze_use_parser_for_prerouting": ANALYZE_USE_PARSER_FOR_PREROUTING,
+            "analyze_florence_dress_lock_min_score": ANALYZE_FLORENCE_DRESS_LOCK_MIN_SCORE,
             "analyze_tighten_bottom_top_max_overlap_px": ANALYZE_TIGHTEN_BOTTOM_TOP_MAX_OVERLAP_PX,
             "analyze_tighten_bottom_max_down_shift_ratio": ANALYZE_TIGHTEN_BOTTOM_MAX_DOWN_SHIFT_RATIO,
             "analyze_tighten_bottom_max_gap_from_top_px": ANALYZE_TIGHTEN_BOTTOM_MAX_GAP_FROM_TOP_PX,
+            "analyze_tighten_bottom_min_width_ratio": ANALYZE_TIGHTEN_BOTTOM_MIN_WIDTH_RATIO,
             "analyze_force_fullbody_split_on_same_type": ANALYZE_FORCE_FULLBODY_SPLIT_ON_SAME_TYPE,
             "analyze_force_fullbody_split_min_height_ratio": ANALYZE_FORCE_FULLBODY_SPLIT_MIN_HEIGHT_RATIO,
             "analyze_collapse_same_type": ANALYZE_COLLAPSE_SAME_TYPE,
             "analyze_collapse_same_type_min_iou": ANALYZE_COLLAPSE_SAME_TYPE_MIN_IOU,
+            "analyze_auto_select_multi_dress": ANALYZE_AUTO_SELECT_MULTI_DRESS,
             "analyze_extract_max_body_ratio": ANALYZE_EXTRACT_MAX_BODY_RATIO,
             "analyze_extract_body_strip_dilate": ANALYZE_EXTRACT_BODY_STRIP_DILATE,
+            "analyze_extract_body_strip_max_ratio": ANALYZE_EXTRACT_BODY_STRIP_MAX_RATIO,
+            "analyze_showroom_delta_refinement_enabled": ANALYZE_SHOWROOM_DELTA_REFINEMENT_ENABLED,
+            "analyze_showroom_delta_threshold": ANALYZE_SHOWROOM_DELTA_THRESHOLD,
+            "analyze_showroom_delta_skin_extra": ANALYZE_SHOWROOM_DELTA_SKIN_EXTRA,
+            "analyze_showroom_delta_dilate": ANALYZE_SHOWROOM_DELTA_DILATE,
+            "analyze_showroom_delta_min_retain_ratio": ANALYZE_SHOWROOM_DELTA_MIN_RETAIN_RATIO,
+            "analyze_top_recover_max_skin_ratio": ANALYZE_TOP_RECOVER_MAX_SKIN_RATIO,
+            "analyze_top_recover_near_dilate": ANALYZE_TOP_RECOVER_NEAR_DILATE,
+            "analyze_top_skin_rim_cleanup": ANALYZE_TOP_SKIN_RIM_CLEANUP,
+            "analyze_top_skin_rim_max_ratio": ANALYZE_TOP_SKIN_RIM_MAX_RATIO,
             "analyze_vton_max_showroom_mae": ANALYZE_VTON_MAX_SHOWROOM_MAE,
             "analyze_vton_min_showroom_change_ratio": ANALYZE_VTON_MIN_SHOWROOM_CHANGE_RATIO,
             "analyze_vton_top_zoom_enabled": ANALYZE_VTON_TOP_ZOOM_ENABLED,
@@ -2614,6 +5114,7 @@ def health_check():
             "analyze_garment_postprocess_enabled": ANALYZE_GARMENT_POSTPROCESS_ENABLED,
             "analyze_garment_target_aspect": f"{ANALYZE_GARMENT_TARGET_ASPECT_W}:{ANALYZE_GARMENT_TARGET_ASPECT_H}",
             "analyze_garment_enhance_enabled": ANALYZE_GARMENT_ENHANCE_ENABLED,
+            "analyze_garment_output_background": ANALYZE_GARMENT_OUTPUT_BACKGROUND,
             "wardrobe_progress_sync_enabled": ENABLE_WARDROBE_PROGRESS_SYNC,
             "wardrobe_progress_include_input_image": WARDROBE_PROGRESS_INCLUDE_INPUT_IMAGE,
         },
