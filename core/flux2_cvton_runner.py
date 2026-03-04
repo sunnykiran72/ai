@@ -1,4 +1,5 @@
 import importlib
+import inspect
 import logging
 import os
 import threading
@@ -205,6 +206,17 @@ class Flux2CVTONRunner:
         self._infer_lock = threading.Lock()
         self._startup_metrics: Dict[str, Any] = {}
         self._did_warmup = False
+        self._supports_negative_prompt: Optional[bool] = None
+        self._warned_negative_prompt_unsupported = False
+        self.negative_prompt_fallback_mode = (
+            str(os.getenv("FLUX2_NEGATIVE_PROMPT_FALLBACK_MODE", "append_prompt")).strip().lower()
+        )
+        if self.negative_prompt_fallback_mode not in {"append_prompt", "ignore"}:
+            self.negative_prompt_fallback_mode = "append_prompt"
+        self.negative_prompt_fallback_max_chars = max(
+            240,
+            int(os.getenv("FLUX2_NEGATIVE_PROMPT_FALLBACK_MAX_CHARS", "900")),
+        )
 
     @staticmethod
     def _resolve_dtype(dtype_name: str) -> torch.dtype:
@@ -298,6 +310,53 @@ class Flux2CVTONRunner:
             if self._pipeline is None:
                 self._pipeline = self._load_pipeline()
 
+    def _pipeline_accepts_negative_prompt(self) -> bool:
+        if self._supports_negative_prompt is not None:
+            return bool(self._supports_negative_prompt)
+
+        supported = False
+        try:
+            if self._pipeline is not None:
+                call_sig = inspect.signature(self._pipeline.__call__)
+                supported = "negative_prompt" in call_sig.parameters
+        except Exception:
+            supported = False
+        self._supports_negative_prompt = supported
+        return supported
+
+    def _negative_prompt_to_prompt_suffix(self, negative_prompt: str) -> str:
+        raw = " ".join(str(negative_prompt or "").split()).strip()
+        if not raw:
+            return ""
+
+        chunks = [c.strip(" ,.;") for c in raw.split("|") if c.strip(" ,.;")]
+        tokens: List[str] = []
+        for chunk in chunks:
+            parts = [p.strip(" ,.;") for p in chunk.split(",") if p.strip(" ,.;")]
+            tokens.extend(parts if parts else [chunk])
+
+        dedup: List[str] = []
+        seen = set()
+        for tok in tokens:
+            key = tok.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            dedup.append(tok)
+
+        if not dedup:
+            return ""
+
+        joined = "; ".join(dedup)
+        if len(joined) > self.negative_prompt_fallback_max_chars:
+            joined = joined[: self.negative_prompt_fallback_max_chars].rstrip(" ,;.")
+        return (
+            "Hard constraints: keep the exact same person identity, pose, body proportions, and background. "
+            "Do not introduce these artifacts: "
+            + joined
+            + "."
+        )
+
     def run_tryon(
         self,
         person_image: Image.Image,
@@ -305,6 +364,7 @@ class Flux2CVTONRunner:
         prompt: str,
         steps: int = 6,
         seed: Optional[int] = None,
+        negative_prompt: Optional[str] = None,
     ) -> Dict[str, Any]:
         self.ensure_ready()
 
@@ -315,33 +375,51 @@ class Flux2CVTONRunner:
 
         person = person_image.convert("RGB")
         board = board_image.convert("RGB")
+        resolved_negative_prompt = str(negative_prompt or "").strip()
+        supports_negative_prompt = self._pipeline_accepts_negative_prompt()
+        effective_prompt = prompt
+        negative_prompt_mode = "none"
+        if resolved_negative_prompt:
+            if supports_negative_prompt:
+                negative_prompt_mode = "native"
+            elif self.negative_prompt_fallback_mode == "append_prompt":
+                suffix = self._negative_prompt_to_prompt_suffix(resolved_negative_prompt)
+                if suffix:
+                    effective_prompt = f"{prompt} {suffix}"
+                    negative_prompt_mode = "prompt_fallback"
+                else:
+                    negative_prompt_mode = "ignored"
+            else:
+                negative_prompt_mode = "ignored"
+
+        def _invoke_once() -> Any:
+            call_kwargs: Dict[str, Any] = {
+                "image": [person, board],
+                "prompt": effective_prompt,
+                "num_inference_steps": steps,
+                "guidance_scale": self.guidance_scale,
+                "width": self.width,
+                "height": self.height,
+                "generator": generator,
+            }
+            if resolved_negative_prompt:
+                if supports_negative_prompt:
+                    call_kwargs["negative_prompt"] = resolved_negative_prompt
+                elif negative_prompt_mode == "ignored" and not self._warned_negative_prompt_unsupported:
+                    logger.warning("Flux2 pipeline does not expose `negative_prompt`; ignoring provided negative prompt.")
+                    self._warned_negative_prompt_unsupported = True
+            return self._pipeline(**call_kwargs).images[0]
 
         with self._infer_lock, torch.inference_mode():
             if (not self._did_warmup) and self.num_warmups > 0:
                 warm_t0 = time.time()
                 for _ in range(max(0, self.num_warmups)):
-                    _ = self._pipeline(
-                        image=[person, board],
-                        prompt=prompt,
-                        num_inference_steps=steps,
-                        guidance_scale=self.guidance_scale,
-                        width=self.width,
-                        height=self.height,
-                        generator=generator,
-                    ).images[0]
+                    _ = _invoke_once()
                 warmup_seconds = time.time() - warm_t0
                 self._did_warmup = True
 
             infer_t0 = time.time()
-            result = self._pipeline(
-                image=[person, board],
-                prompt=prompt,
-                num_inference_steps=steps,
-                guidance_scale=self.guidance_scale,
-                width=self.width,
-                height=self.height,
-                generator=generator,
-            ).images[0]
+            result = _invoke_once()
             latency = time.time() - infer_t0
 
         return {
@@ -353,6 +431,11 @@ class Flux2CVTONRunner:
                 "resolution": (self.width, self.height),
                 "warmup_seconds": warmup_seconds,
                 "request_total_seconds": time.time() - run_t0,
+                "negative_prompt_used": bool(resolved_negative_prompt and negative_prompt_mode in {"native", "prompt_fallback"}),
+                "negative_prompt_supported": bool(supports_negative_prompt),
+                "negative_prompt_mode": negative_prompt_mode,
+                "negative_prompt_requested": bool(resolved_negative_prompt),
+                "negative_prompt_fallback_mode": self.negative_prompt_fallback_mode,
                 "startup_metrics": dict(self._startup_metrics),
             },
         }
