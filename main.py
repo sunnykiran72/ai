@@ -7,6 +7,8 @@ import uuid
 import tempfile
 import re
 import hashlib
+import colorsys
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional, List, Tuple, Dict
 
@@ -23,7 +25,16 @@ load_dotenv()
 
 # Shared Utilities
 from ai.shared.azure_storage import storage
-from ai.shared.image_ops import download_image, bbox_iou, binary_open, binary_close, build_soft_alpha
+from ai.shared.image_ops import (
+    download_image,
+    bbox_iou,
+    resize_mask_to_image,
+    binary_open,
+    binary_close,
+    build_soft_alpha,
+    rgb_to_lab,
+    delta_e_cie76,
+)
 from ai.shared.category_mapping import wardrobe_category_from_garment_type as _wardrobe_category_from_garment_type, infer_style_from_text as _infer_style_from_text
 from ai.shared.response_payloads import (
     build_error_payload as _build_error_payload,
@@ -115,6 +126,7 @@ FLUX2_NEGATIVE_PROMPT_DEFAULT = os.getenv(
         "layering artifacts, garment merge, ghost garment, incorrect neckline, incorrect hemline"
     ),
 ).strip()
+FLUX2_LOW_LATENCY_MODE = os.getenv("FLUX2_LOW_LATENCY_MODE", "0") == "1"
 FLUX2_DRESS_SECOND_PASS_ENABLED = os.getenv("FLUX2_DRESS_SECOND_PASS_ENABLED", "1") == "1"
 FLUX2_DRESS_SECOND_PASS_EXTRA_STEPS = max(1, _env_int("FLUX2_DRESS_SECOND_PASS_EXTRA_STEPS", 4))
 FLUX2_DRESS_SECOND_PASS_MAX_STEPS = max(6, _env_int("FLUX2_DRESS_SECOND_PASS_MAX_STEPS", 18))
@@ -139,13 +151,28 @@ FLUX2_MINICPM_PRODUCT_CAPTION_MIN_SIDE = max(256, _env_int("FLUX2_MINICPM_PRODUC
 FLUX2_MINICPM_USER_CAPTION_MAX_SIDE = max(512, _env_int("FLUX2_MINICPM_USER_CAPTION_MAX_SIDE", 1024))
 FLUX2_MINICPM_USER_CAPTION_MIN_SIDE = max(256, _env_int("FLUX2_MINICPM_USER_CAPTION_MIN_SIDE", 512))
 MINICPM_SERVICE_URL = os.getenv("MINICPM_SERVICE_URL", "http://127.0.0.1:8010").strip().rstrip("/")
-MINICPM_SERVICE_TIMEOUT_S = max(5, _env_int("MINICPM_SERVICE_TIMEOUT_S", 120))
-MINICPM_SERVICE_GARMENT_MAX_NEW_TOKENS = max(32, _env_int("MINICPM_SERVICE_GARMENT_MAX_NEW_TOKENS", 260))
-MINICPM_SERVICE_PERSON_MAX_NEW_TOKENS = max(32, _env_int("MINICPM_SERVICE_PERSON_MAX_NEW_TOKENS", 260))
+MINICPM_SERVICE_TIMEOUT_S = max(5, _env_int("MINICPM_SERVICE_TIMEOUT_S", 60 if FLUX2_LOW_LATENCY_MODE else 120))
+MINICPM_SERVICE_CONNECT_TIMEOUT_S = max(
+    1.0, _env_float("MINICPM_SERVICE_CONNECT_TIMEOUT_S", 6.0 if FLUX2_LOW_LATENCY_MODE else 10.0)
+)
+MINICPM_SERVICE_GARMENT_MAX_NEW_TOKENS = max(
+    32, _env_int("MINICPM_SERVICE_GARMENT_MAX_NEW_TOKENS", 180 if FLUX2_LOW_LATENCY_MODE else 260)
+)
+MINICPM_SERVICE_PERSON_MAX_NEW_TOKENS = max(
+    32, _env_int("MINICPM_SERVICE_PERSON_MAX_NEW_TOKENS", 128 if FLUX2_LOW_LATENCY_MODE else 260)
+)
+MINICPM_SERVICE_CACHE_ENABLED = os.getenv("MINICPM_SERVICE_CACHE_ENABLED", "1") == "1"
+MINICPM_SERVICE_CACHE_TTL_SECONDS = max(
+    0, _env_int("MINICPM_SERVICE_CACHE_TTL_SECONDS", 1800 if FLUX2_LOW_LATENCY_MODE else 900)
+)
+MINICPM_SERVICE_CACHE_MAX_ENTRIES = max(16, _env_int("MINICPM_SERVICE_CACHE_MAX_ENTRIES", 1024))
+MINICPM_SERVICE_POOL_MAXSIZE = max(4, _env_int("MINICPM_SERVICE_POOL_MAXSIZE", 16))
 MINICPM_SERVICE_GARMENT_PROMPT = os.getenv(
     "MINICPM_SERVICE_GARMENT_PROMPT",
     (
         "Describe only the product garment for high-fidelity virtual try-on. "
+        "Ignore studio/background pixels, alpha-matte edges, and lighting shadows outside the garment fabric. "
+        "Report garment fabric color only (dominant first, then secondary undertone if visible). "
         "Return one detailed line with schema: "
         "category=<dress|top|bottom|outerwear|set|unknown>; "
         "type=<specific garment type>; "
@@ -182,10 +209,86 @@ if FLUX2_NEGATIVE_PROMPT_RUNTIME_MODE not in {"disabled", "request_only", "reque
     FLUX2_NEGATIVE_PROMPT_RUNTIME_MODE = "request_or_auto"
 FLUX2_COLOR_LOCK_ENABLED = os.getenv("FLUX2_COLOR_LOCK_ENABLED", "1") == "1"
 FLUX2_COLOR_LOCK_TOP_K = min(5, max(1, _env_int("FLUX2_COLOR_LOCK_TOP_K", 3)))
+FLUX2_COLOR_DECONTAMINATION_ENABLED = os.getenv("FLUX2_COLOR_DECONTAMINATION_ENABLED", "1") == "1"
+FLUX2_COLOR_DECONTAM_ALPHA_HIGH = max(1, min(255, _env_int("FLUX2_COLOR_DECONTAM_ALPHA_HIGH", 240)))
+FLUX2_COLOR_DECONTAM_ALPHA_LOW = max(1, min(255, _env_int("FLUX2_COLOR_DECONTAM_ALPHA_LOW", 200)))
+FLUX2_COLOR_DECONTAM_ERODE_ITERS = max(0, _env_int("FLUX2_COLOR_DECONTAM_ERODE_ITERS", 1))
+FLUX2_COLOR_DECONTAM_MIN_PIXELS = max(16, _env_int("FLUX2_COLOR_DECONTAM_MIN_PIXELS", 64))
+FLUX2_COLOR_DECONTAM_MIN_COVERAGE_RATIO = min(
+    0.2,
+    max(0.0, _env_float("FLUX2_COLOR_DECONTAM_MIN_COVERAGE_RATIO", 0.006)),
+)
+FLUX2_COLOR_PALETTE_MIN_AREA_PERCENT = min(
+    40.0,
+    max(0.0, _env_float("FLUX2_COLOR_PALETTE_MIN_AREA_PERCENT", 7.0)),
+)
+FLUX2_COLOR_PROFILE_TRIM_DARK_PERCENTILE = min(
+    40.0,
+    max(0.0, _env_float("FLUX2_COLOR_PROFILE_TRIM_DARK_PERCENTILE", 10.0)),
+)
+FLUX2_COLOR_PROFILE_TRIM_BRIGHT_PERCENTILE = min(
+    100.0,
+    max(60.0, _env_float("FLUX2_COLOR_PROFILE_TRIM_BRIGHT_PERCENTILE", 98.0)),
+)
+FLUX2_COLOR_GUARD_RERUN_ENABLED = os.getenv("FLUX2_COLOR_GUARD_RERUN_ENABLED", "1") == "1"
+FLUX2_COLOR_GUARD_DRIFT_THRESHOLD = _env_float("FLUX2_COLOR_GUARD_DRIFT_THRESHOLD", 12.0)
+FLUX2_COLOR_GUARD_RERUN_EXTRA_STEPS = max(1, _env_int("FLUX2_COLOR_GUARD_RERUN_EXTRA_STEPS", 2))
+FLUX2_COLOR_GUARD_RERUN_MAX_STEPS = max(6, _env_int("FLUX2_COLOR_GUARD_RERUN_MAX_STEPS", 18))
+FLUX2_COLOR_FIRST_GATE_ENABLED = os.getenv("FLUX2_COLOR_FIRST_GATE_ENABLED", "1") == "1"
+FLUX2_COLOR_FIRST_GATE_MAX_DRIFT_DELTA = max(
+    0.0,
+    _env_float("FLUX2_COLOR_FIRST_GATE_MAX_DRIFT_DELTA", 6.0),
+)
+FLUX2_NEUTRAL_POST_COLOR_CALIBRATION_ENABLED = (
+    os.getenv("FLUX2_NEUTRAL_POST_COLOR_CALIBRATION_ENABLED", "1") == "1"
+)
+FLUX2_NEUTRAL_CALIBRATION_MAX_DELTA_L = max(1.0, _env_float("FLUX2_NEUTRAL_CALIBRATION_MAX_DELTA_L", 10.0))
+FLUX2_NEUTRAL_CALIBRATION_LIGHT_OUTPUT_MIN_L = _env_float("FLUX2_NEUTRAL_CALIBRATION_LIGHT_OUTPUT_MIN_L", 65.0)
+FLUX2_NEUTRAL_CALIBRATION_MAX_DARKEN_LIGHT_OUTPUT = max(
+    0.5, _env_float("FLUX2_NEUTRAL_CALIBRATION_MAX_DARKEN_LIGHT_OUTPUT", 5.0)
+)
+FLUX2_NEUTRAL_CALIBRATION_DARK_OUTPUT_MAX_L = _env_float("FLUX2_NEUTRAL_CALIBRATION_DARK_OUTPUT_MAX_L", 40.0)
+FLUX2_NEUTRAL_CALIBRATION_MAX_BRIGHTEN_DARK_OUTPUT = max(
+    0.5, _env_float("FLUX2_NEUTRAL_CALIBRATION_MAX_BRIGHTEN_DARK_OUTPUT", 15.0)
+)
+FLUX2_NEUTRAL_CALIBRATION_BRIGHTNESS_MARGIN_L = max(
+    0.0, _env_float("FLUX2_NEUTRAL_CALIBRATION_BRIGHTNESS_MARGIN_L", 15.0)
+)
+FLUX2_NEUTRAL_CALIBRATION_LIGHT_SOURCE_MIN_L = _env_float("FLUX2_NEUTRAL_CALIBRATION_LIGHT_SOURCE_MIN_L", 60.0)
+FLUX2_NEUTRAL_CALIBRATION_LIGHT_SOURCE_MAX_DARKEN = max(
+    0.5, _env_float("FLUX2_NEUTRAL_CALIBRATION_LIGHT_SOURCE_MAX_DARKEN", 15.0)
+)
+FLUX2_NEUTRAL_CALIBRATION_DARK_SOURCE_MAX_L = _env_float("FLUX2_NEUTRAL_CALIBRATION_DARK_SOURCE_MAX_L", 40.0)
+FLUX2_NEUTRAL_CALIBRATION_DARK_SOURCE_MAX_BRIGHTEN = max(
+    0.5, _env_float("FLUX2_NEUTRAL_CALIBRATION_DARK_SOURCE_MAX_BRIGHTEN", 20.0)
+)
 FLUX2_DETAIL_LOCK_ENABLED = os.getenv("FLUX2_DETAIL_LOCK_ENABLED", "1") == "1"
 FLUX2_SINGLE_CANDIDATE_MODE = os.getenv("FLUX2_SINGLE_CANDIDATE_MODE", "auto").strip().lower()
 if FLUX2_SINGLE_CANDIDATE_MODE not in {"auto", "base", "dress_strict", "qwen_strict"}:
     FLUX2_SINGLE_CANDIDATE_MODE = "auto"
+if FLUX2_LOW_LATENCY_MODE and "FLUX2_SINGLE_CANDIDATE_MODE" not in os.environ:
+    FLUX2_SINGLE_CANDIDATE_MODE = "base"
+if FLUX2_LOW_LATENCY_MODE and "FLUX2_DRESS_SECOND_PASS_ENABLED" not in os.environ:
+    FLUX2_DRESS_SECOND_PASS_ENABLED = False
+if FLUX2_LOW_LATENCY_MODE and "FLUX2_REGION_LOCK_SECOND_PASS_ENABLED" not in os.environ:
+    FLUX2_REGION_LOCK_SECOND_PASS_ENABLED = False
+if FLUX2_LOW_LATENCY_MODE and "FLUX2_QWEN_SECOND_PASS_ENABLED" not in os.environ:
+    FLUX2_QWEN_SECOND_PASS_ENABLED = False
+if FLUX2_LOW_LATENCY_MODE and "FLUX2_COLOR_GUARD_RERUN_ENABLED" not in os.environ:
+    FLUX2_COLOR_GUARD_RERUN_ENABLED = False
+FLUX2_RUNTIME_SCORING_ENABLED = os.getenv(
+    "FLUX2_RUNTIME_SCORING_ENABLED",
+    "0" if FLUX2_LOW_LATENCY_MODE else "1",
+) == "1"
+FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND = os.getenv(
+    "FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND",
+    "minicpm",
+).strip().lower()
+if FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND not in {"florence", "joycaption", "minicpm", "minicpm_service"}:
+    FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND = "minicpm"
+FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS = max(4, _env_int("FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS", 10))
+FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_SEED = max(0, _env_int("FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_SEED", 23))
+FLUX2_SINGLE_GARMENT_EXTRACT_UPLOAD_DEBUG = os.getenv("FLUX2_SINGLE_GARMENT_EXTRACT_UPLOAD_DEBUG", "1") == "1"
 HYBRID_TOP_K = max(1, _env_int("HYBRID_TOP_K", 3))
 ANALYZE_MAX_ITEMS = max(1, _env_int("ANALYZE_MAX_ITEMS", 3))
 HYBRID_MIN_SCORE = _env_float("HYBRID_MIN_SCORE", 0.0)
@@ -627,11 +730,53 @@ def _normalize_minicpm_descriptor_text(raw_text: str, kind: str) -> str:
         parts.append(f"preserve {preserve}")
     return ", ".join(parts).strip(" ,.") or text
 
+def _strip_descriptor_color_clause(description: str) -> str:
+    """
+    Remove model-predicted color phrase from schema-like descriptors.
+    We keep pixel-derived color lock as the source of truth.
+    """
+    text = " ".join(str(description or "").split()).strip()
+    if not text:
+        return text
+    segments = [seg.strip() for seg in text.split(",") if seg.strip()]
+    if not segments:
+        return text
+
+    key_prefixes = (
+        "type ",
+        "colors ",
+        "pattern ",
+        "material ",
+        "silhouette ",
+        "construction ",
+        "details ",
+        "coverage ",
+        "preserve ",
+    )
+
+    out: List[str] = []
+    dropping_color_tail = False
+    for seg in segments:
+        low = seg.lower()
+        if low.startswith("colors "):
+            dropping_color_tail = True
+            continue
+        if dropping_color_tail:
+            is_new_key = any(low.startswith(k) for k in key_prefixes if k != "colors ")
+            if not is_new_key:
+                continue
+            dropping_color_tail = False
+        out.append(seg)
+
+    normalized = ", ".join(out).strip(" ,")
+    return normalized or text
+
 def _augment_identity_lock(user_description: str) -> str:
     base = str(user_description or "").strip()
     lock = (
-        "Keep exact same person identity: face structure, skin tone, hair, hands, "
-        "body shape, pose, and scene lighting."
+        "Keep exact same person identity and pose: preserve facial geometry, expression, skin tone, "
+        "hairstyle, hairline, hands, body proportions, camera framing, and scene lighting. "
+        "Do not restyle face or change head/body posture."
     )
     if not base:
         return lock
@@ -646,7 +791,7 @@ def _infer_flux2_target_type(description: str) -> str:
         "anarkali", "saree", "sari", "lehenga", "jumpsuit", "romper", "kurti",
     )
     bottom_terms = (
-        "pant", "pants", "trouser", "trousers", "jean", "jeans", "skirt", "shorts",
+        "bottom", "pant", "pants", "trouser", "trousers", "jean", "jeans", "skirt", "shorts",
         "palazzo", "chino", "legging", "leggings",
     )
     outer_terms = ("jacket", "coat", "blazer", "hoodie", "cardigan", "outerwear", "outer", "shrug")
@@ -656,11 +801,39 @@ def _infer_flux2_target_type(description: str) -> str:
     has_bottom_term = any(term in text for term in bottom_terms)
     has_outer_term = any(term in text for term in outer_terms)
     has_top_term = any(term in text for term in top_terms)
+    lower_body_cues = (
+        "coverage full legs",
+        "coverage legs",
+        "coverage lower body",
+        "lower body",
+        "lower-body",
+        "waist to ankle",
+        "full legs",
+        "leg coverage",
+        "pants only",
+    )
+    upper_body_cues = (
+        "coverage torso",
+        "coverage upper body",
+        "coverage upper-body",
+        "torso and arms",
+        "upper body",
+        "upper-body",
+    )
+    has_lower_body_cue = any(cue in text for cue in lower_body_cues)
+    has_upper_body_cue = any(cue in text for cue in upper_body_cues)
 
     # Be conservative with dress detection for model-generated captions.
     # If top/bottom/outer cues co-exist, prefer region-specific replacement.
     if has_dress_term and not (has_top_term or has_bottom_term or has_outer_term):
         return "dress"
+    if has_lower_body_cue and not has_upper_body_cue:
+        return "bottom"
+    if has_top_term and has_bottom_term:
+        if has_lower_body_cue:
+            return "bottom"
+        if has_upper_body_cue:
+            return "top"
     if has_bottom_term:
         return "bottom"
     if has_outer_term:
@@ -745,6 +918,7 @@ _DETAIL_LOCK_TERMS: List[Tuple[str, str]] = [
 ]
 
 _TEXT_COLOR_TERMS: List[str] = [
+    "cream",
     "rose gold",
     "blush pink",
     "dusty pink",
@@ -780,7 +954,132 @@ _TEXT_COLOR_TERMS: List[str] = [
     "peach",
 ]
 
+def _canonical_color_token(color: str) -> str:
+    token = str(color or "").strip().lower()
+    aliases = {
+        "grey": "gray",
+        "off white": "off-white",
+        "offwhite": "off-white",
+    }
+    return aliases.get(token, token)
+
+def _color_family(color: str) -> str:
+    c = _canonical_color_token(color)
+    if c in {"black", "charcoal"}:
+        return "neutral_dark"
+    if c in {"gray", "silver"}:
+        return "neutral_mid"
+    if c in {"white", "off-white", "ivory", "beige", "champagne", "tan", "nude"}:
+        return "neutral_light"
+    if c in {"red", "maroon", "burgundy"}:
+        return "red"
+    if c in {"orange", "peach"}:
+        return "orange"
+    if c in {"yellow", "gold"}:
+        return "yellow"
+    if c in {"green", "olive"}:
+        return "green"
+    if c in {"blue", "navy", "teal"}:
+        return "blue"
+    if c in {"purple", "lavender"}:
+        return "purple"
+    if c in {"pink", "blush pink", "dusty pink", "hot pink", "rose gold"}:
+        return "pink"
+    if c in {"brown"}:
+        return "brown"
+    return c
+
+def _is_neutral_color_token(color: str) -> bool:
+    fam = _color_family(color)
+    return fam in {"neutral_dark", "neutral_mid", "neutral_light"}
+
+def _hex_to_rgb_triplet(token: str) -> Optional[Tuple[int, int, int]]:
+    t = str(token or "").strip().lstrip("#")
+    if not re.fullmatch(r"[0-9A-Fa-f]{6}", t):
+        return None
+    return (int(t[0:2], 16), int(t[2:4], 16), int(t[4:6], 16))
+
+def _rgb_hue_deg(rgb: Tuple[int, int, int]) -> float:
+    r, g, b = [max(0, min(255, int(v))) / 255.0 for v in rgb]
+    h, _s, _v = colorsys.rgb_to_hsv(r, g, b)
+    return float(h * 360.0)
+
+def _palette_weighted_hue_deg(palette: List[Dict[str, object]], max_colors: int = 4) -> Optional[float]:
+    vals: List[Tuple[float, float]] = []
+    for entry in (palette or [])[: max(1, int(max_colors))]:
+        hx = str(entry.get("hex", "")).strip()
+        rgb = _hex_to_rgb_triplet(hx)
+        if rgb is None:
+            continue
+        w = float(entry.get("areaPercent", 0.0) or 0.0)
+        vals.append((_rgb_hue_deg(rgb), max(0.1, w)))
+    if not vals:
+        return None
+    # Weighted circular mean
+    sin_sum = 0.0
+    cos_sum = 0.0
+    for deg, w in vals:
+        rad = np.deg2rad(deg)
+        sin_sum += np.sin(rad) * w
+        cos_sum += np.cos(rad) * w
+    if abs(sin_sum) < 1e-6 and abs(cos_sum) < 1e-6:
+        return None
+    ang = float(np.rad2deg(np.arctan2(sin_sum, cos_sum)))
+    if ang < 0.0:
+        ang += 360.0
+    return ang
+
+def _profile_is_near_white(profile: Dict[str, object]) -> bool:
+    if not isinstance(profile, dict):
+        return False
+    median_l = profile.get("medianL")
+    p90_l = profile.get("p90L")
+    mean_c = profile.get("meanChroma")
+    if not all(isinstance(v, (int, float)) for v in (median_l, p90_l, mean_c)):
+        return False
+    return bool(
+        profile.get("isNeutral")
+        and float(p90_l) >= 84.0
+        and float(median_l) >= 68.0
+        and float(mean_c) <= 5.5
+    )
+
 def _nearest_color_label(rgb_triplet: Tuple[int, int, int]) -> str:
+    """
+    Standardizes color terms for consistent Flux2 conditioning.
+    Uses CIELAB for neutrals to solve the cream/ivory vs silver/gray drift.
+    """
+    r_i, g_i, b_i = [int(v) for v in rgb_triplet]
+
+    # 1. Check for neutrals using Lab coordinates for better stability than RGB warmness.
+    # OpenCV returns L in [0,255] and a/b centered at 128 (not 0).
+    lab = rgb_to_lab(np.array([[r_i, g_i, b_i]], dtype=np.uint8))[0]
+    l_star = float(lab[0]) * (100.0 / 255.0)
+    a_star = float(lab[1]) - 128.0
+    b_star = float(lab[2]) - 128.0
+
+    # Perceptual saturation in CIELAB (distance from neutral axis).
+    chroma = float(np.sqrt((a_star * a_star) + (b_star * b_star)))
+
+    if chroma < 14.0:
+        # This is a neutral/near-neutral color. Use L* to bucket it.
+        if l_star < 10.0:
+            return "black"
+        if l_star < 28.0:
+            return "charcoal"
+        if l_star < 62.0:
+            # Gray vs Tan/Stone
+            return "gray" if b_star < 8.0 else "tan"
+        if l_star < 85.0:
+            # Silver vs Beige/Khaki
+            return "silver" if b_star < 9.0 else "beige"
+        if l_star < 96.0:
+            # Ivory/Cream vs White
+            # Cream/Ivory typically has b* around 10-20.
+            return "cream" if b_star > 11.0 else ("ivory" if b_star > 4.0 else "white")
+        return "white"
+
+    # 2. Saturated colors: use Euclidean distance to reference palette
     vec = np.array(rgb_triplet, dtype=np.float32)
     best_label = "unknown"
     best_dist = float("inf")
@@ -806,69 +1105,437 @@ def _extract_dominant_color_labels(image: Image.Image, top_k: int = 3) -> List[s
     y_pad = int(h * 0.1)
     crop = rgb.crop((x_pad, y_pad, max(x_pad + 1, w - x_pad), max(y_pad + 1, h - y_pad)))
     crop.thumbnail((192, 192), Image.Resampling.BICUBIC)
-    arr = np.array(crop, dtype=np.uint8)
-    if arr.ndim != 3 or arr.shape[2] != 3:
+    hexes = _extract_dominant_hex_colors(crop, top_k=max(2, int(top_k) + 2))
+    out: List[str] = []
+    for hx in hexes:
+        token = str(hx or "").strip()
+        if not re.fullmatch(r"#[0-9A-Fa-f]{6}", token):
+            continue
+        r = int(token[1:3], 16)
+        g = int(token[3:5], 16)
+        b = int(token[5:7], 16)
+        label = _nearest_color_label((r, g, b))
+        if label == "grey":
+            label = "gray"
+        if label not in out:
+            out.append(label)
+        if len(out) >= max(1, int(top_k)):
+            break
+    return out
+
+def _extract_dominant_hex_colors_with_coverage(
+    image: Image.Image,
+    mask: Optional[np.ndarray] = None,
+    top_k: int = 4,
+) -> List[Dict[str, object]]:
+    """
+    LAB K-Means based color extraction with area coverage metadata.
+    """
+    try:
+        rgb = image.convert("RGB")
+        arr = np.array(rgb, dtype=np.uint8)
+        if arr.ndim != 3 or arr.shape[2] != 3:
+            return []
+
+        pixels = arr.reshape(-1, 3)
+        use_mask = mask
+        if FLUX2_COLOR_DECONTAMINATION_ENABLED:
+            clean_mask = _get_clean_foreground_mask(image, mask=mask)
+            if isinstance(clean_mask, np.ndarray):
+                use_mask = clean_mask
+        if isinstance(use_mask, np.ndarray):
+            m = np.asarray(use_mask).astype(bool)
+            if m.shape[:2] == arr.shape[:2]:
+                keep = m.reshape(-1)
+                if int(np.sum(keep)) > 32:
+                    pixels = pixels[keep]
+
+        if pixels.size == 0:
+            return []
+
+        near_white = np.all(pixels >= 248, axis=1)
+        if int(np.sum(~near_white)) > 16:
+            pixels = pixels[~near_white]
+        if pixels.size < 4:
+            return []
+
+        import cv2
+
+        pixels_u8 = np.ascontiguousarray(pixels.astype(np.uint8))
+        pixels_lab = cv2.cvtColor(pixels_u8.reshape(-1, 1, 3), cv2.COLOR_RGB2LAB).reshape(-1, 3)
+        if pixels_lab.size < 12:
+            return []
+
+        unique_lab_count = int(np.unique(pixels_lab, axis=0).shape[0])
+        k = min(max(1, int(top_k) + 1), int(pixels_lab.shape[0]), max(1, unique_lab_count))
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.2)
+        _, labels, centers = cv2.kmeans(
+            pixels_lab.astype(np.float32),
+            k,
+            None,
+            criteria,
+            10,
+            cv2.KMEANS_PP_CENTERS,
+        )
+
+        flat_labels = labels.reshape(-1)
+        unique, counts = np.unique(flat_labels, return_counts=True)
+        order = np.argsort(-counts)
+
+        centers_u8 = np.clip(centers, 0, 255).astype(np.uint8).reshape(-1, 1, 3)
+        centers_rgb = cv2.cvtColor(centers_u8, cv2.COLOR_LAB2RGB).reshape(-1, 3)
+
+        total_pixels = max(1, int(np.sum(counts)))
+        out: List[Dict[str, object]] = []
+        seen_hex = set()
+        for order_idx in order.tolist():
+            center_idx = int(unique[order_idx])
+            r, g, b = [int(v) for v in centers_rgb[center_idx].tolist()]
+            r, g, b = max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b))
+            hx = f"#{r:02X}{g:02X}{b:02X}"
+            if hx in seen_hex:
+                continue
+            seen_hex.add(hx)
+            pixel_count = int(counts[order_idx])
+            area_percent = round((float(pixel_count) / float(total_pixels)) * 100.0, 2)
+            out.append(
+                {
+                    "hex": hx,
+                    "areaPercent": area_percent,
+                    "pixelCount": pixel_count,
+                }
+            )
+            if len(out) >= max(1, int(top_k)):
+                break
+        return out
+    except Exception as e:
+        logger.warning(f"K-Means color extraction failed: {e}")
         return []
-
-    pixels = arr.reshape(-1, 3)
-    if pixels.size == 0:
-        return []
-
-    near_white = np.all(pixels >= 245, axis=1)
-    non_white_ratio = float(np.mean(~near_white)) if pixels.shape[0] else 0.0
-    if non_white_ratio > 0.20:
-        pixels = pixels[~near_white]
-    if pixels.size == 0:
-        return []
-
-    # Bin colors to make dominant counts stable and cheap.
-    binned = (pixels // 16) * 16
-    unique, counts = np.unique(binned, axis=0, return_counts=True)
-    order = np.argsort(-counts)
-    label_counts = {}
-    for idx in order.tolist():
-        rgb_triplet = tuple(int(v) for v in unique[idx].tolist())
-        label = _nearest_color_label(rgb_triplet)
-        label_counts[label] = label_counts.get(label, 0) + int(counts[idx])
-
-    ordered_labels = sorted(label_counts.items(), key=lambda kv: kv[1], reverse=True)
-    return [name for name, _ in ordered_labels[: max(1, top_k)]]
 
 def _extract_dominant_hex_colors(
     image: Image.Image,
     mask: Optional[np.ndarray] = None,
     top_k: int = 4,
 ) -> List[str]:
-    rgb = image.convert("RGB")
-    arr = np.array(rgb, dtype=np.uint8)
-    if arr.ndim != 3 or arr.shape[2] != 3:
-        return []
+    entries = _extract_dominant_hex_colors_with_coverage(image=image, mask=mask, top_k=top_k)
+    out: List[str] = []
+    for entry in entries:
+        token = str(entry.get("hex", "")).strip()
+        if re.fullmatch(r"#[0-9A-Fa-f]{6}", token):
+            out.append(token.upper())
+    return out
 
-    pixels = arr.reshape(-1, 3)
-    if isinstance(mask, np.ndarray):
-        m = np.asarray(mask).astype(bool)
-        if m.shape[:2] == arr.shape[:2]:
-            keep = m.reshape(-1)
-            if int(np.sum(keep)) > 16:
+def _filter_palette_entries_by_area(
+    palette: List[Dict[str, object]],
+    min_area_percent: float,
+    min_items: int = 2,
+) -> List[Dict[str, object]]:
+    entries = list(palette or [])
+    if not entries:
+        return []
+    threshold = float(max(0.0, min(100.0, min_area_percent)))
+    filtered = [
+        e for e in entries
+        if float(e.get("areaPercent", 0.0) or 0.0) >= threshold
+    ]
+    if len(filtered) >= int(max(1, min_items)):
+        return filtered
+    return entries[: max(1, min(int(min_items), len(entries)))]
+
+def _extract_lab_color_profile(
+    image: Image.Image,
+    mask: Optional[np.ndarray] = None,
+) -> Dict[str, object]:
+    """
+    Extract compact Lab profile for neutral fidelity locking/scoring.
+    """
+    try:
+        rgb = image.convert("RGB")
+        arr = np.array(rgb, dtype=np.uint8)
+        if arr.ndim != 3 or arr.shape[2] != 3:
+            return {}
+
+        use_mask = None
+        if FLUX2_COLOR_DECONTAMINATION_ENABLED:
+            clean_mask = _get_clean_foreground_mask(image, mask=mask)
+            if isinstance(clean_mask, np.ndarray):
+                use_mask = clean_mask
+        if not isinstance(use_mask, np.ndarray):
+            use_mask = mask
+        if not isinstance(use_mask, np.ndarray):
+            use_mask = _extract_alpha_mask(image)
+        if not isinstance(use_mask, np.ndarray):
+            use_mask = _estimate_foreground_mask_from_border(image)
+
+        pixels = arr.reshape(-1, 3)
+        if isinstance(use_mask, np.ndarray) and use_mask.shape[:2] == arr.shape[:2]:
+            keep = np.asarray(use_mask).astype(bool).reshape(-1)
+            if int(np.sum(keep)) > 64:
                 pixels = pixels[keep]
 
-    if pixels.size == 0:
-        return []
-    near_white = np.all(pixels >= 245, axis=1)
-    if int(np.sum(~near_white)) > 0:
-        pixels = pixels[~near_white]
-    if pixels.size == 0:
+        if pixels.size == 0:
+            return {}
+
+        near_white = np.all(pixels >= 248, axis=1)
+        if int(np.sum(~near_white)) > 16:
+            pixels = pixels[~near_white]
+        if pixels.size < 64:
+            return {}
+
+        import cv2
+        lab = cv2.cvtColor(
+            np.ascontiguousarray(pixels.astype(np.uint8)).reshape(-1, 1, 3),
+            cv2.COLOR_RGB2LAB,
+        ).reshape(-1, 3).astype(np.float32)
+
+        lab_for_stats = lab
+        if FLUX2_COLOR_DECONTAMINATION_ENABLED and int(lab.shape[0]) >= int(FLUX2_COLOR_DECONTAM_MIN_PIXELS):
+            quick_a = lab[:, 1] - 128.0
+            quick_b = lab[:, 2] - 128.0
+            quick_chroma = np.sqrt((quick_a * quick_a) + (quick_b * quick_b))
+            quick_mean_chroma = float(np.mean(quick_chroma))
+            quick_p90_chroma = float(np.percentile(quick_chroma, 90))
+            # Trimming is most helpful for neutral/near-neutral garments that are sensitive to dark-fringe contamination.
+            if quick_mean_chroma < 18.0 and quick_p90_chroma < 28.0:
+                trimmed = _trim_lab_profile_outliers(
+                    lab,
+                    dark_percentile=float(FLUX2_COLOR_PROFILE_TRIM_DARK_PERCENTILE),
+                    bright_percentile=float(FLUX2_COLOR_PROFILE_TRIM_BRIGHT_PERCENTILE),
+                    min_pixels=int(FLUX2_COLOR_DECONTAM_MIN_PIXELS),
+                )
+                if isinstance(trimmed, np.ndarray) and int(trimmed.shape[0]) >= int(FLUX2_COLOR_DECONTAM_MIN_PIXELS):
+                    lab_for_stats = trimmed
+
+        l_star = lab_for_stats[:, 0] * (100.0 / 255.0)
+        a_star = lab_for_stats[:, 1] - 128.0
+        b_star = lab_for_stats[:, 2] - 128.0
+        chroma = np.sqrt((a_star * a_star) + (b_star * b_star))
+
+        median_l = float(np.median(l_star))
+        p10_l = float(np.percentile(l_star, 10))
+        p90_l = float(np.percentile(l_star, 90))
+        mean_chroma = float(np.mean(chroma))
+        p90_chroma = float(np.percentile(chroma, 90))
+        mean_a = float(np.mean(a_star))
+        mean_b = float(np.mean(b_star))
+
+        neutral = (mean_chroma < 16.0) and (p90_chroma < 26.0)
+        return {
+            "medianL": round(median_l, 2),
+            "p10L": round(p10_l, 2),
+            "p90L": round(p90_l, 2),
+            "meanChroma": round(mean_chroma, 2),
+            "p90Chroma": round(p90_chroma, 2),
+            "meanA": round(mean_a, 2),
+            "meanB": round(mean_b, 2),
+            "isNeutral": bool(neutral),
+        }
+    except Exception:
+        return {}
+
+def _extract_alpha_mask(image: Image.Image, threshold: int = 24) -> Optional[np.ndarray]:
+    """
+    Returns a foreground mask from alpha when available.
+    Useful for extracted cloth PNGs where large white/gray background exists.
+    """
+    try:
+        rgba = image.convert("RGBA")
+        alpha = np.array(rgba, dtype=np.uint8)[:, :, 3]
+        mask = alpha >= int(max(1, threshold))
+        keep = int(np.sum(mask))
+        if keep < 64:
+            return None
+        coverage = float(keep) / float(mask.shape[0] * mask.shape[1])
+        if coverage >= 0.985:
+            # Mostly opaque image; alpha likely not meaningful for foreground isolation.
+            return None
+        return mask
+    except Exception:
+        return None
+
+def _estimate_foreground_mask_from_border(
+    image: Image.Image,
+    quant_step: int = 16,
+    bg_tolerance: int = 28,
+) -> Optional[np.ndarray]:
+    """
+    Border-based foreground estimation for images without useful alpha.
+    Helps isolate garment pixels when background is flat/near-flat.
+    """
+    try:
+        rgb = image.convert("RGB")
+        arr = np.array(rgb, dtype=np.uint8)
+        if arr.ndim != 3 or arr.shape[2] != 3:
+            return None
+        h, w = arr.shape[:2]
+        if h < 8 or w < 8:
+            return None
+
+        b = max(1, min(h, w) // 30)
+        border_pixels = np.concatenate(
+            [
+                arr[:b, :, :].reshape(-1, 3),
+                arr[h - b :, :, :].reshape(-1, 3),
+                arr[:, :b, :].reshape(-1, 3),
+                arr[:, w - b :, :].reshape(-1, 3),
+            ],
+            axis=0,
+        )
+        if border_pixels.size == 0:
+            return None
+
+        binned = (border_pixels // quant_step) * quant_step
+        unique, counts = np.unique(binned, axis=0, return_counts=True)
+        bg_rgb = unique[int(np.argmax(counts))]
+
+        diff = arr.astype(np.int16) - bg_rgb.astype(np.int16)
+        dist2 = np.sum(diff * diff, axis=2)
+        fg_mask = dist2 > int(bg_tolerance * bg_tolerance)
+        keep = int(np.sum(fg_mask))
+        if keep < 64:
+            return None
+        coverage = float(keep) / float(h * w)
+        if coverage < 0.02 or coverage > 0.98:
+            return None
+        return fg_mask
+    except Exception:
+        return None
+
+def _erode_binary_mask(mask: np.ndarray, iterations: int = 1) -> np.ndarray:
+    arr = np.asarray(mask).astype(bool)
+    if int(iterations) <= 0:
+        return arr
+    try:
+        import cv2
+
+        eroded = cv2.erode(
+            arr.astype(np.uint8),
+            np.ones((3, 3), np.uint8),
+            iterations=max(1, int(iterations)),
+        )
+        return eroded > 0
+    except Exception:
+        return arr
+
+def _get_clean_foreground_mask(
+    image: Image.Image,
+    mask: Optional[np.ndarray] = None,
+) -> Optional[np.ndarray]:
+    """
+    Builds a high-confidence garment mask for color profiling.
+    Combines strong alpha cues with optional external mask and edge erosion.
+    """
+    try:
+        rgb = image.convert("RGB")
+        arr = np.array(rgb, dtype=np.uint8)
+        if arr.ndim != 3 or arr.shape[2] != 3:
+            return None
+        h, w = arr.shape[:2]
+        min_keep = max(
+            int(FLUX2_COLOR_DECONTAM_MIN_PIXELS),
+            int(float(h * w) * float(FLUX2_COLOR_DECONTAM_MIN_COVERAGE_RATIO)),
+        )
+
+        base_mask: Optional[np.ndarray] = None
+        if isinstance(mask, np.ndarray) and mask.shape[:2] == (h, w):
+            base_mask = np.asarray(mask).astype(bool)
+
+        alpha_high = _extract_alpha_mask(image, threshold=int(FLUX2_COLOR_DECONTAM_ALPHA_HIGH))
+        alpha_low = _extract_alpha_mask(image, threshold=int(FLUX2_COLOR_DECONTAM_ALPHA_LOW))
+        alpha_mask = alpha_high if isinstance(alpha_high, np.ndarray) else alpha_low
+
+        combined = None
+        if isinstance(alpha_mask, np.ndarray) and alpha_mask.shape[:2] == (h, w):
+            combined = np.asarray(alpha_mask).astype(bool)
+            if isinstance(base_mask, np.ndarray):
+                intersect = combined & base_mask
+                if int(np.sum(intersect)) >= int(min_keep):
+                    combined = intersect
+                elif int(np.sum(base_mask)) >= int(min_keep):
+                    combined = base_mask
+        elif isinstance(base_mask, np.ndarray):
+            combined = base_mask
+        else:
+            fallback = _extract_alpha_mask(image, threshold=72)
+            if not isinstance(fallback, np.ndarray):
+                fallback = _extract_alpha_mask(image, threshold=24)
+            if not isinstance(fallback, np.ndarray):
+                fallback = _estimate_foreground_mask_from_border(image)
+            if isinstance(fallback, np.ndarray) and fallback.shape[:2] == (h, w):
+                combined = np.asarray(fallback).astype(bool)
+
+        if not isinstance(combined, np.ndarray):
+            return None
+        if int(np.sum(combined)) < int(min_keep):
+            return None
+
+        eroded = _erode_binary_mask(combined, iterations=int(FLUX2_COLOR_DECONTAM_ERODE_ITERS))
+        if int(np.sum(eroded)) >= int(min_keep):
+            combined = eroded
+
+        return combined.astype(bool)
+    except Exception as e:
+        logger.warning(f"Clean foreground mask extraction failed: {e}")
+        return None
+
+def _trim_lab_profile_outliers(
+    lab_pixels: np.ndarray,
+    dark_percentile: float,
+    bright_percentile: float,
+    min_pixels: int = 64,
+) -> np.ndarray:
+    """
+    Trims extreme lightness tails for robust neutral color profiling.
+    """
+    try:
+        if not isinstance(lab_pixels, np.ndarray) or lab_pixels.ndim != 2 or lab_pixels.shape[1] != 3:
+            return lab_pixels
+        if int(lab_pixels.shape[0]) < max(16, int(min_pixels)):
+            return lab_pixels
+        lo = float(max(0.0, min(100.0, dark_percentile)))
+        hi = float(max(0.0, min(100.0, bright_percentile)))
+        if hi <= lo:
+            return lab_pixels
+
+        l_star = lab_pixels[:, 0] * (100.0 / 255.0)
+        p_low = float(np.percentile(l_star, lo))
+        p_high = float(np.percentile(l_star, hi))
+        keep = (l_star >= p_low) & (l_star <= p_high)
+        if int(np.sum(keep)) < max(16, int(min_pixels)):
+            return lab_pixels
+        return lab_pixels[keep]
+    except Exception:
+        return lab_pixels
+
+def _extract_masked_dominant_color_labels(image: Image.Image, top_k: int = 3) -> List[str]:
+    """
+    Foreground-aware color extraction for cloth images.
+    Uses alpha when available; otherwise estimates foreground from border.
+    """
+    mask = _get_clean_foreground_mask(image)
+    if not isinstance(mask, np.ndarray):
+        mask = _extract_alpha_mask(image, threshold=72)
+    if not isinstance(mask, np.ndarray):
+        mask = _extract_alpha_mask(image, threshold=24)
+    if not isinstance(mask, np.ndarray):
+        mask = _estimate_foreground_mask_from_border(image)
+    if not isinstance(mask, np.ndarray):
         return []
 
-    binned = (pixels // 16) * 16
-    unique, counts = np.unique(binned, axis=0, return_counts=True)
-    order = np.argsort(-counts)
+    hexes = _extract_dominant_hex_colors(image, mask=mask, top_k=max(2, int(top_k) + 2))
     out: List[str] = []
-    for idx in order.tolist():
-        r, g, b = [int(v) for v in unique[idx].tolist()]
-        hx = f"#{r:02X}{g:02X}{b:02X}"
-        if hx not in out:
-            out.append(hx)
+    for hx in hexes:
+        token = str(hx or "").strip()
+        if not re.fullmatch(r"#[0-9A-Fa-f]{6}", token):
+            continue
+        r = int(token[1:3], 16)
+        g = int(token[3:5], 16)
+        b = int(token[5:7], 16)
+        label = _nearest_color_label((r, g, b))
+        if label == "grey":
+            label = "gray"
+        if label not in out:
+            out.append(label)
         if len(out) >= max(1, int(top_k)):
             break
     return out
@@ -878,8 +1545,21 @@ def _extract_detail_lock_terms(description: str, max_items: int = 6) -> List[str
     if not low:
         return []
     hits: List[str] = []
+
+    def _needle_present(needle: str) -> bool:
+        token = str(needle or "").strip().lower()
+        if not token:
+            return False
+        if token == "asym":
+            return bool(re.search(r"\basym(?:metric|metry)?\b", low))
+        if (" " in token) or ("-" in token):
+            pattern = r"\b" + re.escape(token).replace(r"\ ", r"[\s-]+") + r"\b"
+            return bool(re.search(pattern, low))
+        pattern = r"\b" + re.escape(token) + r"(?:s|ed|ing)?\b"
+        return bool(re.search(pattern, low))
+
     for needle, phrase in _DETAIL_LOCK_TERMS:
-        if needle in low and phrase not in hits:
+        if _needle_present(needle) and phrase not in hits:
             hits.append(phrase)
             if len(hits) >= max_items:
                 break
@@ -907,7 +1587,7 @@ def _extract_text_color_terms(description: str, max_items: int = 4) -> List[str]
     for term in _TEXT_COLOR_TERMS:
         pattern = r"\b" + re.escape(term).replace(r"\ ", r"\s+") + r"\b"
         if re.search(pattern, low) and term not in hits:
-            normalized = "gray" if term == "grey" else term
+            normalized = _canonical_color_token(term)
             hits.append(normalized)
             if len(hits) >= max_items:
                 break
@@ -917,15 +1597,73 @@ def _build_flux2_visual_lock_clauses(
     product_images: List[Image.Image],
     garment_descriptions: List[str],
 ) -> dict:
+    color_palette_metrics: List[List[Dict[str, object]]] = []
+    color_profiles: List[Dict[str, object]] = []
+    for img in product_images:
+        mask = _extract_alpha_mask(img, threshold=72)
+        if not isinstance(mask, np.ndarray):
+            mask = _extract_alpha_mask(img, threshold=24)
+        if not isinstance(mask, np.ndarray):
+            mask = _estimate_foreground_mask_from_border(img)
+        if FLUX2_COLOR_DECONTAMINATION_ENABLED:
+            clean_mask = _get_clean_foreground_mask(img, mask=mask)
+            if isinstance(clean_mask, np.ndarray):
+                mask = clean_mask
+        color_palette_metrics.append(
+            _extract_dominant_hex_colors_with_coverage(img, mask=mask, top_k=7)
+        )
+        color_profiles.append(_extract_lab_color_profile(img, mask=mask))
+    color_palettes: List[List[str]] = []
+    for palette in color_palette_metrics:
+        filtered_palette = _filter_palette_entries_by_area(
+            palette=palette,
+            min_area_percent=float(FLUX2_COLOR_PALETTE_MIN_AREA_PERCENT),
+            min_items=2,
+        )
+        hexes: List[str] = []
+        for entry in filtered_palette:
+            token = str(entry.get("hex", "")).strip()
+            if re.fullmatch(r"#[0-9A-Fa-f]{6}", token):
+                hexes.append(token.upper())
+        color_palettes.append(hexes)
+
     color_hints: List[List[str]] = []
     if FLUX2_COLOR_LOCK_ENABLED:
         for idx, img in enumerate(product_images):
             desc = garment_descriptions[idx] if idx < len(garment_descriptions) else ""
-            text_colors = _extract_text_color_terms(desc, max_items=FLUX2_COLOR_LOCK_TOP_K)
-            if text_colors:
-                color_hints.append(text_colors)
+            profile = color_profiles[idx] if idx < len(color_profiles) and isinstance(color_profiles[idx], dict) else {}
+            text_colors = [_canonical_color_token(c) for c in _extract_text_color_terms(desc, max_items=FLUX2_COLOR_LOCK_TOP_K)]
+            masked_colors = _extract_masked_dominant_color_labels(img, top_k=FLUX2_COLOR_LOCK_TOP_K)
+            image_colors = masked_colors or _extract_dominant_color_labels(img, top_k=FLUX2_COLOR_LOCK_TOP_K)
+            if image_colors:
+                norm_colors = [_canonical_color_token(c) for c in image_colors]
+                high_chroma = bool(
+                    isinstance(profile.get("meanChroma"), (int, float))
+                    and float(profile.get("meanChroma")) >= 18.0
+                )
+                if high_chroma:
+                    non_neutral = [c for c in norm_colors if not _is_neutral_color_token(c)]
+                    if non_neutral:
+                        dedup_non_neutral: List[str] = []
+                        for token in non_neutral:
+                            if token not in dedup_non_neutral:
+                                dedup_non_neutral.append(token)
+                        norm_colors = dedup_non_neutral
+                # Pixel-first: descriptor colors can be appended only as weak fallback context.
+                if text_colors:
+                    for token in text_colors:
+                        if high_chroma and _is_neutral_color_token(token):
+                            continue
+                        if token not in norm_colors:
+                            norm_colors.append(token)
+                color_hints.append(norm_colors[: max(2, FLUX2_COLOR_LOCK_TOP_K)])
                 continue
-            color_hints.append(_extract_dominant_color_labels(img, top_k=FLUX2_COLOR_LOCK_TOP_K))
+
+            # Fallback only when pixel extraction fails.
+            if text_colors:
+                color_hints.append(list(text_colors)[: max(2, FLUX2_COLOR_LOCK_TOP_K)])
+            else:
+                color_hints.append([])
 
     detail_terms: List[str] = []
     if FLUX2_DETAIL_LOCK_ENABLED:
@@ -954,6 +1692,73 @@ def _build_flux2_visual_lock_clauses(
                     + "; ".join(per_item)
                     + ". Do not recolor any item. "
                 )
+    # Extra guard for neutral-tone garments where model may over-brighten toward white/silver.
+    neutral_lock_items: List[str] = []
+    max_items = max(len(color_hints), len(color_palette_metrics), len(color_profiles))
+    for idx in range(max_items):
+        colors = color_hints[idx] if idx < len(color_hints) else []
+        profile = color_profiles[idx] if idx < len(color_profiles) else {}
+        profile_is_neutral = bool(profile.get("isNeutral"))
+        head = colors[:3]
+        neutral_count = sum(1 for c in head if _is_neutral_color_token(c))
+        colors_look_neutral = bool(head) and (neutral_count >= max(1, (len(head) + 1) // 2))
+        if not (colors_look_neutral or profile_is_neutral):
+            continue
+        palette = color_palette_metrics[idx] if idx < len(color_palette_metrics) else []
+        dominant_hexes: List[str] = []
+        for entry in palette[:3]:
+            hx = str(entry.get("hex", "")).strip().upper()
+            if re.fullmatch(r"#[0-9A-F]{6}", hx):
+                dominant_hexes.append(hx)
+        target_l = profile.get("medianL")
+        target_c = profile.get("meanChroma")
+        target_b = profile.get("meanB")
+        profile_tag = ""
+        if isinstance(target_l, (int, float)) and isinstance(target_c, (int, float)):
+            profile_tag = f", L*~{float(target_l):.1f}, C*~{float(target_c):.1f}"
+            if isinstance(target_b, (int, float)):
+                profile_tag += f", b*~{float(target_b):.1f}"
+        if dominant_hexes:
+            neutral_lock_items.append(f"item {idx + 1}: {'/'.join(dominant_hexes)}{profile_tag}")
+        else:
+            neutral_lock_items.append(f"item {idx + 1}: neutral tones{profile_tag}")
+    if neutral_lock_items:
+        color_clause += (
+            "Neutral tone lock: preserve exact lightness depth and undertone from image 2 ("
+            + "; ".join(neutral_lock_items)
+            + "). Avoid over-brightening to white/cream, avoid darkening to charcoal, "
+            + "and avoid metallic/glossy silver sheen unless explicitly present in source fabric. "
+            + "Keep neutral luminance close to source (roughly +/-4 L*). "
+        )
+
+    # Profile-aware anti-exaggeration guidance for saturated and near-white items.
+    profile_lock_items: List[str] = []
+    for idx in range(max_items):
+        profile = color_profiles[idx] if idx < len(color_profiles) else {}
+        if not isinstance(profile, dict):
+            continue
+        median_l = profile.get("medianL")
+        mean_c = profile.get("meanChroma")
+        if not (isinstance(median_l, (int, float)) and isinstance(mean_c, (int, float))):
+            continue
+        palette = color_palette_metrics[idx] if idx < len(color_palette_metrics) else []
+        hue_deg = _palette_weighted_hue_deg(palette, max_colors=4)
+        if _profile_is_near_white(profile):
+            profile_lock_items.append(
+                f"item {idx + 1}: near-white base (L*~{float(median_l):.1f}, C*~{float(mean_c):.1f})"
+            )
+            continue
+        if float(mean_c) >= 18.0 and isinstance(hue_deg, (int, float)):
+            profile_lock_items.append(
+                f"item {idx + 1}: hue~{float(hue_deg):.0f} deg, L*~{float(median_l):.1f}, C*~{float(mean_c):.1f}"
+            )
+    if profile_lock_items:
+        color_clause += (
+            "Tone and saturation lock from image 2: preserve hue/lightness/saturation profile ("
+            + "; ".join(profile_lock_items)
+            + "). Avoid over-saturating, neon amplification, or warm/cool hue drift. "
+            + "Do not shift yellow toward orange/red, and do not shift white/off-white toward gray/silver. "
+        )
 
     detail_clause = ""
     if detail_terms:
@@ -976,8 +1781,145 @@ def _build_flux2_visual_lock_clauses(
         "detail_clause": detail_clause,
         "transparency_clause": transparency_clause,
         "transparency_lock": transparency_lock,
+        "neutral_tone_lock": bool(neutral_lock_items),
+        "color_profiles": color_profiles,
         "color_hints": color_hints,
+        "color_palettes": color_palettes,
+        "color_palette_metrics": color_palette_metrics,
         "detail_terms": detail_terms[:6],
+    }
+
+def _build_flux2_hex_color_guard_clause(
+    color_palette_metrics: List[List[Dict[str, object]]],
+    max_items: int = 3,
+    max_colors_per_item: int = 4,
+) -> str:
+    """
+    Stronger prompt suffix for one-shot color correction re-run.
+    """
+    if not color_palette_metrics:
+        return ""
+
+    item_lines: List[str] = []
+    for idx, palette in enumerate(color_palette_metrics[: max(1, int(max_items))], start=1):
+        if not palette:
+            continue
+        filtered_palette = _filter_palette_entries_by_area(
+            palette=palette,
+            min_area_percent=float(FLUX2_COLOR_PALETTE_MIN_AREA_PERCENT),
+            min_items=2,
+        )
+        tokens: List[str] = []
+        for entry in filtered_palette[: max(1, int(max_colors_per_item))]:
+            hx = str(entry.get("hex", "")).upper().strip()
+            if not re.fullmatch(r"#[0-9A-F]{6}", hx):
+                continue
+            area = float(entry.get("areaPercent", 0.0) or 0.0)
+            if area > 0.0:
+                tokens.append(f"{hx} (~{area:.1f}%)")
+            else:
+                tokens.append(hx)
+        if tokens:
+            item_lines.append(f"item {idx}: " + ", ".join(tokens))
+
+    if not item_lines:
+        return ""
+    return (
+        " Color-guard correction: preserve exact source palette from image 2 by hex. "
+        + "; ".join(item_lines)
+        + ". Do not shift hue, saturation, or brightness family. "
+    )
+
+def _build_single_image_color_context(
+    image: Image.Image,
+    description: str = "",
+    mask: Optional[np.ndarray] = None,
+    top_k: int = 7,
+) -> Dict[str, object]:
+    """
+    Common single-image color context used by extraction/try-on style flows.
+    """
+    use_mask = _get_clean_foreground_mask(image, mask=mask)
+    mask_source = "clean_foreground"
+    if not isinstance(use_mask, np.ndarray):
+        use_mask = _extract_alpha_mask(image, threshold=72)
+        mask_source = "alpha72"
+    if not isinstance(use_mask, np.ndarray):
+        use_mask = _extract_alpha_mask(image, threshold=24)
+        mask_source = "alpha24"
+    if not isinstance(use_mask, np.ndarray):
+        use_mask = _estimate_foreground_mask_from_border(image)
+        mask_source = "border_estimate"
+    if not isinstance(use_mask, np.ndarray):
+        mask_source = "none"
+
+    palette_metrics_full = _extract_dominant_hex_colors_with_coverage(
+        image=image,
+        mask=use_mask if isinstance(use_mask, np.ndarray) else None,
+        top_k=max(3, int(top_k)),
+    )
+    palette_metrics = _filter_palette_entries_by_area(
+        palette=palette_metrics_full,
+        min_area_percent=float(FLUX2_COLOR_PALETTE_MIN_AREA_PERCENT),
+        min_items=2,
+    )
+
+    palette_hexes: List[str] = []
+    for entry in palette_metrics:
+        hx = str(entry.get("hex", "")).strip().upper()
+        if re.fullmatch(r"#[0-9A-F]{6}", hx):
+            palette_hexes.append(hx)
+
+    profile = _extract_lab_color_profile(
+        image=image,
+        mask=use_mask if isinstance(use_mask, np.ndarray) else None,
+    )
+
+    image_colors: List[str] = []
+    for hx in palette_hexes[: max(2, int(FLUX2_COLOR_LOCK_TOP_K) + 1)]:
+        rgb = _hex_to_rgb_triplet(hx)
+        if rgb is None:
+            continue
+        token = _canonical_color_token(_nearest_color_label(rgb))
+        if token not in image_colors:
+            image_colors.append(token)
+        if len(image_colors) >= max(2, int(FLUX2_COLOR_LOCK_TOP_K)):
+            break
+    if not image_colors:
+        image_colors = _extract_masked_dominant_color_labels(image, top_k=FLUX2_COLOR_LOCK_TOP_K)
+
+    text_colors = [
+        _canonical_color_token(c)
+        for c in _extract_text_color_terms(description, max_items=FLUX2_COLOR_LOCK_TOP_K)
+    ]
+
+    hints = list(image_colors or [])
+    high_chroma = bool(
+        isinstance(profile.get("meanChroma"), (int, float))
+        and float(profile.get("meanChroma")) >= 18.0
+    )
+    if high_chroma:
+        non_neutral = [c for c in hints if not _is_neutral_color_token(c)]
+        if non_neutral:
+            dedup_non_neutral: List[str] = []
+            for token in non_neutral:
+                if token not in dedup_non_neutral:
+                    dedup_non_neutral.append(token)
+            hints = dedup_non_neutral
+    for token in text_colors:
+        if high_chroma and _is_neutral_color_token(token):
+            continue
+        if token not in hints:
+            hints.append(token)
+    hints = hints[: max(2, int(FLUX2_COLOR_LOCK_TOP_K))]
+
+    return {
+        "maskSource": mask_source,
+        "maskPixels": int(np.sum(use_mask)) if isinstance(use_mask, np.ndarray) else 0,
+        "paletteMetrics": palette_metrics,
+        "paletteHexes": palette_hexes,
+        "profile": profile if isinstance(profile, dict) else {},
+        "hints": hints,
     }
 
 def _build_flux2_targeted_prompt(
@@ -999,8 +1941,8 @@ def _build_flux2_targeted_prompt(
         identity_context = "person in image 1"
 
     prompt = (
-        "Photorealistic high-fidelity virtual try-on, premium fashion photography, "
-        "sharp details, clean background, 8k resolution. "
+        "Identity-preserving photorealistic virtual try-on image edit, not a new photoshoot. "
+        "Keep the original camera framing, background, and lighting from image 1. "
         "Use image 1 as strict identity source for face, body shape, skin tone, and pose. "
         f"TRANSFER the {target_hint} from image 2 onto the person in image 1. "
         "Match exact garment attributes from image 2: color tone, print/pattern, neckline, sleeve length, hem length, fit, and trims. "
@@ -1019,6 +1961,7 @@ def _build_flux2_targeted_prompt(
             "Replace the original top and bottom garments with the target dress silhouette. "
             "Do not keep, overlay, or blend previous tops, pants, skirts, or shorts under/over the dress. "
             "Completely occlude old clothing in the replaced region. "
+            "Do not alter face pixels, hairstyle, or body posture while replacing clothing. "
             "For lower-body fidelity, match exact skirt architecture from image 2: flare start point, "
             "ruffle/tier distribution, hem contour (including asymmetry/high-low), slit position, and train length. "
             "No layering artifacts. Ignore existing clothing design details in image 1 while preserving the person identity. "
@@ -1061,14 +2004,15 @@ def _build_flux2_targeted_prompt(
         prompt += (
             f"Identity reference from image 1: {identity_context}. "
             "Keep exact same person identity: facial features, skin tone, hair, hands, body proportions, "
-            "and scene lighting. "
+            "and scene lighting. Keep exact same head angle, facial expression, and hair silhouette. "
+            "No face replacement, no age shift, and no body-shape change. "
             "Ensure realistic fabric drape, seams, folds, and shadows."
         )
     else:
         prompt += (
             f"Person and current outfit reference from image 1: {user_description}. "
             "Keep exact same person identity: facial features, skin tone, hair, hands, body proportions, "
-            "and scene lighting. "
+            "and scene lighting. Keep exact same head angle and facial expression. "
             "Ensure realistic fabric drape, seams, folds, and shadows."
         )
     return prompt
@@ -1183,6 +2127,11 @@ def _build_flux2_runtime_negative_prompt(
     base_terms: List[str] = [
         "wrong garment color",
         "recolored fabric",
+        "over-brightened fabric",
+        "washed-out garment color",
+        "white cast on garment",
+        "metallic sheen",
+        "glossy silver cast",
         "pattern drift",
         "print placement shift",
         "texture swap",
@@ -1249,6 +2198,53 @@ def _normalize_descriptor_backend(raw: Optional[str]) -> str:
     return value
 
 
+_MINICPM_SERVICE_SESSION = requests.Session()
+_MINICPM_SERVICE_ADAPTER = requests.adapters.HTTPAdapter(
+    pool_connections=MINICPM_SERVICE_POOL_MAXSIZE,
+    pool_maxsize=MINICPM_SERVICE_POOL_MAXSIZE,
+    max_retries=0,
+)
+_MINICPM_SERVICE_SESSION.mount("http://", _MINICPM_SERVICE_ADAPTER)
+_MINICPM_SERVICE_SESSION.mount("https://", _MINICPM_SERVICE_ADAPTER)
+_MINICPM_DESCRIPTOR_CACHE: Dict[str, Tuple[float, str]] = {}
+_MINICPM_DESCRIPTOR_CACHE_LOCK = threading.Lock()
+
+
+def _minicpm_service_cache_key(kind: str, image_url: str, max_new_tokens: int, prompt: str) -> str:
+    raw = f"{kind}|{image_url}|{int(max_new_tokens)}|{prompt}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _minicpm_service_cache_get(cache_key: str) -> Optional[str]:
+    if not MINICPM_SERVICE_CACHE_ENABLED or MINICPM_SERVICE_CACHE_TTL_SECONDS <= 0:
+        return None
+    now = time.time()
+    with _MINICPM_DESCRIPTOR_CACHE_LOCK:
+        cached = _MINICPM_DESCRIPTOR_CACHE.get(cache_key)
+        if not cached:
+            return None
+        ts, value = cached
+        if (now - float(ts)) > float(MINICPM_SERVICE_CACHE_TTL_SECONDS):
+            _MINICPM_DESCRIPTOR_CACHE.pop(cache_key, None)
+            return None
+        return value
+
+
+def _minicpm_service_cache_put(cache_key: str, value: str) -> None:
+    if not MINICPM_SERVICE_CACHE_ENABLED or MINICPM_SERVICE_CACHE_TTL_SECONDS <= 0:
+        return
+    now = time.time()
+    text = str(value or "").strip()
+    if not text:
+        return
+    with _MINICPM_DESCRIPTOR_CACHE_LOCK:
+        _MINICPM_DESCRIPTOR_CACHE[cache_key] = (now, text)
+        if len(_MINICPM_DESCRIPTOR_CACHE) <= MINICPM_SERVICE_CACHE_MAX_ENTRIES:
+            return
+        oldest_key = min(_MINICPM_DESCRIPTOR_CACHE.items(), key=lambda kv: kv[1][0])[0]
+        _MINICPM_DESCRIPTOR_CACHE.pop(oldest_key, None)
+
+
 def _describe_with_minicpm_service(image_url: Optional[str], kind: str) -> str:
     """
     Fetch descriptor text from standalone MiniCPM service using source image URL.
@@ -1273,7 +2269,21 @@ def _describe_with_minicpm_service(image_url: Optional[str], kind: str) -> str:
         "max_new_tokens": int(max_new_tokens),
         "prompt": prompt,
     }
-    resp = requests.post(endpoint, json=payload, timeout=MINICPM_SERVICE_TIMEOUT_S)
+    cache_key = _minicpm_service_cache_key(
+        kind=str(kind or "").strip().lower(),
+        image_url=clean_url,
+        max_new_tokens=int(max_new_tokens),
+        prompt=prompt,
+    )
+    cached = _minicpm_service_cache_get(cache_key)
+    if cached:
+        return cached
+
+    resp = _MINICPM_SERVICE_SESSION.post(
+        endpoint,
+        json=payload,
+        timeout=(MINICPM_SERVICE_CONNECT_TIMEOUT_S, MINICPM_SERVICE_TIMEOUT_S),
+    )
     if resp.status_code != 200:
         detail = resp.text[:500]
         raise RuntimeError(
@@ -1283,7 +2293,9 @@ def _describe_with_minicpm_service(image_url: Optional[str], kind: str) -> str:
     text = str(data.get("text", "")).strip()
     if not text:
         raise RuntimeError(f"minicpm_service {kind} returned empty text")
-    return _normalize_minicpm_descriptor_text(text, kind=kind)
+    normalized = _normalize_minicpm_descriptor_text(text, kind=kind)
+    _minicpm_service_cache_put(cache_key, normalized)
+    return normalized
 
 def _resize_for_qwen_caption(image: Image.Image, max_side: int, min_side: int) -> Image.Image:
     """
@@ -1318,10 +2330,11 @@ def _describe_garment_with_backend(
     resolved = _normalize_descriptor_backend(backend)
     if resolved == "minicpm_service":
         try:
-            if image_url:
-                return _describe_with_minicpm_service(image_url=image_url, kind="garment")
+            if not image_url:
+                raise RuntimeError("minicpm_service requires a valid image URL for garment description")
+            return _describe_with_minicpm_service(image_url=image_url, kind="garment")
         except Exception as err:
-            logger.warning(f"MiniCPM service garment description failed; fallback to local/Floorence. error={err}")
+            raise RuntimeError(f"MiniCPM service garment description failed: {err}") from err
     if resolved == "minicpm":
         try:
             minicpm_img = _resize_for_qwen_caption(
@@ -1331,7 +2344,7 @@ def _describe_garment_with_backend(
             )
             return str(engine.minicpm.describe_garment(minicpm_img)).strip()
         except Exception as err:
-            logger.warning(f"MiniCPM garment description failed; fallback to Florence. error={err}")
+            raise RuntimeError(f"MiniCPM garment description failed: {err}") from err
     if resolved == "joycaption":
         try:
             return str(engine.joycaption.describe_garment(image)).strip()
@@ -1360,10 +2373,11 @@ def _describe_user_image_for_flux2(
     resolved = _normalize_descriptor_backend(backend)
     if resolved == "minicpm_service":
         try:
-            if image_url:
-                return _describe_with_minicpm_service(image_url=image_url, kind="person")
+            if not image_url:
+                raise RuntimeError("minicpm_service requires a valid image URL for person description")
+            return _describe_with_minicpm_service(image_url=image_url, kind="person")
         except Exception as err:
-            logger.warning(f"MiniCPM service user description failed; fallback to local/Floorence. error={err}")
+            raise RuntimeError(f"MiniCPM service user description failed: {err}") from err
     if resolved == "minicpm":
         try:
             minicpm_img = _resize_for_qwen_caption(
@@ -1373,7 +2387,7 @@ def _describe_user_image_for_flux2(
             )
             return str(engine.minicpm.describe_person_and_outfit(minicpm_img)).strip()
         except Exception as err:
-            logger.warning(f"MiniCPM user description failed; fallback to Florence. error={err}")
+            raise RuntimeError(f"MiniCPM user description failed: {err}") from err
     if resolved == "joycaption":
         # JoyCaption in this pipeline is garment-focused; keep user lock generic
         # unless user promptDescription is explicitly provided in request.
@@ -1488,6 +2502,325 @@ def _score_tryon_garment_fidelity(
 
     return (float(overlap), output_desc)
 
+
+def _hex_to_lab_triplet(hex_color: str) -> Optional[np.ndarray]:
+    token = str(hex_color or "").strip().lstrip("#")
+    if not re.fullmatch(r"[0-9A-Fa-f]{6}", token):
+        return None
+    r = int(token[0:2], 16)
+    g = int(token[2:4], 16)
+    b = int(token[4:6], 16)
+    return rgb_to_lab(np.array([[r, g, b]], dtype=np.uint8))[0]
+
+
+def _compute_palette_delta_e(
+    input_hexes: List[str],
+    output_hexes: List[str],
+    max_colors: int = 5,
+) -> Optional[Dict[str, object]]:
+    input_labs: List[Tuple[str, np.ndarray]] = []
+    output_labs: List[Tuple[str, np.ndarray]] = []
+
+    for hx in input_hexes[: max(1, int(max_colors))]:
+        lab = _hex_to_lab_triplet(hx)
+        if isinstance(lab, np.ndarray):
+            input_labs.append((str(hx).upper(), lab))
+    for hx in output_hexes[: max(1, int(max_colors) + 2)]:
+        lab = _hex_to_lab_triplet(hx)
+        if isinstance(lab, np.ndarray):
+            output_labs.append((str(hx).upper(), lab))
+
+    if not input_labs or not output_labs:
+        return None
+
+    drifts: List[float] = []
+    lightness_drifts: List[float] = []
+    per_color: List[Dict[str, object]] = []
+    for in_hx, in_lab in input_labs:
+        distances = [
+            (out_hx, out_lab, delta_e_cie76(in_lab, out_lab))
+            for out_hx, out_lab in output_labs
+        ]
+        if not distances:
+            continue
+        best_out_hx, best_out_lab, best_drift = min(distances, key=lambda it: it[2])
+        in_l = float(in_lab[0]) * (100.0 / 255.0)
+        out_l = float(best_out_lab[0]) * (100.0 / 255.0)
+        l_drift = abs(in_l - out_l)
+        drifts.append(float(best_drift))
+        lightness_drifts.append(float(l_drift))
+        per_color.append(
+            {
+                "input": in_hx,
+                "matchedOutput": best_out_hx,
+                "drift": round(float(best_drift), 2),
+                "lightnessDrift": round(float(l_drift), 2),
+            }
+        )
+
+    if not drifts:
+        return None
+
+    return {
+        "avgDrift": round(float(np.mean(drifts)), 2),
+        "maxDrift": round(float(np.max(drifts)), 2),
+        "avgLightnessDrift": round(float(np.mean(lightness_drifts)), 2) if lightness_drifts else 0.0,
+        "comparedColors": int(len(drifts)),
+        "perColor": per_color,
+    }
+
+
+def _score_color_fidelity(
+    output_image: Image.Image,
+    input_palettes: List[List[str]],
+    target_types: List[str],
+    input_profiles: Optional[List[Dict[str, object]]] = None,
+) -> dict:
+    """
+    Computes perceptual color drift (CIELAB DeltaE) between input garments and generated output.
+    Uses HumanParser to segment the output garment regions.
+    """
+    if not engine.parser:
+        return {
+            "status": "invalid",
+            "error": "parser_unavailable",
+            "total_drift": None,
+            "total_lightness_drift": None,
+            "total_profile_drift": None,
+            "validComparisons": 0,
+            "per_item": [],
+        }
+
+    try:
+        parsing = engine.parser.parse(output_image)
+        per_item = []
+        drifts = []
+        lightness_drifts = []
+        valid_comparisons = 0
+        profile_drifts: List[float] = []
+
+        for idx, (target_type, input_hexes) in enumerate(zip(target_types, input_palettes)):
+            if not input_hexes:
+                per_item.append({"index": idx, "type": target_type, "reason": "empty_input_palette"})
+                continue
+            
+            # Segment the specific category in the output
+            mask = engine.parser.get_mask_for_category(parsing, target_type)
+            if not isinstance(mask, np.ndarray) or int(np.sum(mask)) < 16:
+                per_item.append({"index": idx, "type": target_type, "reason": "not_segmented"})
+                continue
+
+            # Extract output palette from the mask
+            output_hexes = _extract_dominant_hex_colors(output_image, mask=mask, top_k=7)
+            if not output_hexes:
+                per_item.append({"index": idx, "type": target_type, "reason": "empty_output_palette"})
+                continue
+
+            drift_metrics = _compute_palette_delta_e(input_hexes, output_hexes, max_colors=5)
+            if not drift_metrics:
+                per_item.append(
+                    {
+                        "index": idx,
+                        "type": target_type,
+                        "input_palette": input_hexes,
+                        "output_palette": output_hexes,
+                        "reason": "invalid_palette_compare",
+                    }
+                )
+                continue
+
+            drift = float(drift_metrics["avgDrift"])
+            drifts.append(drift)
+            lightness_drifts.append(float(drift_metrics.get("avgLightnessDrift", 0.0)))
+            valid_comparisons += 1
+
+            profile_drift_value: Optional[float] = None
+            if isinstance(input_profiles, list) and idx < len(input_profiles):
+                in_profile = input_profiles[idx] if isinstance(input_profiles[idx], dict) else {}
+                out_profile = _extract_lab_color_profile(output_image, mask=mask)
+                in_med_l = in_profile.get("medianL")
+                in_mean_c = in_profile.get("meanChroma")
+                out_med_l = out_profile.get("medianL")
+                out_mean_c = out_profile.get("meanChroma")
+                if (
+                    isinstance(in_med_l, (int, float))
+                    and isinstance(in_mean_c, (int, float))
+                    and isinstance(out_med_l, (int, float))
+                    and isinstance(out_mean_c, (int, float))
+                ):
+                    l_term = abs(float(out_med_l) - float(in_med_l))
+                    # Penalize chroma inflation more strongly for neutral garments.
+                    c_term = max(0.0, float(out_mean_c) - float(in_mean_c))
+                    profile_drift_value = float(l_term + (0.8 * c_term))
+                    profile_drifts.append(profile_drift_value)
+
+            per_item.append({
+                "index": idx,
+                "type": target_type,
+                "input_palette": [str(h).upper() for h in input_hexes],
+                "output_palette": [str(h).upper() for h in output_hexes],
+                "drift": round(drift, 2),
+                "maxDrift": drift_metrics["maxDrift"],
+                "lightnessDrift": drift_metrics.get("avgLightnessDrift", 0.0),
+                "profileDrift": round(profile_drift_value, 2) if isinstance(profile_drift_value, (int, float)) else None,
+                "comparedColors": drift_metrics["comparedColors"],
+                "perColor": drift_metrics["perColor"],
+            })
+
+        if not drifts:
+            return {
+                "total_drift": None,
+                "total_lightness_drift": None,
+                "total_profile_drift": None,
+                "validComparisons": int(valid_comparisons),
+                "per_item": per_item,
+                "status": "invalid",
+                "reason": "no_valid_color_comparisons",
+            }
+
+        total_drift = round(float(np.mean(drifts)), 2)
+        total_lightness_drift = round(float(np.mean(lightness_drifts)), 2) if lightness_drifts else 0.0
+        total_profile_drift = round(float(np.mean(profile_drifts)), 2) if profile_drifts else None
+        return {
+            "total_drift": total_drift,
+            "total_lightness_drift": total_lightness_drift,
+            "total_profile_drift": total_profile_drift,
+            "validComparisons": int(valid_comparisons),
+            "per_item": per_item,
+            "status": "success"
+        }
+    except Exception as e:
+        logger.warning(f"Color fidelity scoring failed: {e}")
+        return {
+            "status": "invalid",
+            "error": str(e),
+            "total_drift": None,
+            "total_lightness_drift": None,
+            "total_profile_drift": None,
+            "validComparisons": 0,
+            "per_item": [],
+        }
+
+def _apply_neutral_post_color_calibration(
+    output_image: Image.Image,
+    source_profile: Dict[str, object],
+    target_type: str,
+) -> Tuple[Image.Image, Dict[str, object]]:
+    """
+    Deterministic neutral-tone correction pass on selected result.
+    Keeps structure, adjusts only garment chroma/lightness drift.
+    """
+    try:
+        if not engine.parser:
+            return output_image, {"applied": False, "reason": "parser_unavailable"}
+        if not isinstance(source_profile, dict) or not source_profile.get("isNeutral"):
+            return output_image, {"applied": False, "reason": "source_not_neutral"}
+
+        parsing = engine.parser.parse(output_image)
+        mask = engine.parser.get_mask_for_category(parsing, target_type)
+        if not isinstance(mask, np.ndarray) or int(np.sum(mask)) < 64:
+            return output_image, {"applied": False, "reason": "mask_unavailable"}
+
+        out_profile = _extract_lab_color_profile(output_image, mask=mask)
+        if not out_profile:
+            return output_image, {"applied": False, "reason": "output_profile_unavailable"}
+
+        in_l = source_profile.get("medianL")
+        in_a = source_profile.get("meanA")
+        in_b = source_profile.get("meanB")
+        out_l = out_profile.get("medianL")
+        out_a = out_profile.get("meanA")
+        out_b = out_profile.get("meanB")
+        if not all(isinstance(v, (int, float)) for v in (in_l, in_a, in_b, out_l, out_a, out_b)):
+            return output_image, {"applied": False, "reason": "profile_values_invalid"}
+
+        delta_l = float(in_l) - float(out_l)
+        delta_a = float(in_a) - float(out_a)
+        delta_b = float(in_b) - float(out_b)
+
+        if abs(delta_l) > float(FLUX2_NEUTRAL_CALIBRATION_MAX_DELTA_L):
+            return output_image, {
+                "applied": False,
+                "reason": "deltaL_exceeds_safety_limit",
+                "deltaL": round(delta_l, 2),
+                "deltaA": round(delta_a, 2),
+                "deltaB": round(delta_b, 2),
+                "limit": float(FLUX2_NEUTRAL_CALIBRATION_MAX_DELTA_L),
+                "sourceMedianL": round(float(in_l), 2),
+                "outputMedianL": round(float(out_l), 2),
+            }
+
+        if (
+            delta_l < -float(FLUX2_NEUTRAL_CALIBRATION_MAX_DARKEN_LIGHT_OUTPUT)
+            and float(out_l) > float(FLUX2_NEUTRAL_CALIBRATION_LIGHT_OUTPUT_MIN_L)
+        ):
+            return output_image, {
+                "applied": False,
+                "reason": "refusing_to_darken_light_output",
+                "deltaL": round(delta_l, 2),
+                "deltaA": round(delta_a, 2),
+                "deltaB": round(delta_b, 2),
+                "sourceMedianL": round(float(in_l), 2),
+                "outputMedianL": round(float(out_l), 2),
+            }
+
+        if (
+            delta_l > float(FLUX2_NEUTRAL_CALIBRATION_MAX_BRIGHTEN_DARK_OUTPUT)
+            and float(out_l) < float(FLUX2_NEUTRAL_CALIBRATION_DARK_OUTPUT_MAX_L)
+        ):
+            return output_image, {
+                "applied": False,
+                "reason": "refusing_to_excessively_brighten_dark_output",
+                "deltaL": round(delta_l, 2),
+                "deltaA": round(delta_a, 2),
+                "deltaB": round(delta_b, 2),
+                "sourceMedianL": round(float(in_l), 2),
+                "outputMedianL": round(float(out_l), 2),
+            }
+
+        if abs(delta_l) < 0.8 and abs(delta_a) < 0.8 and abs(delta_b) < 0.8:
+            return output_image, {
+                "applied": False,
+                "reason": "drift_too_small",
+                "deltaL": round(delta_l, 2),
+                "deltaA": round(delta_a, 2),
+                "deltaB": round(delta_b, 2),
+                "sourceMedianL": round(float(in_l), 2),
+                "outputMedianL": round(float(out_l), 2),
+            }
+
+        import cv2
+        arr = np.array(output_image.convert("RGB"), dtype=np.uint8)
+        lab = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB).astype(np.float32)
+        m = np.asarray(mask).astype(np.float32)
+        if m.shape[:2] != arr.shape[:2]:
+            m = resize_mask_to_image(m, arr.shape[1], arr.shape[0])
+        m = np.clip(m, 0.0, 1.0)
+        if cv2 is not None:
+            m = cv2.GaussianBlur(m, (5, 5), 0)
+        m3 = np.repeat(m[:, :, None], 3, axis=2)
+
+        # Conservative correction factors to avoid texture flattening.
+        lab[:, :, 0] = np.clip(lab[:, :, 0] + ((delta_l * (255.0 / 100.0) * 0.65) * m), 0, 255)
+        lab[:, :, 1] = np.clip(lab[:, :, 1] + ((delta_a * 0.70) * m), 0, 255)
+        lab[:, :, 2] = np.clip(lab[:, :, 2] + ((delta_b * 0.85) * m), 0, 255)
+
+        corrected = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2RGB)
+        blended = ((corrected.astype(np.float32) * m3) + (arr.astype(np.float32) * (1.0 - m3))).clip(0, 255).astype(np.uint8)
+        out_image = Image.fromarray(blended, mode="RGB")
+        post_profile = _extract_lab_color_profile(out_image, mask=mask)
+        post_l = post_profile.get("medianL") if isinstance(post_profile, dict) else None
+        return out_image, {
+            "applied": True,
+            "deltaL": round(delta_l, 2),
+            "deltaA": round(delta_a, 2),
+            "deltaB": round(delta_b, 2),
+            "sourceMedianL": round(float(in_l), 2),
+            "outputMedianL": round(float(out_l), 2),
+            "postMedianL": round(float(post_l), 2) if isinstance(post_l, (int, float)) else None,
+        }
+    except Exception as e:
+        return output_image, {"applied": False, "reason": f"error:{e}"}
 
 def _score_untargeted_region_preservation(
     reference_image: Image.Image,
@@ -3552,6 +4885,178 @@ def _build_flux2_garment_only_prompt(
         f"and color palette.{color_lock_clause} Garment details: {clean_desc}"
     )
 
+def _build_flux2_single_garment_extract_prompt(
+    garment_type: str,
+    prompt_description: str,
+    category_text: Optional[str] = None,
+    dominant_color_hexes: Optional[List[str]] = None,
+    color_hints: Optional[List[str]] = None,
+    color_profile: Optional[Dict[str, object]] = None,
+) -> str:
+    gtype = _normalize_garment_type(garment_type) or "top"
+    explicit_category = str(category_text or _parser_candidate_category_text(gtype)).strip().lower()
+    clean_desc = " ".join(str(prompt_description or "").split()).strip()
+    if not clean_desc:
+        clean_desc = (
+            "category=unknown; type=unknown; colors=unknown; pattern=unknown; material=unknown; "
+            "silhouette=unknown; construction=unknown; details=unknown; coverage=unknown; preserve=unknown"
+        )
+    color_lock_clause = ""
+    hexes = [str(v).strip() for v in (dominant_color_hexes or []) if str(v).strip()]
+    if hexes:
+        color_lock_clause = (
+            f" Keep exact source colors with strict palette lock: {', '.join(hexes)}. "
+            "Do not recolor and do not shift hue/saturation/value."
+        )
+    color_hint_clause = ""
+    hints = [str(v).strip().lower() for v in (color_hints or []) if str(v).strip()]
+    if hints:
+        color_hint_clause = (
+            " Keep color-family fidelity to source tones: "
+            + ", ".join(hints[: max(2, FLUX2_COLOR_LOCK_TOP_K)])
+            + ". "
+        )
+    profile_clause = ""
+    profile_obj = color_profile if isinstance(color_profile, dict) else {}
+    if profile_obj:
+        median_l = profile_obj.get("medianL")
+        mean_c = profile_obj.get("meanChroma")
+        if isinstance(median_l, (int, float)) and isinstance(mean_c, (int, float)):
+            profile_clause = (
+                f" Preserve source tone profile (target L*≈{float(median_l):.1f}, C*≈{float(mean_c):.1f}); "
+                "avoid washout, over-darkening, or metallic sheen drift. "
+            )
+
+    type_lock_clause = {
+        "top": (
+            "Generate only a top garment. Never generate bottoms, dress silhouettes, legs, or shoes. "
+            "Keep neckline, sleeve geometry, shoulder width, and hem shape identical to reference."
+        ),
+        "bottom": (
+            "Generate only a bottom garment. Never generate tops, jackets, dresses, torso, face, or arms. "
+            "Keep waistline, rise, leg width, inseam length, and hem opening identical to reference."
+        ),
+        "dress": (
+            "Generate only a single dress garment with full one-piece replacement behavior. "
+            "Never generate separate top+bottom combinations or layered two-piece outfits. "
+            "Keep bodice-to-skirt continuity, waist seam placement, and hem length identical to reference."
+        ),
+    }.get(gtype, "Generate only one garment from the requested category.")
+
+    return (
+        "Extract and regenerate a standalone ecommerce product image from the provided garment crop. "
+        "No person, no mannequin, no body parts, no hanger, no props, no text, no watermark. "
+        "Use pure white background (RGB 255,255,255). Keep one centered garment with full silhouette visible. "
+        "Output must be vertically composed in 2:3 ratio and center aligned. "
+        f"Generate only one {explicit_category} category garment and nothing from other categories. "
+        f"{type_lock_clause}{color_lock_clause}{color_hint_clause}{profile_clause}"
+        "Preserve exact garment structure, fabric, texture, print placement, seams, pleats, closures, and trims. "
+        f"Garment descriptor: {clean_desc}"
+    )
+
+def _build_flux2_single_garment_extract_negative_prompt(
+    *,
+    garment_type: str,
+    custom_negative_prompt: str = "",
+) -> str:
+    gtype = _normalize_garment_type(garment_type) or "top"
+    custom = " ".join(str(custom_negative_prompt or "").split()).strip()
+    parts: List[str] = []
+    if custom:
+        parts.append(custom)
+
+    parts.append(
+        "person, human body, face, eyes, hair, skin, hands, fingers, arms, legs, feet, mannequin, hanger, "
+        "background scene, props, accessories, bag, jewelry, watermark, text, logo"
+    )
+    parts.append(
+        "wrong garment color, recolored fabric, hue shift, saturation drift, value drift, pattern drift, print swap, "
+        "texture swap, material swap, wrong garment category, extra garment, duplicate garment, merged garments, "
+        "broken silhouette, distorted seams, wrong neckline, wrong sleeve length, wrong waistline, wrong hem length, "
+        "blur, low detail, overexposed, underexposed"
+    )
+
+    if gtype == "top":
+        parts.append(
+            "pants, trousers, skirt, shorts, dress, lower-body garment, shoes, lower-body structure, bottom garment overlay"
+        )
+    elif gtype == "bottom":
+        parts.append(
+            "shirt, blouse, t-shirt, jacket, hoodie, dress, upper-body garment, torso garment overlay, sleeves"
+        )
+    elif gtype == "dress":
+        parts.append(
+            "two-piece outfit, separate top and bottom, skirt with separate blouse, trouser plus shirt combo, "
+            "incomplete dress replacement, split bodice, split hemline"
+        )
+
+    return " | ".join([p for p in parts if p]).strip()
+
+def _select_single_garment_candidate(
+    image: Image.Image,
+    garment_type: str,
+) -> tuple[Image.Image, dict]:
+    normalized_type = _normalize_garment_type(garment_type) or "top"
+    attempts: List[dict] = []
+
+    builders = [
+        ("unified_square_split", _build_parser_unified_square_split_candidates),
+        ("component_first", _build_parser_square_candidates),
+    ]
+    for strategy_name, builder in builders:
+        try:
+            candidates = builder(
+                image=image,
+                requested_type=normalized_type,
+                min_component_area_ratio=max(0.001, float(ANALYZE_PARSER_MIN_AREA_RATIO)),
+                square_padding_ratio=0.12,
+            )
+            filtered = [
+                c for c in candidates
+                if _normalize_garment_type(str(c.get("type") or "")) == normalized_type
+            ]
+            attempts.append(
+                {
+                    "strategy": strategy_name,
+                    "candidate_count": len(filtered),
+                }
+            )
+            if not filtered:
+                continue
+
+            selected = filtered[0]
+            selected_img = selected.get("_object_cutout_image") or selected.get("_preview_image") or selected.get("_crop_image")
+            if not isinstance(selected_img, Image.Image):
+                sx0, sy0, sx1, sy1 = [int(v) for v in (selected.get("section_bbox") or selected.get("bbox") or [0, 0, image.width, image.height])]
+                selected_img = image.crop((sx0, sy0, sx1, sy1)).convert("RGB")
+
+            if selected_img.mode == "RGBA":
+                selected_img = _flatten_rgba_on_white(selected_img)
+            else:
+                selected_img = selected_img.convert("RGB")
+
+            meta = {
+                "strategy": strategy_name,
+                "selectedIndex": 0,
+                "selectedType": normalized_type,
+                "candidateCount": len(filtered),
+                "selectedCandidate": _to_public_parser_candidate(selected),
+                "attempts": attempts,
+            }
+            return selected_img, meta
+        except Exception as err:
+            attempts.append(
+                {
+                    "strategy": strategy_name,
+                    "candidate_count": 0,
+                    "error": str(err),
+                }
+            )
+
+    raise RuntimeError(
+        f"No garment component found for requested type={normalized_type}. attempts={attempts}"
+    )
+
 def _to_public_parser_candidate(item: dict) -> dict:
     return {k: v for k, v in item.items() if not str(k).startswith("_")}
 
@@ -4322,6 +5827,7 @@ def _extract_cloth_from_crop(
     crop: Image.Image,
     garment_type: str,
     enforce_safety_guards: bool = True,
+    allow_top_dress_backfill: bool = True,
 ) -> tuple[Image.Image, dict]:
     """
     High-quality garment extraction from a person/mannequin image.
@@ -4345,7 +5851,7 @@ def _extract_cloth_from_crop(
 
         # Some FASHN parser outputs place upper garments under dress-like class IDs.
         # For top extraction only, backfill with dress ID when top mask is too small.
-        if ANALYZE_PARSER_TOP_DRESS_BACKFILL and selected_type in {"top", "outer"}:
+        if allow_top_dress_backfill and ANALYZE_PARSER_TOP_DRESS_BACKFILL and selected_type in {"top", "outer"}:
             label2id = _parser_runtime_label2id()
             top_id = label2id.get("top")
             dress_id = label2id.get("dress")
@@ -5023,6 +6529,7 @@ class Flux2TryonRequest(BaseModel):
     description_backend: Optional[str] = None
     description_compare: bool = False
     negative_prompt: Optional[str] = None
+    disable_neutral_calibration: bool = False
     steps: int = Field(default=6, ge=4, le=30)
     seed: int = Field(default=23, ge=0, le=2147483647)
 
@@ -5399,6 +6906,461 @@ async def analyze_parser_joycaption(request: ParserJoyCaptionAnalyzeRequest):
     except Exception as err:
         logger.error(f"Parser JoyCaption analyze failed: {err}")
         raise HTTPException(status_code=500, detail=str(err))
+
+@app.post("/v1/flux2/extract-garment")
+async def flux2_extract_single_garment(
+    file: Optional[UploadFile] = File(None),
+    image: Optional[UploadFile] = File(None),
+    garment_type: Optional[str] = Form(None, alias="type"),
+    garmentType: Optional[str] = Form(None),
+    prompt_description: Optional[str] = Form(None),
+    promptDescription: Optional[str] = Form(None),
+    description_backend: Optional[str] = Form(None),
+    descriptionBackend: Optional[str] = Form(None),
+    negative_prompt: Optional[str] = Form(None),
+    negativePrompt: Optional[str] = Form(None),
+    steps: int = Form(FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS, ge=4, le=30),
+    seed: int = Form(FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_SEED, ge=0, le=2147483647),
+    upload_debug_images: bool = Form(FLUX2_SINGLE_GARMENT_EXTRACT_UPLOAD_DEBUG),
+    use_full_image_context: bool = Form(True),
+    strict_section_enforcement: bool = Form(True),
+    use_parser_board_reference: bool = Form(False),
+    use_parser_post_extract: bool = Form(False),
+):
+    """
+    Single-garment extraction API:
+    1) Accept one uploaded garment image.
+    2) Build prompt from MiniCPM (or provided promptDescription).
+    3) Run Flux2 garment-only generation with strict negative prompt.
+    4) Return 2:3 center-aligned extracted garment output + full metadata.
+    """
+    t0 = time.time()
+    request_id = str(uuid.uuid4())
+    stage_timings = {
+        "read_input_s": 0.0,
+        "parser_select_s": 0.0,
+        "descriptor_s": 0.0,
+        "prompt_build_s": 0.0,
+        "flux_generation_s": 0.0,
+        "flux_extract_s": 0.0,
+        "upload_s": 0.0,
+        "api_total_s": 0.0,
+    }
+    warnings: List[str] = []
+    input_summary = {
+        "requestId": request_id,
+        "garmentTypeRaw": "",
+        "garmentTypeResolved": "",
+        "filename": "",
+        "contentType": "",
+        "bytes": 0,
+        "steps": int(steps),
+        "seed": int(seed),
+        "descriptionBackendRequested": "",
+        "descriptionBackendResolved": "",
+        "hasPromptDescription": False,
+        "hasCustomNegativePrompt": False,
+        "useFullImageContext": bool(use_full_image_context),
+        "strictSectionEnforcement": bool(strict_section_enforcement),
+        "useParserBoardReference": bool(use_parser_board_reference),
+        "useParserPostExtract": bool(use_parser_post_extract),
+    }
+
+    def _build_error_response(
+        *,
+        code: str,
+        message: str,
+        status_code: int,
+        details: Optional[dict] = None,
+    ) -> dict:
+        stage_timings["api_total_s"] = round(time.time() - t0, 4)
+        payload = {
+            "status": int(status_code),
+            "data": {
+                "result": "REJECTED",
+                "requestId": request_id,
+                "error": {
+                    "code": str(code or "EXTRACT_ERROR"),
+                    "message": str(message or "Garment extraction failed"),
+                    "statusCode": int(status_code),
+                },
+                "meta": {
+                    "stageTimings": stage_timings,
+                    "input": input_summary,
+                    "warnings": warnings,
+                },
+            },
+            "message": "",
+        }
+        if isinstance(details, dict) and details:
+            payload["data"]["error"]["details"] = details
+        return payload
+
+    try:
+        upload = file or image
+        if upload is None:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "IMAGE_REQUIRED", "message": "Provide one image file using `file` or `image`."},
+            )
+
+        raw_type = str(garment_type or garmentType or "").strip()
+        resolved_type = _normalize_garment_type(raw_type)
+        if resolved_type not in {"top", "bottom", "dress"}:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "code": "INVALID_GARMENT_TYPE",
+                    "message": "type/garmentType must be one of: top, bottom, dress.",
+                    "details": {"received": raw_type},
+                },
+            )
+
+        t_stage = time.time()
+        image_bytes = await upload.read()
+        stage_timings["read_input_s"] = round(time.time() - t_stage, 4)
+        if not image_bytes:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "EMPTY_IMAGE", "message": "Uploaded file is empty."},
+            )
+        if len(image_bytes) > ANALYZE_MAX_FILE_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail={
+                    "code": "FILE_TOO_LARGE",
+                    "message": f"Image must be <= {ANALYZE_MAX_FILE_BYTES} bytes.",
+                    "details": {"maxBytes": ANALYZE_MAX_FILE_BYTES, "receivedBytes": len(image_bytes)},
+                },
+            )
+
+        try:
+            source_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        except Exception as decode_err:
+            raise HTTPException(
+                status_code=422,
+                detail={"code": "INVALID_IMAGE", "message": f"Could not decode image: {decode_err}"},
+            ) from decode_err
+
+        desc_backend_raw = str(description_backend or descriptionBackend or FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND).strip()
+        requested_backend = _normalize_descriptor_backend(desc_backend_raw)
+        # This endpoint is MiniCPM-first by design.
+        resolved_backend = requested_backend if requested_backend in {"minicpm", "minicpm_service"} else "minicpm"
+
+        provided_prompt = " ".join(str(prompt_description or promptDescription or "").split()).strip()
+        provided_negative = " ".join(str(negative_prompt or negativePrompt or "").split()).strip()
+
+        input_summary["garmentTypeRaw"] = raw_type
+        input_summary["garmentTypeResolved"] = resolved_type
+        input_summary["filename"] = str(upload.filename or "")
+        input_summary["contentType"] = str(upload.content_type or "")
+        input_summary["bytes"] = len(image_bytes)
+        input_summary["descriptionBackendRequested"] = requested_backend
+        input_summary["descriptionBackendResolved"] = resolved_backend
+        input_summary["hasPromptDescription"] = bool(provided_prompt)
+        input_summary["hasCustomNegativePrompt"] = bool(provided_negative)
+
+        input_image_url = None
+        if bool(upload_debug_images):
+            try:
+                input_image_url = _upload_or_raise(image_bytes, container=VTO_OUTPUT_CONTAINER)
+            except Exception as upload_in_err:
+                warnings.append(f"input_upload_failed:{upload_in_err}")
+
+        async with gpu_semaphore:
+            person_image_for_flux = source_image
+            board_image_for_flux = source_image
+            descriptor_image = source_image
+            selected_candidate_obj: dict = {}
+
+            if bool(use_full_image_context):
+                parser_meta = {
+                    "strategy": "full_image_context",
+                    "selectedIndex": 0,
+                    "selectedType": resolved_type,
+                    "candidateCount": 1,
+                    "selectedCandidate": None,
+                    "attempts": [],
+                }
+                stage_timings["parser_select_s"] = 0.0
+                # Optional parser assist:
+                # keep full image for person/context, but use focused garment crop as board reference.
+                if bool(use_parser_board_reference) and engine.parser is not None:
+                    t_stage = time.time()
+                    try:
+                        focused_board, focused_meta = _select_single_garment_candidate(
+                            image=source_image,
+                            garment_type=resolved_type,
+                        )
+                        board_image_for_flux = focused_board
+                        descriptor_image = focused_board
+                        selected_candidate_obj = dict(focused_meta.get("selectedCandidate") or {})
+                        parser_meta["boardReferenceSource"] = "parser_candidate"
+                        parser_meta["boardReferenceStrategy"] = str(focused_meta.get("strategy") or "")
+                        parser_meta["boardReferenceCandidateCount"] = int(focused_meta.get("candidateCount") or 0)
+                        parser_meta["selectedCandidate"] = selected_candidate_obj or None
+                        stage_timings["parser_select_s"] = round(time.time() - t_stage, 4)
+                    except Exception as parser_assist_err:
+                        warnings.append(f"parser_board_reference_unavailable:{parser_assist_err}")
+            else:
+                if engine.parser is None:
+                    raise HTTPException(
+                        status_code=503,
+                        detail={"code": "PARSER_UNAVAILABLE", "message": "Human parser is required when use_full_image_context=false."},
+                    )
+                t_stage = time.time()
+                selected_crop, parser_meta = _select_single_garment_candidate(
+                    image=source_image,
+                    garment_type=resolved_type,
+                )
+                person_image_for_flux = selected_crop
+                board_image_for_flux = selected_crop
+                descriptor_image = selected_crop
+                selected_candidate_obj = dict(parser_meta.get("selectedCandidate") or {})
+                stage_timings["parser_select_s"] = round(time.time() - t_stage, 4)
+
+            selected_crop_bytes_io = io.BytesIO()
+            descriptor_image.save(selected_crop_bytes_io, format="PNG")
+            selected_crop_bytes = selected_crop_bytes_io.getvalue()
+
+            selected_crop_url = None
+            if bool(upload_debug_images) or resolved_backend == "minicpm_service":
+                try:
+                    selected_crop_url = _upload_or_raise(selected_crop_bytes, container=VTO_OUTPUT_CONTAINER)
+                except Exception as selected_upload_err:
+                    warnings.append(f"selected_crop_upload_failed:{selected_upload_err}")
+
+            if resolved_backend == "minicpm_service":
+                if not str(selected_crop_url or "").startswith("http"):
+                    warnings.append("minicpm_service_requires_http_url_fallback_to_local_minicpm")
+                    resolved_backend = "minicpm"
+                    input_summary["descriptionBackendResolved"] = resolved_backend
+
+            t_stage = time.time()
+            if provided_prompt:
+                garment_desc = provided_prompt
+                prompt_source = "request"
+            else:
+                garment_desc = _describe_garment_with_backend(
+                    image=descriptor_image,
+                    backend=resolved_backend,
+                    image_url=selected_crop_url,
+                )
+                garment_desc = " ".join(str(garment_desc or "").split()).strip()
+                prompt_source = resolved_backend
+            stage_timings["descriptor_s"] = round(time.time() - t_stage, 4)
+            if not garment_desc:
+                raise HTTPException(
+                    status_code=502,
+                    detail={"code": "PROMPT_GENERATION_FAILED", "message": "Could not generate garment prompt description."},
+                )
+
+            selected_candidate = selected_candidate_obj if isinstance(selected_candidate_obj, dict) else {}
+            parser_hexes = (
+                [str(v) for v in (selected_candidate.get("dominant_color_hexes") or []) if str(v).strip()]
+                if isinstance(selected_candidate, dict)
+                else []
+            )
+            input_color_ctx = _build_single_image_color_context(
+                image=descriptor_image,
+                description=garment_desc,
+                mask=None,
+                top_k=7,
+            )
+            dominant_hexes = [str(v) for v in (input_color_ctx.get("paletteHexes") or []) if str(v).strip()]
+            if not dominant_hexes:
+                dominant_hexes = [str(v) for v in parser_hexes if str(v).strip()]
+            if not dominant_hexes:
+                dominant_hexes = _extract_dominant_hex_colors(
+                    image=descriptor_image,
+                    mask=None,
+                    top_k=4,
+                )
+            color_hints = [str(v) for v in (input_color_ctx.get("hints") or []) if str(v).strip()]
+            color_profile = input_color_ctx.get("profile") if isinstance(input_color_ctx.get("profile"), dict) else {}
+            category_text = str((selected_candidate or {}).get("category_text") or resolved_type).strip()
+
+            t_stage = time.time()
+            flux_prompt = _build_flux2_single_garment_extract_prompt(
+                garment_type=resolved_type,
+                prompt_description=garment_desc,
+                category_text=category_text,
+                dominant_color_hexes=dominant_hexes,
+                color_hints=color_hints,
+                color_profile=color_profile,
+            )
+            built_negative_prompt = _build_flux2_single_garment_extract_negative_prompt(
+                garment_type=resolved_type,
+                custom_negative_prompt=provided_negative,
+            )
+            stage_timings["prompt_build_s"] = round(time.time() - t_stage, 4)
+
+            t_stage = time.time()
+            flux_result = engine.flux2.run_tryon(
+                person_image=person_image_for_flux,
+                board_image=board_image_for_flux,
+                prompt=flux_prompt,
+                steps=int(steps),
+                seed=int(seed),
+                negative_prompt=built_negative_prompt,
+            )
+            stage_timings["flux_generation_s"] = round(time.time() - t_stage, 4)
+
+            flux_raw_img = flux_result["image"].convert("RGB")
+            raw_buf = io.BytesIO()
+            flux_raw_img.save(raw_buf, format="PNG")
+            raw_bytes = raw_buf.getvalue()
+
+            t_stage = time.time()
+            extraction_warning = ""
+            extraction_mode = "parser_extract_then_postprocess"
+            if bool(use_parser_post_extract):
+                try:
+                    extracted_rgba, extraction_meta = _extract_cloth_from_crop(
+                        flux_raw_img,
+                        resolved_type,
+                        enforce_safety_guards=True,
+                        allow_top_dress_backfill=not bool(strict_section_enforcement),
+                    )
+                    ext_buf = io.BytesIO()
+                    extracted_rgba.save(ext_buf, format="PNG")
+                    extracted_bytes = ext_buf.getvalue()
+                    final_bytes, postprocess_meta = _postprocess_extracted_garment_bytes(
+                        extracted_bytes,
+                        garment_type=resolved_type,
+                    )
+                except Exception as extract_err:
+                    extraction_warning = str(extract_err)
+                    extraction_mode = "crop_then_aspect_only_fallback"
+                    extraction_meta = {
+                        "path": extraction_mode,
+                        "warning": extraction_warning,
+                    }
+                    final_bytes, postprocess_meta = _crop_and_fit_garment_bytes(raw_bytes)
+            else:
+                extraction_mode = "crop_then_aspect_only_no_parser"
+                extraction_meta = {
+                    "path": extraction_mode,
+                    "parserSkipped": True,
+                }
+                final_bytes, postprocess_meta = _crop_and_fit_garment_bytes(raw_bytes)
+
+            try:
+                final_img = Image.open(io.BytesIO(final_bytes))
+                if final_img.mode not in {"RGB", "RGBA"}:
+                    final_img = final_img.convert("RGBA")
+                final_img = _fit_image_to_aspect(final_img, aspect_w=2, aspect_h=3)
+                final_buf = io.BytesIO()
+                final_img.save(final_buf, format="PNG")
+                final_bytes = final_buf.getvalue()
+            except Exception as force_ratio_err:
+                warnings.append(f"force_2x3_failed:{force_ratio_err}")
+                final_img = Image.open(io.BytesIO(final_bytes)).convert("RGBA")
+
+            output_color_ctx = _build_single_image_color_context(
+                image=final_img.convert("RGB"),
+                description="",
+                mask=_extract_alpha_mask(final_img, threshold=24),
+                top_k=7,
+            )
+            color_compare = _compute_palette_delta_e(
+                input_hexes=[str(v) for v in (input_color_ctx.get("paletteHexes") or []) if str(v).strip()],
+                output_hexes=[str(v) for v in (output_color_ctx.get("paletteHexes") or []) if str(v).strip()],
+                max_colors=5,
+            )
+            stage_timings["flux_extract_s"] = round(time.time() - t_stage, 4)
+
+            t_stage = time.time()
+            raw_output_url = _upload_or_raise(raw_bytes, container=VTO_OUTPUT_CONTAINER)
+            final_output_url = _upload_or_raise(final_bytes, container=VTO_OUTPUT_CONTAINER)
+            stage_timings["upload_s"] = round(time.time() - t_stage, 4)
+
+        stage_timings["api_total_s"] = round(time.time() - t0, 4)
+        process_trace = [
+            {"stage": "read_input", "seconds": stage_timings["read_input_s"]},
+            {"stage": "parser_select", "seconds": stage_timings["parser_select_s"]},
+            {"stage": "descriptor", "seconds": stage_timings["descriptor_s"]},
+            {"stage": "prompt_build", "seconds": stage_timings["prompt_build_s"]},
+            {"stage": "flux_generation", "seconds": stage_timings["flux_generation_s"]},
+            {"stage": "flux_extract", "seconds": stage_timings["flux_extract_s"]},
+            {"stage": "upload", "seconds": stage_timings["upload_s"]},
+        ]
+
+        payload = _build_success_payload(
+            data={
+                "result": "ACCEPTED",
+                "requestId": request_id,
+                "api": "/v1/flux2/extract-garment",
+                "input": input_summary,
+                "parser": parser_meta,
+                "descriptor": {
+                    "source": prompt_source,
+                    "backendRequested": requested_backend,
+                    "backendResolved": resolved_backend,
+                    "promptDescription": garment_desc,
+                },
+                "prompts": {
+                    "fluxPrompt": flux_prompt,
+                    "negativePrompt": built_negative_prompt,
+                    "negativePromptSource": "request" if provided_negative else "auto",
+                    "dominantHexesUsed": dominant_hexes,
+                },
+                "flux": {
+                    "steps": int(steps),
+                    "seed": int(seed),
+                    "latency_s": round(float(flux_result.get("latency", 0.0)), 4),
+                    "metadata": flux_result.get("metadata", {}),
+                },
+                "color": {
+                    "input": input_color_ctx,
+                    "output": output_color_ctx,
+                    "compare": color_compare,
+                },
+                "extraction": {
+                    "mode": extraction_mode,
+                    "warning": extraction_warning or None,
+                    "meta": extraction_meta or {},
+                    "postprocess": postprocess_meta or {},
+                    "outputAspect": "2:3",
+                    "centerAligned": True,
+                },
+                "outputs": {
+                    "inputImageUrl": input_image_url,
+                    "selectedCropUrl": selected_crop_url,
+                    "rawOutputUrl": raw_output_url,
+                    "rawOutputPurpose": "debug_before_parser_extraction",
+                    "outputUrl": final_output_url or raw_output_url,
+                },
+                "stageTimings": stage_timings,
+                "processTrace": process_trace,
+                "warnings": warnings,
+            },
+            status_code=200,
+            message="",
+        )
+        return _json_response(payload)
+    except HTTPException as he:
+        detail = he.detail if isinstance(he.detail, dict) else {"message": str(he.detail)}
+        code = str(detail.get("code") or "REQUEST_INVALID")
+        message = str(detail.get("message") or "Request failed")
+        details = detail.get("details") if isinstance(detail.get("details"), dict) else None
+        return _json_response(
+            _build_error_response(
+                code=code,
+                message=message,
+                status_code=he.status_code,
+                details=details,
+            )
+        )
+    except Exception as err:
+        logger.error(f"Flux2 single garment extraction failed: {err}")
+        return _json_response(
+            _build_error_response(
+                code="EXTRACT_INTERNAL_ERROR",
+                message=str(err),
+                status_code=500,
+            )
+        )
 
 @app.post("/analyze")
 @app.post("/analzye")
@@ -6230,6 +8192,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
     t0 = time.time()
     request_id = str(uuid.uuid4())
     descriptor_backend = _normalize_descriptor_backend(request.description_backend)
+    request_disable_neutral_calibration = bool(request.disable_neutral_calibration)
     stage_timings = {
         "download_user_image_s": 0.0,
         "download_products_s": 0.0,
@@ -6239,6 +8202,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
         "board_build_s": 0.0,
         "prompt_build_s": 0.0,
         "flux_generation_sum_s": 0.0,
+        "candidate_scoring_sum_s": 0.0,
         "upload_s": 0.0,
     }
     input_summary = {
@@ -6251,6 +8215,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
         "descriptionBackendResolved": descriptor_backend,
         "descriptionCompareRequested": bool(request.description_compare),
         "hasCustomNegativePrompt": bool(str(request.negative_prompt or "").strip()),
+        "disableNeutralCalibrationRequested": request_disable_neutral_calibration,
     }
 
     def _build_tryon_error_payload(
@@ -6449,8 +8414,16 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                 product_images=product_imgs,
                 garment_descriptions=product_descriptions,
             )
+            prompt_product_descriptions = list(product_descriptions)
+            if descriptor_backend in {"minicpm", "minicpm_service"}:
+                for idx in generated_product_prompt_indices:
+                    if idx < 0 or idx >= len(prompt_product_descriptions):
+                        continue
+                    prompt_product_descriptions[idx] = _strip_descriptor_color_clause(
+                        prompt_product_descriptions[idx]
+                    )
             collage_item_clause = _build_flux2_collage_item_clause(
-                garment_descriptions=product_descriptions,
+                garment_descriptions=prompt_product_descriptions,
                 target_types=product_target_types,
             )
             custom_negative_prompt = str(request.negative_prompt or "").strip()
@@ -6479,7 +8452,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
             # 5. Build flux2-only target-aware prompt (dress = replacement, not layering)
             t_stage = time.time()
             prompt = _build_flux2_targeted_prompt(
-                garment_descriptions=product_descriptions,
+                garment_descriptions=prompt_product_descriptions,
                 user_description=user_prompt_description,
                 target_types=product_target_types,
                 board_mode=board_mode,
@@ -6492,7 +8465,13 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
             target_desc = " | ".join(product_descriptions)
             candidate_runs: List[dict] = []
 
-            def _run_candidate(candidate_prompt: str, candidate_steps: int, candidate_seed: int, label: str):
+            def _run_candidate(
+                candidate_prompt: str,
+                candidate_steps: int,
+                candidate_seed: int,
+                label: str,
+                compute_runtime_scores: bool = True,
+            ):
                 candidate_result = engine.flux2.run_tryon(
                     person_image=user_img,
                     board_image=board,
@@ -6501,16 +8480,58 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                     seed=candidate_seed,
                     negative_prompt=runtime_negative_prompt,
                 )
-                fidelity_score, output_desc = _score_tryon_garment_fidelity(
-                    output_image=candidate_result["image"],
-                    target_description=target_desc,
-                    descriptor_backend=FLUX2_FIDELITY_BACKEND,
-                )
-                preservation_score = _score_untargeted_region_preservation(
-                    reference_image=user_img,
-                    output_image=candidate_result["image"],
-                    target_types=product_target_types,
-                )
+                score_t0 = time.time()
+                if compute_runtime_scores:
+                    fidelity_score, output_desc = _score_tryon_garment_fidelity(
+                        output_image=candidate_result["image"],
+                        target_description=target_desc,
+                        descriptor_backend=FLUX2_FIDELITY_BACKEND,
+                    )
+                    preservation_score = _score_untargeted_region_preservation(
+                        reference_image=user_img,
+                        output_image=candidate_result["image"],
+                        target_types=product_target_types,
+                    )
+                    color_fidelity = _score_color_fidelity(
+                        output_image=candidate_result["image"],
+                        input_palettes=visual_locks.get("color_palettes", []),
+                        target_types=product_target_types,
+                        input_profiles=visual_locks.get("color_profiles", []),
+                    )
+                else:
+                    fidelity_score, output_desc = 0.0, ""
+                    preservation_score = 0.0
+                    color_fidelity = {"status": "skipped_runtime_scoring"}
+                stage_timings["candidate_scoring_sum_s"] += (time.time() - score_t0)
+                
+                # Normalize color drift into a 0.0 - 1.0 "fidelity" score
+                # DeltaE < 6 is excellent (0.95+), > 18 is poor (< 0.5)
+                drift_value = color_fidelity.get("total_drift", None)
+                lightness_value = color_fidelity.get("total_lightness_drift", None)
+                profile_value = color_fidelity.get("total_profile_drift", None)
+                raw_drift: Optional[float]
+                if isinstance(drift_value, (int, float)) and np.isfinite(float(drift_value)):
+                    raw_drift = float(drift_value)
+                    drift_score = max(0.0, min(1.0, 1.0 - (raw_drift / 40.0)))
+                    lightness_score = None
+                    if isinstance(lightness_value, (int, float)) and np.isfinite(float(lightness_value)):
+                        # L* drift in [0,100]; <6 is very good, >20 is poor.
+                        lightness_score = max(0.0, min(1.0, 1.0 - (float(lightness_value) / 25.0)))
+                    profile_score = None
+                    if isinstance(profile_value, (int, float)) and np.isfinite(float(profile_value)):
+                        # Profile drift mixes L* + chroma inflation; <4 good, >16 poor.
+                        profile_score = max(0.0, min(1.0, 1.0 - (float(profile_value) / 20.0)))
+
+                    if lightness_score is not None and profile_score is not None:
+                        color_score = (0.60 * drift_score) + (0.25 * lightness_score) + (0.15 * profile_score)
+                    elif lightness_score is not None:
+                        color_score = (0.75 * drift_score) + (0.25 * lightness_score)
+                    else:
+                        color_score = drift_score
+                else:
+                    raw_drift = None
+                    color_score = 0.0
+
                 candidate_runs.append({
                     "label": label,
                     "steps": candidate_steps,
@@ -6518,6 +8539,9 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                     "latency": float(candidate_result["latency"]),
                     "fidelity_score": float(fidelity_score),
                     "preservation_score": float(preservation_score),
+                    "color_fidelity_score": float(color_score),
+                    "color_drift": raw_drift,
+                    "color_details": color_fidelity,
                     "output_description": output_desc,
                     "negativePromptMode": str(candidate_result.get("metadata", {}).get("negative_prompt_mode", "unknown")),
                     "negativePromptSupported": bool(candidate_result.get("metadata", {}).get("negative_prompt_supported", False)),
@@ -6586,13 +8610,54 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                 run = candidate_runs[idx]
                 fid = float(run.get("fidelity_score", 0.0))
                 preserve = float(run.get("preservation_score", 0.0))
+                cfid = float(run.get("color_fidelity_score", 0.0))
+                neutral_tone_lock = bool(visual_locks.get("neutral_tone_lock"))
+                
+                # Composite Score: Fidelity (Structure) + Preserve (Background) + Color
                 if is_single_top_or_bottom:
-                    return (0.45 * fid) + (0.55 * preserve)
-                return fid
+                    if neutral_tone_lock:
+                        base_score = (0.25 * fid) + (0.25 * preserve) + (0.50 * cfid)
+                    else:
+                        base_score = (0.40 * fid) + (0.40 * preserve) + (0.20 * cfid)
+                elif neutral_tone_lock:
+                    base_score = (0.50 * fid) + (0.50 * cfid)
+                else:
+                    base_score = (0.60 * fid) + (0.40 * cfid)
+
+                if not FLUX2_COLOR_FIRST_GATE_ENABLED:
+                    return base_score
+
+                valid_drifts = [
+                    float(c.get("color_drift"))
+                    for c in candidate_runs
+                    if isinstance(c.get("color_drift"), (int, float))
+                    and np.isfinite(float(c.get("color_drift")))
+                ]
+                if not valid_drifts:
+                    return base_score
+
+                run_drift = run.get("color_drift")
+                if not isinstance(run_drift, (int, float)) or not np.isfinite(float(run_drift)):
+                    return -1e6
+
+                best_drift = min(valid_drifts)
+                if float(run_drift) > (best_drift + float(FLUX2_COLOR_FIRST_GATE_MAX_DRIFT_DELTA)):
+                    return -1e6
+                return base_score
 
             selected_prompt = prompt
             selected_candidate_index = 0
             mode = FLUX2_SINGLE_CANDIDATE_MODE
+            runtime_scoring_enabled = bool(FLUX2_RUNTIME_SCORING_ENABLED)
+            if mode != "base":
+                # Auto/strict multi-candidate flows rely on these scores to rank candidates.
+                runtime_scoring_enabled = True
+            if request_disable_neutral_calibration:
+                neutral_color_calibration: Dict[str, object] = {"applied": False, "reason": "disabled_by_request"}
+            elif not FLUX2_NEUTRAL_POST_COLOR_CALIBRATION_ENABLED:
+                neutral_color_calibration = {"applied": False, "reason": "disabled_by_env"}
+            else:
+                neutral_color_calibration = {"applied": False, "reason": "not_run"}
 
             # 6. Inference (Flux 2.0): either single selected candidate or auto multi-candidate
             if mode == "base":
@@ -6601,6 +8666,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                     candidate_steps=request.steps,
                     candidate_seed=request.seed,
                     label="base",
+                    compute_runtime_scores=runtime_scoring_enabled,
                 )
             elif mode == "dress_strict" and is_single_dress:
                 result = _run_candidate(
@@ -6686,6 +8752,165 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                         selected_candidate_index = qwen_index
                         selected_prompt = qwen_strict_prompt
 
+                if FLUX2_COLOR_GUARD_RERUN_ENABLED and candidate_runs:
+                    best_run = candidate_runs[selected_candidate_index]
+                    best_drift = best_run.get("color_drift")
+                    drift_is_valid = isinstance(best_drift, (int, float)) and np.isfinite(float(best_drift))
+                    if drift_is_valid and float(best_drift) > float(FLUX2_COLOR_GUARD_DRIFT_THRESHOLD):
+                        color_guard_clause = _build_flux2_hex_color_guard_clause(
+                            visual_locks.get("color_palette_metrics", []),
+                        )
+                        if color_guard_clause:
+                            color_guard_prompt = f"{selected_prompt} {color_guard_clause}".strip()
+                            best_steps = int(best_run.get("steps", request.steps))
+                            color_guard_steps = min(
+                                FLUX2_COLOR_GUARD_RERUN_MAX_STEPS,
+                                max(request.steps, best_steps + FLUX2_COLOR_GUARD_RERUN_EXTRA_STEPS),
+                            )
+                            color_guard_seed = min(2147483647, request.seed + 31)
+                            color_guard_result = _run_candidate(
+                                candidate_prompt=color_guard_prompt,
+                                candidate_steps=color_guard_steps,
+                                candidate_seed=color_guard_seed,
+                                label="color_guard_rerun",
+                            )
+                            color_guard_index = len(candidate_runs) - 1
+                            current_best_score = _candidate_rank(selected_candidate_index)
+                            color_guard_score = _candidate_rank(color_guard_index)
+                            if color_guard_score >= current_best_score:
+                                result = color_guard_result
+                                selected_candidate_index = color_guard_index
+                                selected_prompt = color_guard_prompt
+
+                if (
+                    FLUX2_NEUTRAL_POST_COLOR_CALIBRATION_ENABLED
+                    and (not request_disable_neutral_calibration)
+                    and board_mode == "single"
+                    and len(product_target_types) == 1
+                    and bool(visual_locks.get("neutral_tone_lock"))
+                ):
+                    src_profile = (
+                        visual_locks.get("color_profiles", [{}])[0]
+                        if isinstance(visual_locks.get("color_profiles"), list) and visual_locks.get("color_profiles")
+                        else {}
+                    )
+                    calibrated_img, calib_meta = _apply_neutral_post_color_calibration(
+                        output_image=result["image"],
+                        source_profile=(src_profile if isinstance(src_profile, dict) else {}),
+                        target_type=product_target_types[0],
+                    )
+                    neutral_color_calibration = dict(calib_meta or {})
+                    if bool(calib_meta.get("applied")):
+                        post_cf = _score_color_fidelity(
+                            output_image=calibrated_img,
+                            input_palettes=visual_locks.get("color_palettes", []),
+                            target_types=product_target_types,
+                            input_profiles=visual_locks.get("color_profiles", []),
+                        )
+                        pre_run = candidate_runs[selected_candidate_index] if selected_candidate_index < len(candidate_runs) else {}
+                        pre_drift_val = pre_run.get("color_drift")
+                        post_drift_val = post_cf.get("total_drift")
+                        pre_ok = isinstance(pre_drift_val, (int, float)) and np.isfinite(float(pre_drift_val))
+                        post_ok = isinstance(post_drift_val, (int, float)) and np.isfinite(float(post_drift_val))
+
+                        brightness_acceptable = True
+                        brightness_details: Dict[str, object] = {}
+                        src_median_l = src_profile.get("medianL") if isinstance(src_profile, dict) else None
+                        src_p10_l = src_profile.get("p10L") if isinstance(src_profile, dict) else None
+                        src_p90_l = src_profile.get("p90L") if isinstance(src_profile, dict) else None
+                        post_output_l = neutral_color_calibration.get("postMedianL")
+                        if (
+                            isinstance(src_median_l, (int, float))
+                            and isinstance(src_p10_l, (int, float))
+                            and isinstance(src_p90_l, (int, float))
+                            and isinstance(post_output_l, (int, float))
+                        ):
+                            acceptable_min = max(
+                                0.0,
+                                float(src_p10_l) - float(FLUX2_NEUTRAL_CALIBRATION_BRIGHTNESS_MARGIN_L),
+                            )
+                            acceptable_max = min(
+                                100.0,
+                                float(src_p90_l) + float(FLUX2_NEUTRAL_CALIBRATION_BRIGHTNESS_MARGIN_L),
+                            )
+                            if not (acceptable_min <= float(post_output_l) <= acceptable_max):
+                                brightness_acceptable = False
+                                brightness_details["reason"] = "outside_acceptable_range"
+                            if (
+                                float(src_median_l) > float(FLUX2_NEUTRAL_CALIBRATION_LIGHT_SOURCE_MIN_L)
+                                and float(post_output_l)
+                                < (float(src_median_l) - float(FLUX2_NEUTRAL_CALIBRATION_LIGHT_SOURCE_MAX_DARKEN))
+                            ):
+                                brightness_acceptable = False
+                                brightness_details["reason"] = "light_garment_darkened_too_much"
+                            if (
+                                float(src_median_l) < float(FLUX2_NEUTRAL_CALIBRATION_DARK_SOURCE_MAX_L)
+                                and float(post_output_l)
+                                > (float(src_median_l) + float(FLUX2_NEUTRAL_CALIBRATION_DARK_SOURCE_MAX_BRIGHTEN))
+                            ):
+                                brightness_acceptable = False
+                                brightness_details["reason"] = "dark_garment_brightened_too_much"
+                            brightness_details.update(
+                                {
+                                    "sourceMedianL": round(float(src_median_l), 2),
+                                    "sourceP10L": round(float(src_p10_l), 2),
+                                    "sourceP90L": round(float(src_p90_l), 2),
+                                    "postOutputL": round(float(post_output_l), 2),
+                                    "acceptableRange": [round(acceptable_min, 2), round(acceptable_max, 2)],
+                                }
+                            )
+                        else:
+                            brightness_acceptable = False
+                            brightness_details["reason"] = "cannot_verify_brightness"
+                            if isinstance(post_output_l, (int, float)):
+                                brightness_details["postOutputL"] = round(float(post_output_l), 2)
+
+                        drift_improved = post_ok and ((not pre_ok) or (float(post_drift_val) <= float(pre_drift_val)))
+                        if drift_improved and brightness_acceptable:
+                            result["image"] = calibrated_img
+                            if selected_candidate_index < len(candidate_runs):
+                                drift_score = max(0.0, min(1.0, 1.0 - (float(post_drift_val) / 40.0)))
+                                post_lightness = post_cf.get("total_lightness_drift")
+                                post_profile = post_cf.get("total_profile_drift")
+                                lightness_score = (
+                                    max(0.0, min(1.0, 1.0 - (float(post_lightness) / 25.0)))
+                                    if isinstance(post_lightness, (int, float)) and np.isfinite(float(post_lightness))
+                                    else None
+                                )
+                                profile_score = (
+                                    max(0.0, min(1.0, 1.0 - (float(post_profile) / 20.0)))
+                                    if isinstance(post_profile, (int, float)) and np.isfinite(float(post_profile))
+                                    else None
+                                )
+                                if lightness_score is not None and profile_score is not None:
+                                    new_color_score = (0.60 * drift_score) + (0.25 * lightness_score) + (0.15 * profile_score)
+                                elif lightness_score is not None:
+                                    new_color_score = (0.75 * drift_score) + (0.25 * lightness_score)
+                                else:
+                                    new_color_score = drift_score
+                                candidate_runs[selected_candidate_index]["color_details"] = post_cf
+                                candidate_runs[selected_candidate_index]["color_drift"] = float(post_drift_val)
+                                candidate_runs[selected_candidate_index]["color_fidelity_score"] = float(new_color_score)
+                                candidate_runs[selected_candidate_index]["label"] = (
+                                    str(candidate_runs[selected_candidate_index].get("label", "selected"))
+                                    + "+neutral_color_calibrated"
+                                )
+                            neutral_color_calibration["accepted"] = True
+                            neutral_color_calibration["postDrift"] = float(post_drift_val)
+                            neutral_color_calibration["brightnessCheck"] = "passed"
+                            neutral_color_calibration["brightnessDetails"] = brightness_details
+                        else:
+                            neutral_color_calibration["accepted"] = False
+                            neutral_color_calibration["brightnessCheck"] = (
+                                "failed" if not brightness_acceptable else "passed"
+                            )
+                            neutral_color_calibration["brightnessDetails"] = brightness_details
+                            neutral_color_calibration["reason"] = (
+                                str(brightness_details.get("reason") or "brightness_guard_failed")
+                                if not brightness_acceptable
+                                else "no_drift_improvement"
+                            )
+
             # 7. Upload selected result
             stage_timings["flux_generation_sum_s"] = round(
                 sum(float(run.get("latency", 0.0)) for run in candidate_runs), 4
@@ -6722,7 +8947,17 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
             "productPromptDescriptions": product_descriptions,
             "userPromptDescription": user_prompt_description,
             "productColorHints": visual_locks.get("color_hints", []),
+            "productColorPalettes": visual_locks.get("color_palettes", []),
+            "productColorPaletteMetrics": visual_locks.get("color_palette_metrics", []),
+            "productColorProfiles": visual_locks.get("color_profiles", []),
             "productDetailHints": visual_locks.get("detail_terms", []),
+            "neutralColorCalibration": neutral_color_calibration,
+            "neutralColorCalibrationEnabled": bool(
+                FLUX2_NEUTRAL_POST_COLOR_CALIBRATION_ENABLED and (not request_disable_neutral_calibration)
+            ),
+            "colorFirstGateEnabled": bool(FLUX2_COLOR_FIRST_GATE_ENABLED),
+            "colorFirstGateMaxDriftDelta": float(FLUX2_COLOR_FIRST_GATE_MAX_DRIFT_DELTA),
+            "colorDecontaminationEnabled": bool(FLUX2_COLOR_DECONTAMINATION_ENABLED),
             "transparencyLockApplied": bool(visual_locks.get("transparency_lock")),
             "prompt": selected_prompt,
             "negativePrompt": negative_prompt,
@@ -6766,6 +9001,16 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                 "descriptionComparisons": descriptor_comparisons,
                 "collageItemMapping": collage_item_clause,
                 "transparencyLockApplied": bool(visual_locks.get("transparency_lock")),
+                "productColorPalettes": visual_locks.get("color_palettes", []),
+                "productColorPaletteMetrics": visual_locks.get("color_palette_metrics", []),
+                "productColorProfiles": visual_locks.get("color_profiles", []),
+                "neutralColorCalibration": neutral_color_calibration,
+                "neutralColorCalibrationEnabled": bool(
+                    FLUX2_NEUTRAL_POST_COLOR_CALIBRATION_ENABLED and (not request_disable_neutral_calibration)
+                ),
+                "colorFirstGateEnabled": bool(FLUX2_COLOR_FIRST_GATE_ENABLED),
+                "colorFirstGateMaxDriftDelta": float(FLUX2_COLOR_FIRST_GATE_MAX_DRIFT_DELTA),
+                "colorDecontaminationEnabled": bool(FLUX2_COLOR_DECONTAMINATION_ENABLED),
                 "negativePrompt": {
                     "source": negative_prompt_source,
                     "resolved": negative_prompt,
@@ -6896,15 +9141,45 @@ def health_check():
                 "flux2_minicpm_user_caption_max_side": FLUX2_MINICPM_USER_CAPTION_MAX_SIDE,
                 "flux2_minicpm_user_caption_min_side": FLUX2_MINICPM_USER_CAPTION_MIN_SIDE,
                 "flux2_single_candidate_mode": FLUX2_SINGLE_CANDIDATE_MODE,
+                "flux2_single_garment_extract_default_backend": FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND,
+                "flux2_single_garment_extract_default_steps": FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS,
+                "flux2_single_garment_extract_default_seed": FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_SEED,
+                "flux2_single_garment_extract_upload_debug": FLUX2_SINGLE_GARMENT_EXTRACT_UPLOAD_DEBUG,
                 "flux2_color_lock_enabled": FLUX2_COLOR_LOCK_ENABLED,
                 "flux2_color_lock_top_k": FLUX2_COLOR_LOCK_TOP_K,
+                "flux2_color_decontamination_enabled": FLUX2_COLOR_DECONTAMINATION_ENABLED,
+                "flux2_color_decontam_alpha_high": FLUX2_COLOR_DECONTAM_ALPHA_HIGH,
+                "flux2_color_decontam_alpha_low": FLUX2_COLOR_DECONTAM_ALPHA_LOW,
+                "flux2_color_decontam_erode_iters": FLUX2_COLOR_DECONTAM_ERODE_ITERS,
+                "flux2_color_decontam_min_pixels": FLUX2_COLOR_DECONTAM_MIN_PIXELS,
+                "flux2_color_decontam_min_coverage_ratio": FLUX2_COLOR_DECONTAM_MIN_COVERAGE_RATIO,
+                "flux2_color_palette_min_area_percent": FLUX2_COLOR_PALETTE_MIN_AREA_PERCENT,
+                "flux2_color_profile_trim_dark_percentile": FLUX2_COLOR_PROFILE_TRIM_DARK_PERCENTILE,
+                "flux2_color_profile_trim_bright_percentile": FLUX2_COLOR_PROFILE_TRIM_BRIGHT_PERCENTILE,
+                "flux2_color_first_gate_enabled": FLUX2_COLOR_FIRST_GATE_ENABLED,
+                "flux2_color_first_gate_max_drift_delta": FLUX2_COLOR_FIRST_GATE_MAX_DRIFT_DELTA,
+                "flux2_neutral_post_color_calibration_enabled": FLUX2_NEUTRAL_POST_COLOR_CALIBRATION_ENABLED,
+                "flux2_neutral_calibration_max_delta_l": FLUX2_NEUTRAL_CALIBRATION_MAX_DELTA_L,
+                "flux2_neutral_calibration_light_output_min_l": FLUX2_NEUTRAL_CALIBRATION_LIGHT_OUTPUT_MIN_L,
+                "flux2_neutral_calibration_max_darken_light_output": FLUX2_NEUTRAL_CALIBRATION_MAX_DARKEN_LIGHT_OUTPUT,
+                "flux2_neutral_calibration_dark_output_max_l": FLUX2_NEUTRAL_CALIBRATION_DARK_OUTPUT_MAX_L,
+                "flux2_neutral_calibration_max_brighten_dark_output": FLUX2_NEUTRAL_CALIBRATION_MAX_BRIGHTEN_DARK_OUTPUT,
+                "flux2_neutral_calibration_brightness_margin_l": FLUX2_NEUTRAL_CALIBRATION_BRIGHTNESS_MARGIN_L,
                 "flux2_detail_lock_enabled": FLUX2_DETAIL_LOCK_ENABLED,
                 "flux2_allow_qwen_backend": FLUX2_ALLOW_QWEN_BACKEND,
                 "flux2_negative_prompt_enable": FLUX2_NEGATIVE_PROMPT_ENABLE,
                 "flux2_negative_prompt_default_len": len(FLUX2_NEGATIVE_PROMPT_DEFAULT),
                 "flux2_negative_prompt_runtime_mode": FLUX2_NEGATIVE_PROMPT_RUNTIME_MODE,
+                "flux2_low_latency_mode": FLUX2_LOW_LATENCY_MODE,
+                "flux2_runtime_scoring_enabled": FLUX2_RUNTIME_SCORING_ENABLED,
                 "minicpm_service_url": MINICPM_SERVICE_URL,
                 "minicpm_service_timeout_s": MINICPM_SERVICE_TIMEOUT_S,
+                "minicpm_service_connect_timeout_s": MINICPM_SERVICE_CONNECT_TIMEOUT_S,
+                "minicpm_service_cache_enabled": MINICPM_SERVICE_CACHE_ENABLED,
+                "minicpm_service_cache_ttl_s": MINICPM_SERVICE_CACHE_TTL_SECONDS,
+                "minicpm_service_cache_max_entries": MINICPM_SERVICE_CACHE_MAX_ENTRIES,
+                "minicpm_service_cache_current_entries": len(_MINICPM_DESCRIPTOR_CACHE),
+                "minicpm_service_pool_maxsize": MINICPM_SERVICE_POOL_MAXSIZE,
                 "analyze_extract_cloth": ANALYZE_EXTRACT_CLOTH,
             "analyze_extract_mode": "forced_vton",
             "analyze_extract_parser_only": ANALYZE_EXTRACT_PARSER_ONLY,

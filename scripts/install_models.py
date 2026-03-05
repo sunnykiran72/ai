@@ -69,6 +69,8 @@ def looks_like_hf_repo_id(raw: str) -> bool:
 def path_ready(path: Path) -> bool:
     if not path.exists():
         return False
+    if path.is_file():
+        return path.suffix.lower() in {".safetensors", ".bin", ".pt"}
     for sentinel in (
         "model_index.json",
         "config.json",
@@ -82,6 +84,28 @@ def path_ready(path: Path) -> bool:
     # Ignore metadata-only dirs (for example .cache) and require at least one non-hidden artifact.
     for child in path.iterdir():
         if not child.name.startswith("."):
+            return True
+    return False
+
+
+def lora_path_ready(path: Path, weight_name: str) -> bool:
+    if not path.exists():
+        return False
+    wanted = str(weight_name or "").strip()
+    if path.is_file():
+        if path.suffix.lower() != ".safetensors":
+            return False
+        return (not wanted) or (path.name == wanted)
+
+    if wanted and (path / wanted).exists():
+        return True
+
+    for fallback in ("flux-klein-tryon.safetensors", "flux-klein-tryon-comfy.safetensors"):
+        if (path / fallback).exists():
+            return True
+
+    for p in path.rglob("*.safetensors"):
+        if p.is_file():
             return True
     return False
 
@@ -127,13 +151,14 @@ def main() -> int:
     lora_raw = env_values.get("FLUX2_LORA_PATH", "fal/flux-klein-9b-virtual-tryon-lora")
     lora_is_repo = looks_like_hf_repo_id(lora_raw)
     lora_path = resolve_path(args.lora_local_dir if lora_is_repo else lora_raw, project_root)
+    lora_weight_name = env_values.get("FLUX2_LORA_WEIGHT_NAME", "flux-klein-tryon.safetensors")
 
     checks = [
         ("flux2-klein-9b", flux2_path, path_ready(flux2_path)),
         ("fashn-vton-1.5", fashn_path, path_ready(fashn_path)),
     ]
     if not args.skip_lora:
-        checks.append(("flux2-tryon-lora", lora_path, path_ready(lora_path)))
+        checks.append(("flux2-tryon-lora", lora_path, lora_path_ready(lora_path, lora_weight_name)))
     print_status(checks)
 
     missing = [name for name, _, ok in checks if not ok]
@@ -166,7 +191,7 @@ def main() -> int:
             resume_download=True,
         )
 
-    if not args.skip_lora and (args.force_redownload or not path_ready(lora_path)):
+    if not args.skip_lora and (args.force_redownload or not lora_path_ready(lora_path, lora_weight_name)):
         lora_repo = lora_raw if lora_is_repo else ""
         if lora_repo:
             print(f"[run] snapshot_download {lora_repo} -> {lora_path}")
@@ -176,11 +201,18 @@ def main() -> int:
                 local_dir=str(lora_path),
                 token=hf_token,
                 resume_download=True,
+                allow_patterns=["*.safetensors", "*.json", "README.md", "*.txt"],
             )
             env_values["FLUX2_LORA_PATH"] = str(lora_path)
 
     env_values["FLUX2_MODEL_PATH"] = str(flux2_path)
     env_values["FASHN_V15_PATH"] = str(fashn_path)
+    env_values["FLUX2_ENABLE_LORA"] = env_values.get("FLUX2_ENABLE_LORA", "1") or "1"
+    env_values["FLUX2_REQUIRE_LORA"] = env_values.get("FLUX2_REQUIRE_LORA", "1") or "1"
+    env_values["FLUX2_LORA_AUTO_DOWNLOAD"] = env_values.get("FLUX2_LORA_AUTO_DOWNLOAD", "1") or "1"
+    env_values["FLUX2_LORA_FALLBACK_REPO"] = env_values.get(
+        "FLUX2_LORA_FALLBACK_REPO", "fal/flux-klein-9b-virtual-tryon-lora"
+    ) or "fal/flux-klein-9b-virtual-tryon-lora"
     env_values["HF_TOKEN"] = hf_token
     env_values["HUGGINGFACE_HUB_TOKEN"] = hf_token
     write_env_file(env_file, env_values)
@@ -191,7 +223,7 @@ def main() -> int:
         ("fashn-vton-1.5", fashn_path, path_ready(fashn_path)),
     ]
     if not args.skip_lora:
-        checks.append(("flux2-tryon-lora", lora_path, path_ready(lora_path)))
+        checks.append(("flux2-tryon-lora", lora_path, lora_path_ready(lora_path, lora_weight_name)))
     print_status(checks)
     if any(not ok for _, _, ok in checks):
         return 1

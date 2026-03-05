@@ -5,12 +5,32 @@ import os
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 from PIL import Image
 
 logger = logging.getLogger("glamify-ai")
+
+
+HF_TOKEN_ENV_KEYS: Tuple[str, ...] = ("HUGGING_FACE_KEY", "HF_TOKEN", "HUGGINGFACE_HUB_TOKEN")
+
+
+def _as_bool(raw: Optional[str], default: bool = False) -> bool:
+    if raw is None:
+        return bool(default)
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _looks_like_hf_repo_id(raw: str) -> bool:
+    value = str(raw or "").strip()
+    if not value:
+        return False
+    if value.startswith(("/", ".", "~")):
+        return False
+    if Path(value).expanduser().exists():
+        return False
+    return "/" in value
 
 
 def _torch_version_at_least(version: str) -> bool:
@@ -192,6 +212,15 @@ class Flux2CVTONRunner:
         self.guidance_scale = float(os.getenv("FLUX2_GUIDANCE_SCALE", "3.5"))
         self.seed = int(os.getenv("FLUX2_SEED", "23"))
         self.lora_scale = float(os.getenv("FLUX2_LORA_SCALE", "1.0"))
+        self.enable_lora = _as_bool(os.getenv("FLUX2_ENABLE_LORA", "1"), default=True)
+        self.require_lora = _as_bool(os.getenv("FLUX2_REQUIRE_LORA", "1"), default=True)
+        self.lora_auto_download = _as_bool(os.getenv("FLUX2_LORA_AUTO_DOWNLOAD", "1"), default=True)
+        self.lora_fallback_repo = str(
+            os.getenv("FLUX2_LORA_FALLBACK_REPO", "fal/flux-klein-9b-virtual-tryon-lora")
+        ).strip()
+        self.lora_local_cache_dir = str(
+            os.getenv("FLUX2_LORA_LOCAL_CACHE_DIR", "/tmp/flux2-lora/fal-virtual-tryon")
+        ).strip()
         self.num_warmups = int(os.getenv("FLUX2_WARMUPS", "0"))
 
         self.enable_channels_last = os.getenv("FLUX2_ENABLE_CHANNELS_LAST", "1") == "1"
@@ -217,6 +246,162 @@ class Flux2CVTONRunner:
             240,
             int(os.getenv("FLUX2_NEGATIVE_PROMPT_FALLBACK_MAX_CHARS", "900")),
         )
+
+    @staticmethod
+    def _find_local_lora_files(path: Path) -> List[Path]:
+        if not path.exists():
+            return []
+        if path.is_file() and path.suffix.lower() == ".safetensors":
+            return [path]
+        if not path.is_dir():
+            return []
+
+        files = sorted(path.glob("*.safetensors"))
+        if files:
+            return files
+        # Fallback for nested weight layouts.
+        return sorted(path.rglob("*.safetensors"))
+
+    def _resolve_hf_token(self) -> Optional[str]:
+        for key in HF_TOKEN_ENV_KEYS:
+            value = str(os.getenv(key, "")).strip()
+            if value:
+                return value
+        return None
+
+    def _candidate_lora_weight_names(self) -> List[str]:
+        names = [
+            str(self.lora_weight_name or "").strip(),
+            "flux-klein-tryon.safetensors",
+            "flux-klein-tryon-comfy.safetensors",
+            "pytorch_lora_weights.safetensors",
+        ]
+        dedup: List[str] = []
+        seen = set()
+        for name in names:
+            key = name.strip()
+            if not key:
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            dedup.append(key)
+        return dedup
+
+    def _download_lora_snapshot(self, repo_id: str, local_dir: Path) -> None:
+        try:
+            from huggingface_hub import snapshot_download
+        except Exception as err:
+            raise RuntimeError(
+                "huggingface_hub is required for FLUX2_LORA_AUTO_DOWNLOAD=1. "
+                "Install it or disable auto-download."
+            ) from err
+
+        local_dir.mkdir(parents=True, exist_ok=True)
+        token = self._resolve_hf_token()
+        logger.info(f"[lora] Downloading missing LoRA weights: repo={repo_id} -> {local_dir}")
+        snapshot_download(
+            repo_id=repo_id,
+            local_dir=str(local_dir),
+            token=token,
+            resume_download=True,
+            allow_patterns=["*.safetensors", "*.json", "README.md", "*.txt"],
+        )
+
+    def _resolve_lora_source(self) -> Dict[str, Any]:
+        raw = str(self.lora_path or "").strip()
+        if not raw:
+            return {"resolved_source": "", "is_local": False, "downloaded": False}
+
+        local_path = Path(raw).expanduser()
+        if local_path.exists():
+            files = self._find_local_lora_files(local_path)
+            if files:
+                return {"resolved_source": str(local_path), "is_local": True, "downloaded": False}
+            if not self.lora_auto_download:
+                raise RuntimeError(f"Configured FLUX2_LORA_PATH exists but has no .safetensors files: {local_path}")
+            repo_to_download = self.lora_fallback_repo or ""
+            if not repo_to_download:
+                raise RuntimeError(
+                    f"Configured FLUX2_LORA_PATH has no .safetensors files and FLUX2_LORA_FALLBACK_REPO is empty: {local_path}"
+                )
+            self._download_lora_snapshot(repo_to_download, local_path)
+            return {"resolved_source": str(local_path), "is_local": True, "downloaded": True}
+
+        if _looks_like_hf_repo_id(raw):
+            if not self.lora_auto_download:
+                return {"resolved_source": raw, "is_local": False, "downloaded": False}
+            cache_dir = Path(self.lora_local_cache_dir).expanduser()
+            if not self._find_local_lora_files(cache_dir):
+                self._download_lora_snapshot(raw, cache_dir)
+                return {"resolved_source": str(cache_dir), "is_local": True, "downloaded": True}
+            return {"resolved_source": str(cache_dir), "is_local": True, "downloaded": False}
+
+        if not self.lora_auto_download:
+            raise RuntimeError(
+                f"Configured FLUX2_LORA_PATH not found: {raw}. "
+                "Enable FLUX2_LORA_AUTO_DOWNLOAD=1 or provide a valid local path/repo id."
+            )
+
+        repo_to_download = self.lora_fallback_repo or ""
+        if not repo_to_download:
+            raise RuntimeError(
+                f"Configured FLUX2_LORA_PATH not found: {raw}, and FLUX2_LORA_FALLBACK_REPO is empty."
+            )
+        cache_dir = Path(self.lora_local_cache_dir).expanduser()
+        self._download_lora_snapshot(repo_to_download, cache_dir)
+        return {"resolved_source": str(cache_dir), "is_local": True, "downloaded": True}
+
+    def _load_lora_with_fallback(self, pipe: Any) -> Dict[str, Any]:
+        source_info = self._resolve_lora_source()
+        resolved_source = str(source_info.get("resolved_source") or "").strip()
+        if not resolved_source:
+            raise RuntimeError("LoRA source is empty after resolution.")
+
+        weight_candidates = self._candidate_lora_weight_names()
+        attempt_weights = list(weight_candidates)
+
+        if bool(source_info.get("is_local")):
+            local_path = Path(resolved_source).expanduser()
+            local_files = self._find_local_lora_files(local_path)
+            local_names = [p.name for p in local_files]
+            if local_names:
+                preferred = [w for w in weight_candidates if w in local_names]
+                if preferred:
+                    attempt_weights = preferred + [w for w in weight_candidates if w not in preferred]
+                else:
+                    # No explicit match: fallback to the first available local file.
+                    attempt_weights = [local_names[0]] + weight_candidates
+
+        load_errors: List[str] = []
+        for weight_name in attempt_weights:
+            try:
+                pipe.load_lora_weights(
+                    resolved_source,
+                    weight_name=weight_name,
+                    adapter_name=self.adapter_name,
+                )
+                return {
+                    "source": resolved_source,
+                    "weight_name": weight_name,
+                    "downloaded": bool(source_info.get("downloaded")),
+                }
+            except Exception as err:
+                load_errors.append(f"{weight_name}: {err}")
+
+        # Final fallback: let diffusers resolve weight file automatically.
+        try:
+            pipe.load_lora_weights(resolved_source, adapter_name=self.adapter_name)
+            return {
+                "source": resolved_source,
+                "weight_name": "",
+                "downloaded": bool(source_info.get("downloaded")),
+            }
+        except Exception as err:
+            load_errors.append(f"<auto>: {err}")
+
+        details = " | ".join(load_errors[-4:])
+        raise RuntimeError(f"Unable to load LoRA weights from {resolved_source}. Attempts: {details}")
 
     @staticmethod
     def _resolve_dtype(dtype_name: str) -> torch.dtype:
@@ -267,18 +452,32 @@ class Flux2CVTONRunner:
         pipe.to(self.device)
         model_load_seconds = time.time() - model_load_t0
 
-        logger.info(f"Loading LoRA {self.lora_path}...")
-        lora_t0 = time.time()
-        pipe.load_lora_weights(
-            self.lora_path,
-            weight_name=self.lora_weight_name,
-            adapter_name=self.adapter_name,
-        )
-        pipe.set_adapters([self.adapter_name], adapter_weights=[self.lora_scale])
-
-        if self.fuse_lora and hasattr(pipe, "fuse_lora"):
-            pipe.fuse_lora()
-        lora_load_seconds = time.time() - lora_t0
+        lora_load_seconds = 0.0
+        lora_loaded = False
+        lora_source = ""
+        lora_weight_loaded = ""
+        lora_downloaded = False
+        if not self.enable_lora:
+            if self.require_lora:
+                raise RuntimeError("LoRA is mandatory but FLUX2_ENABLE_LORA is disabled.")
+            logger.info("Skipping LoRA load for Flux2 CVTON (FLUX2_ENABLE_LORA=0).")
+        else:
+            logger.info(f"Loading LoRA (configured source={self.lora_path})...")
+            lora_t0 = time.time()
+            try:
+                load_meta = self._load_lora_with_fallback(pipe)
+                lora_source = str(load_meta.get("source") or "")
+                lora_weight_loaded = str(load_meta.get("weight_name") or "")
+                lora_downloaded = bool(load_meta.get("downloaded"))
+                pipe.set_adapters([self.adapter_name], adapter_weights=[self.lora_scale])
+                if self.fuse_lora and hasattr(pipe, "fuse_lora"):
+                    pipe.fuse_lora()
+                lora_loaded = True
+                lora_load_seconds = time.time() - lora_t0
+            except Exception as err:
+                if self.require_lora:
+                    raise RuntimeError(f"Failed to load mandatory LoRA: {err}") from err
+                logger.warning(f"LoRA load failed; continuing without LoRA: {err}")
 
         optimize_t0 = time.time()
         self._maybe_channels_last(pipe)
@@ -289,6 +488,14 @@ class Flux2CVTONRunner:
             "pipeline_init_total_seconds": time.time() - load_t0,
             "pipeline_model_load_seconds": model_load_seconds,
             "pipeline_lora_load_seconds": lora_load_seconds,
+            "lora_enabled": bool(self.enable_lora),
+            "lora_required": bool(self.require_lora),
+            "lora_loaded": bool(lora_loaded),
+            "lora_path": str(self.lora_path or ""),
+            "lora_source_resolved": lora_source,
+            "lora_weight_loaded": lora_weight_loaded,
+            "lora_auto_download": bool(self.lora_auto_download),
+            "lora_downloaded": bool(lora_downloaded),
             "pipeline_optimize_seconds": optimize_seconds,
             "compile_mode": self.compile_mode,
             "compile_status": compile_status,

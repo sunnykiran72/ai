@@ -65,3 +65,31 @@ def bbox_iou(box_a: Tuple[int, int, int, int], box_b: Tuple[int, int, int, int])
     area_b = (bx1 - bx0) * (by1 - by0)
     union_area = area_a + area_b - inter_area
     return inter_area / max(1, union_area)
+
+def rgb_to_lab(rgb_array: np.ndarray) -> np.ndarray:
+    """
+    Converts an [N, 3] or [H, W, 3] RGB array (0-255) to CIELAB.
+    """
+    if cv2 is not None:
+        # OpenCV expects a 3D array for cvtColor, reshape if N, 3
+        is_1d = (rgb_array.ndim == 2)
+        if is_1d:
+            inp = rgb_array.reshape(1, -1, 3).astype(np.uint8)
+        else:
+            inp = rgb_array.astype(np.uint8)
+        lab = cv2.cvtColor(inp, cv2.COLOR_RGB2LAB)
+        if is_1d:
+            return lab.reshape(-1, 3).astype(np.float32)
+        return lab.astype(np.float32)
+    
+    # Simple fallback if cv2 not available (not perceptual uniform but better than raw RGB)
+    return rgb_array.astype(np.float32)
+
+def delta_e_cie76(lab_a: np.ndarray, lab_b: np.ndarray) -> float:
+    """
+    Euclidean distance in CIELAB space.
+    Approximation of perceptual color difference.
+    """
+    # Just Euclidean distance in Lab space
+    diff = lab_a.astype(np.float32) - lab_b.astype(np.float32)
+    return float(np.sqrt(np.sum(diff**2)))
