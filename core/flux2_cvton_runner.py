@@ -207,28 +207,54 @@ class Flux2CVTONRunner:
         self.device = cfg.get("device") or os.getenv("FLUX2_DEVICE", "cuda")
         self.dtype = self._resolve_dtype(cfg.get("dtype") or os.getenv("FLUX2_DTYPE", "fp16"))
 
-        self.width = int(os.getenv("FLUX2_WIDTH", "512"))
-        self.height = int(os.getenv("FLUX2_HEIGHT", "768"))
-        self.guidance_scale = float(os.getenv("FLUX2_GUIDANCE_SCALE", "3.5"))
-        self.seed = int(os.getenv("FLUX2_SEED", "23"))
-        self.lora_scale = float(os.getenv("FLUX2_LORA_SCALE", "1.0"))
-        self.enable_lora = _as_bool(os.getenv("FLUX2_ENABLE_LORA", "1"), default=True)
-        self.require_lora = _as_bool(os.getenv("FLUX2_REQUIRE_LORA", "1"), default=True)
-        self.lora_auto_download = _as_bool(os.getenv("FLUX2_LORA_AUTO_DOWNLOAD", "1"), default=True)
+        self.width = int(cfg.get("width") or os.getenv("FLUX2_WIDTH", "512"))
+        self.height = int(cfg.get("height") or os.getenv("FLUX2_HEIGHT", "768"))
+        self.guidance_scale = float(cfg.get("guidance_scale") or os.getenv("FLUX2_GUIDANCE_SCALE", "3.5"))
+        self.seed = int(cfg.get("seed") or os.getenv("FLUX2_SEED", "23"))
+        self.lora_scale = float(
+            cfg["lora_scale"] if ("lora_scale" in cfg and cfg.get("lora_scale") is not None) else os.getenv("FLUX2_LORA_SCALE", "1.0")
+        )
+        self.enable_lora = _as_bool(
+            str(cfg.get("enable_lora")) if "enable_lora" in cfg else os.getenv("FLUX2_ENABLE_LORA", "1"),
+            default=True,
+        )
+        self.require_lora = _as_bool(
+            str(cfg.get("require_lora")) if "require_lora" in cfg else os.getenv("FLUX2_REQUIRE_LORA", "1"),
+            default=True,
+        )
+        self.lora_auto_download = _as_bool(
+            str(cfg.get("lora_auto_download")) if "lora_auto_download" in cfg else os.getenv("FLUX2_LORA_AUTO_DOWNLOAD", "1"),
+            default=True,
+        )
         self.lora_fallback_repo = str(
-            os.getenv("FLUX2_LORA_FALLBACK_REPO", "fal/flux-klein-9b-virtual-tryon-lora")
+            cfg.get("lora_fallback_repo") or os.getenv("FLUX2_LORA_FALLBACK_REPO", "fal/flux-klein-9b-virtual-tryon-lora")
         ).strip()
         self.lora_local_cache_dir = str(
-            os.getenv("FLUX2_LORA_LOCAL_CACHE_DIR", "/tmp/flux2-lora/fal-virtual-tryon")
+            cfg.get("lora_local_cache_dir") or os.getenv("FLUX2_LORA_LOCAL_CACHE_DIR", "/tmp/flux2-lora/fal-virtual-tryon")
         ).strip()
-        self.num_warmups = int(os.getenv("FLUX2_WARMUPS", "0"))
+        self.num_warmups = int(cfg.get("num_warmups") or os.getenv("FLUX2_WARMUPS", "0"))
 
-        self.enable_channels_last = os.getenv("FLUX2_ENABLE_CHANNELS_LAST", "1") == "1"
-        self.fuse_lora = os.getenv("FLUX2_FUSE_LORA", "1") == "1"
-        self.compile_mode = os.getenv("FLUX2_COMPILE_MODE", "none").strip().lower()
-        self.compile_vae_decode = os.getenv("FLUX2_COMPILE_VAE_DECODE", "0") == "1"
-        self.allow_compile_fallback = os.getenv("FLUX2_ALLOW_COMPILE_FALLBACK", "1") == "1"
-        self.enable_tf32 = os.getenv("FLUX2_ENABLE_TF32", "1") == "1"
+        self.enable_channels_last = _as_bool(
+            str(cfg.get("enable_channels_last")) if "enable_channels_last" in cfg else os.getenv("FLUX2_ENABLE_CHANNELS_LAST", "1"),
+            default=True,
+        )
+        self.fuse_lora = _as_bool(
+            str(cfg.get("fuse_lora")) if "fuse_lora" in cfg else os.getenv("FLUX2_FUSE_LORA", "1"),
+            default=True,
+        )
+        self.compile_mode = str(cfg.get("compile_mode") or os.getenv("FLUX2_COMPILE_MODE", "none")).strip().lower()
+        self.compile_vae_decode = _as_bool(
+            str(cfg.get("compile_vae_decode")) if "compile_vae_decode" in cfg else os.getenv("FLUX2_COMPILE_VAE_DECODE", "0"),
+            default=False,
+        )
+        self.allow_compile_fallback = _as_bool(
+            str(cfg.get("allow_compile_fallback")) if "allow_compile_fallback" in cfg else os.getenv("FLUX2_ALLOW_COMPILE_FALLBACK", "1"),
+            default=True,
+        )
+        self.enable_tf32 = _as_bool(
+            str(cfg.get("enable_tf32")) if "enable_tf32" in cfg else os.getenv("FLUX2_ENABLE_TF32", "1"),
+            default=True,
+        )
 
         self._pipeline = None
         self._load_lock = threading.Lock()

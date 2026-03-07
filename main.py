@@ -3,13 +3,13 @@ import time
 import logging
 import asyncio
 import os
-import uuid
 import tempfile
+import uuid
 import re
 import hashlib
 import colorsys
 import threading
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, List, Tuple, Dict
 
 import numpy as np
@@ -65,6 +65,11 @@ from ai.core.minicpm_runner import MiniCPMVRunner
 from ai.core.yolo_runner import YoloRunner
 from ai.core.human_parser_runner import HumanParserRunner
 from ai.core.openclip_runner import OpenCLIPRunner
+from ai.core.garment_extractor import (
+    GarmentExtractionConfig,
+    GarmentExtractionRequest,
+    GarmentExtractor,
+)
 
 # Configuration
 logging.basicConfig(level=logging.INFO)
@@ -121,6 +126,7 @@ FLUX2_NEGATIVE_PROMPT_DEFAULT = os.getenv(
     "FLUX2_NEGATIVE_PROMPT_DEFAULT",
     (
         "low quality, blurry, deformed body, extra limbs, extra fingers, wrong hands, "
+        "extra hand, third hand, duplicate arms, hand fused to garment, garment fused to skin, "
         "identity change, different face, wrong skin tone, recolored garment, hue shift, "
         "color drift, pattern drift, texture swap, logo/text watermark, duplicate garment, "
         "layering artifacts, garment merge, ghost garment, incorrect neckline, incorrect hemline"
@@ -151,15 +157,16 @@ FLUX2_MINICPM_PRODUCT_CAPTION_MIN_SIDE = max(256, _env_int("FLUX2_MINICPM_PRODUC
 FLUX2_MINICPM_USER_CAPTION_MAX_SIDE = max(512, _env_int("FLUX2_MINICPM_USER_CAPTION_MAX_SIDE", 1024))
 FLUX2_MINICPM_USER_CAPTION_MIN_SIDE = max(256, _env_int("FLUX2_MINICPM_USER_CAPTION_MIN_SIDE", 512))
 MINICPM_SERVICE_URL = os.getenv("MINICPM_SERVICE_URL", "http://127.0.0.1:8010").strip().rstrip("/")
+ANALYZE_MINICPM_SERVICE_URL = os.getenv("ANALYZE_MINICPM_SERVICE_URL", "").strip().rstrip("/")
 MINICPM_SERVICE_TIMEOUT_S = max(5, _env_int("MINICPM_SERVICE_TIMEOUT_S", 60 if FLUX2_LOW_LATENCY_MODE else 120))
 MINICPM_SERVICE_CONNECT_TIMEOUT_S = max(
     1.0, _env_float("MINICPM_SERVICE_CONNECT_TIMEOUT_S", 6.0 if FLUX2_LOW_LATENCY_MODE else 10.0)
 )
 MINICPM_SERVICE_GARMENT_MAX_NEW_TOKENS = max(
-    32, _env_int("MINICPM_SERVICE_GARMENT_MAX_NEW_TOKENS", 180 if FLUX2_LOW_LATENCY_MODE else 260)
+    32, _env_int("MINICPM_SERVICE_GARMENT_MAX_NEW_TOKENS", 180 if FLUX2_LOW_LATENCY_MODE else 180)
 )
 MINICPM_SERVICE_PERSON_MAX_NEW_TOKENS = max(
-    32, _env_int("MINICPM_SERVICE_PERSON_MAX_NEW_TOKENS", 128 if FLUX2_LOW_LATENCY_MODE else 260)
+    32, _env_int("MINICPM_SERVICE_PERSON_MAX_NEW_TOKENS", 96 if FLUX2_LOW_LATENCY_MODE else 140)
 )
 MINICPM_SERVICE_CACHE_ENABLED = os.getenv("MINICPM_SERVICE_CACHE_ENABLED", "1") == "1"
 MINICPM_SERVICE_CACHE_TTL_SECONDS = max(
@@ -167,10 +174,13 @@ MINICPM_SERVICE_CACHE_TTL_SECONDS = max(
 )
 MINICPM_SERVICE_CACHE_MAX_ENTRIES = max(16, _env_int("MINICPM_SERVICE_CACHE_MAX_ENTRIES", 1024))
 MINICPM_SERVICE_POOL_MAXSIZE = max(4, _env_int("MINICPM_SERVICE_POOL_MAXSIZE", 16))
+MINICPM_SERVICE_LOCAL_FILE_FIRST = os.getenv("MINICPM_SERVICE_LOCAL_FILE_FIRST", "1") == "1"
+MINICPM_SERVICE_GARMENT_MIN_WORDS = max(4, _env_int("MINICPM_SERVICE_GARMENT_MIN_WORDS", 10))
 MINICPM_SERVICE_GARMENT_PROMPT = os.getenv(
     "MINICPM_SERVICE_GARMENT_PROMPT",
     (
         "Describe only the product garment for high-fidelity virtual try-on. "
+        "Describe exactly one garment only and never describe any person, skin, hair, hands, legs, pose, room, props, or background objects. "
         "Ignore studio/background pixels, alpha-matte edges, and lighting shadows outside the garment fabric. "
         "Report garment fabric color only (dominant first, then secondary undertone if visible). "
         "Return one detailed line with schema: "
@@ -184,20 +194,21 @@ MINICPM_SERVICE_GARMENT_PROMPT = os.getenv(
         "details=<buttons, zipper, pleats, ruffles, lace, embroidery, pockets, slit, logo>; "
         "coverage=<body area to replace>; "
         "preserve=<color, print placement, and garment structure must remain unchanged>. "
+        "If the requested garment type is known, keep category/type locked to that garment only and ignore any other clothing visible in the crop. "
         "Use unknown when not visible."
     ),
 ).strip()
 MINICPM_SERVICE_PERSON_PROMPT = os.getenv(
     "MINICPM_SERVICE_PERSON_PROMPT",
     (
-        "Describe person context for identity/scene preservation in virtual try-on. "
+        "Describe only identity and scene context for identity-preserving virtual try-on. "
         "Return one detailed line with schema: "
         "identity=<face traits, skin tone, hair style/color, age band>; "
         "body_pose=<pose, camera angle, visible limbs>; "
-        "framing_lighting=<framing/crop, light direction/intensity>; "
-        "current_outfit=<top, bottom, footwear, accessories>; "
-        "occlusion=<hair/hands/bags/objects overlapping garment region>; "
+        "framing_lighting=<framing/crop, light direction/intensity, background>; "
+        "occlusion=<hair/hands/objects overlapping garment region>; "
         "preserve=<face identity, skin tone, hair, body proportions, pose, background unchanged>. "
+        "Do not describe outfit details unless they directly occlude the target garment region. "
         "Use unknown when not visible."
     ),
 ).strip()
@@ -280,15 +291,31 @@ FLUX2_RUNTIME_SCORING_ENABLED = os.getenv(
     "FLUX2_RUNTIME_SCORING_ENABLED",
     "0" if FLUX2_LOW_LATENCY_MODE else "1",
 ) == "1"
+FLUX2_FORCE_RUNTIME_SCORING_FOR_SINGLE_CANDIDATE = os.getenv(
+    "FLUX2_FORCE_RUNTIME_SCORING_FOR_SINGLE_CANDIDATE",
+    "0",
+) == "1"
 FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND = os.getenv(
     "FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND",
-    "minicpm",
+    "minicpm_service",
 ).strip().lower()
 if FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND not in {"florence", "joycaption", "minicpm", "minicpm_service"}:
     FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND = "minicpm"
 FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS = max(4, _env_int("FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS", 10))
 FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_SEED = max(0, _env_int("FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_SEED", 23))
-FLUX2_SINGLE_GARMENT_EXTRACT_UPLOAD_DEBUG = os.getenv("FLUX2_SINGLE_GARMENT_EXTRACT_UPLOAD_DEBUG", "1") == "1"
+FLUX2_SINGLE_GARMENT_EXTRACT_UPLOAD_DEBUG = os.getenv("FLUX2_SINGLE_GARMENT_EXTRACT_UPLOAD_DEBUG", "0") == "1"
+FLUX2_SINGLE_GARMENT_EXTRACT_DISABLE_PARSER = os.getenv(
+    "FLUX2_SINGLE_GARMENT_EXTRACT_DISABLE_PARSER",
+    "1",
+) == "1"
+FLUX2_SINGLE_GARMENT_EXTRACT_UPLOAD_RAW_DEBUG = os.getenv(
+    "FLUX2_SINGLE_GARMENT_EXTRACT_UPLOAD_RAW_DEBUG",
+    "0",
+) == "1"
+FLUX2_SINGLE_GARMENT_EXTRACT_EXPOSE_INTERMEDIATE_URLS = os.getenv(
+    "FLUX2_SINGLE_GARMENT_EXTRACT_EXPOSE_INTERMEDIATE_URLS",
+    "0",
+) == "1"
 HYBRID_TOP_K = max(1, _env_int("HYBRID_TOP_K", 3))
 ANALYZE_MAX_ITEMS = max(1, _env_int("ANALYZE_MAX_ITEMS", 3))
 HYBRID_MIN_SCORE = _env_float("HYBRID_MIN_SCORE", 0.0)
@@ -297,6 +324,12 @@ HYBRID_WEIGHT_FLORENCE = _env_float("HYBRID_WEIGHT_FLORENCE", 0.45)
 HYBRID_WEIGHT_BBOX = _env_float("HYBRID_WEIGHT_BBOX", 0.10)
 ANALYZE_REQUIRE_SELECTION = os.getenv("ANALYZE_REQUIRE_SELECTION", "1") == "1"
 ANALYZE_CAPTION_MODE = os.getenv("ANALYZE_CAPTION_MODE", "short").strip().lower()
+ANALYZE_SELECTION_PREVIEW_FORMAT = os.getenv("ANALYZE_SELECTION_PREVIEW_FORMAT", "jpeg").strip().lower()
+if ANALYZE_SELECTION_PREVIEW_FORMAT not in {"jpeg", "png"}:
+    ANALYZE_SELECTION_PREVIEW_FORMAT = "jpeg"
+ANALYZE_SELECTION_PREVIEW_MAX_SIDE = max(128, _env_int("ANALYZE_SELECTION_PREVIEW_MAX_SIDE", 640))
+ANALYZE_SELECTION_PREVIEW_JPEG_QUALITY = max(40, min(95, _env_int("ANALYZE_SELECTION_PREVIEW_JPEG_QUALITY", 80)))
+ANALYZE_GPU_QUEUE_TIMEOUT_S = max(5.0, _env_float("ANALYZE_GPU_QUEUE_TIMEOUT_S", 70.0))
 ANALYZE_MAX_FILE_BYTES = max(1, _env_int("ANALYZE_MAX_FILE_BYTES", 3 * 1024 * 1024))
 ANALYZE_BLUR_CHECK_ENABLED = os.getenv("ANALYZE_BLUR_CHECK_ENABLED", "1") == "1"
 ANALYZE_BLUR_MIN_FOCUS_SCORE = _env_float("ANALYZE_BLUR_MIN_FOCUS_SCORE", 22.0)
@@ -307,7 +340,7 @@ ANALYZE_PARSER_MIN_AREA_RATIO = _env_float("ANALYZE_PARSER_MIN_AREA_RATIO", 0.01
 ANALYZE_PARSER_PAD = max(0, _env_int("ANALYZE_PARSER_PAD", 12))
 ANALYZE_ENABLE_HUMAN_PARSER = os.getenv("ANALYZE_ENABLE_HUMAN_PARSER", "1") == "1"
 ANALYZE_USE_PARSER_FOR_PREROUTING = os.getenv("ANALYZE_USE_PARSER_FOR_PREROUTING", "0") == "1"
-ANALYZE_ENABLE_HEURISTIC_SPLIT = os.getenv("ANALYZE_ENABLE_HEURISTIC_SPLIT", "1") == "1"
+ANALYZE_ENABLE_HEURISTIC_SPLIT = os.getenv("ANALYZE_ENABLE_HEURISTIC_SPLIT", "0") == "1"
 ANALYZE_TIGHTEN_SPLIT_CROPS = os.getenv("ANALYZE_TIGHTEN_SPLIT_CROPS", "1") == "1"
 ANALYZE_TIGHTEN_SPLIT_PAD = max(0, _env_int("ANALYZE_TIGHTEN_SPLIT_PAD", 8))
 ANALYZE_TIGHTEN_SPLIT_MIN_PIXELS = max(32, _env_int("ANALYZE_TIGHTEN_SPLIT_MIN_PIXELS", 48))
@@ -333,11 +366,32 @@ ANALYZE_FLORENCE_DRESS_LOCK_MIN_SCORE = _env_float("ANALYZE_FLORENCE_DRESS_LOCK_
 ANALYZE_COLLAPSE_SAME_TYPE = os.getenv("ANALYZE_COLLAPSE_SAME_TYPE", "0") == "1"
 ANALYZE_COLLAPSE_SAME_TYPE_MIN_IOU = _env_float("ANALYZE_COLLAPSE_SAME_TYPE_MIN_IOU", 0.85)
 ANALYZE_AUTO_SELECT_MULTI_DRESS = os.getenv("ANALYZE_AUTO_SELECT_MULTI_DRESS", "1") == "1"
+ANALYZE_UNCERTAIN_FULLBODY_TO_DRESS = os.getenv("ANALYZE_UNCERTAIN_FULLBODY_TO_DRESS", "1") == "1"
+ANALYZE_UNCERTAIN_FULLBODY_MIN_HEIGHT_RATIO = _env_float("ANALYZE_UNCERTAIN_FULLBODY_MIN_HEIGHT_RATIO", 0.78)
+ANALYZE_UNCERTAIN_FULLBODY_MIN_AREA_RATIO = _env_float("ANALYZE_UNCERTAIN_FULLBODY_MIN_AREA_RATIO", 0.22)
+ANALYZE_UNCERTAIN_FULLBODY_MAX_TOP_RATIO = _env_float("ANALYZE_UNCERTAIN_FULLBODY_MAX_TOP_RATIO", 0.26)
+ANALYZE_UNCERTAIN_FULLBODY_MIN_BOTTOM_RATIO = _env_float("ANALYZE_UNCERTAIN_FULLBODY_MIN_BOTTOM_RATIO", 0.90)
+ANALYZE_UNCERTAIN_FULLBODY_MIN_AREA_ADVANTAGE = _env_float("ANALYZE_UNCERTAIN_FULLBODY_MIN_AREA_ADVANTAGE", 1.55)
+ANALYZE_PRIMARY_TYPE_WITH_FLORENCE = os.getenv("ANALYZE_PRIMARY_TYPE_WITH_FLORENCE", "1") == "1"
+ANALYZE_PRELOAD_FLORENCE = os.getenv("ANALYZE_PRELOAD_FLORENCE", "1") == "1"
 ANALYZE_EXTRACT_CLOTH = os.getenv("ANALYZE_EXTRACT_CLOTH", "1") == "1"
+ANALYZE_FLUX_DISABLE_LORA = os.getenv("ANALYZE_FLUX_DISABLE_LORA", "1") == "1"
+ANALYZE_PRELOAD_FLUX_RUNNER = os.getenv("ANALYZE_PRELOAD_FLUX_RUNNER", "0") == "1"
+ANALYZE_USE_PARSER_POST_EXTRACT = os.getenv("ANALYZE_USE_PARSER_POST_EXTRACT", "0") == "1"
+ANALYZE_PASS_DETECTION_PROMPT_TO_EXTRACT = os.getenv("ANALYZE_PASS_DETECTION_PROMPT_TO_EXTRACT", "1") == "1"
 ANALYZE_PROMPT_FROM_EXTRACTED = os.getenv("ANALYZE_PROMPT_FROM_EXTRACTED", "1") == "1"
 ANALYZE_EXTRACT_PARSER_ONLY = os.getenv("ANALYZE_EXTRACT_PARSER_ONLY", "1") == "1"
+ANALYZE_EXTRACT_FORCE_BBOX_CROP = os.getenv("ANALYZE_EXTRACT_FORCE_BBOX_CROP", "1") == "1"
+ANALYZE_EXTRACT_CROP_PAD_RATIO = _env_float("ANALYZE_EXTRACT_CROP_PAD_RATIO", 0.18)
+ANALYZE_EXTRACT_CROP_PAD_RATIO_DRESS = _env_float("ANALYZE_EXTRACT_CROP_PAD_RATIO_DRESS", 0.28)
+ANALYZE_EXTRACT_CROP_BOTTOM_EXTRA_RATIO_DRESS = _env_float("ANALYZE_EXTRACT_CROP_BOTTOM_EXTRA_RATIO_DRESS", 0.32)
+ANALYZE_EXTRACT_CROP_TOP_EXTRA_RATIO_BOTTOM = _env_float("ANALYZE_EXTRACT_CROP_TOP_EXTRA_RATIO_BOTTOM", 0.12)
+ANALYZE_EXTRACT_CROP_TOP_EXTRA_RATIO_BOTTOM_MULTI = _env_float("ANALYZE_EXTRACT_CROP_TOP_EXTRA_RATIO_BOTTOM_MULTI", 0.12)
+ANALYZE_EXTRACT_DRESS_TOP_RECOVERY_RATIO = _env_float("ANALYZE_EXTRACT_DRESS_TOP_RECOVERY_RATIO", 0.14)
+ANALYZE_EXTRACT_TOP_TOP_RECOVERY_RATIO = _env_float("ANALYZE_EXTRACT_TOP_TOP_RECOVERY_RATIO", 0.08)
 ANALYZE_EXTRACT_MIN_MASK_RATIO = _env_float("ANALYZE_EXTRACT_MIN_MASK_RATIO", 0.01)
 ANALYZE_EXTRACT_RELAXED_RESCUE = os.getenv("ANALYZE_EXTRACT_RELAXED_RESCUE", "1") == "1"
+ANALYZE_EXTRACT_ALLOW_SOURCE_FALLBACK = os.getenv("ANALYZE_EXTRACT_ALLOW_SOURCE_FALLBACK", "0") == "1"
 ANALYZE_EXTRACT_EDGE_FEATHER_PX = max(0, _env_int("ANALYZE_EXTRACT_EDGE_FEATHER_PX", 1))
 ANALYZE_EXTRACT_COMPONENT_MIN_RATIO = _env_float("ANALYZE_EXTRACT_COMPONENT_MIN_RATIO", 0.0007)
 ANALYZE_EXTRACT_KEEP_DILATE = max(0, _env_int("ANALYZE_EXTRACT_KEEP_DILATE", 3))
@@ -349,52 +403,9 @@ ANALYZE_EXTRACT_BODY_STRIP_MAX_RATIO = min(
     0.95,
     max(0.01, _env_float("ANALYZE_EXTRACT_BODY_STRIP_MAX_RATIO", 0.28)),
 )
-ANALYZE_SHOWROOM_DELTA_REFINEMENT_ENABLED = os.getenv("ANALYZE_SHOWROOM_DELTA_REFINEMENT_ENABLED", "1") == "1"
-ANALYZE_SHOWROOM_DELTA_THRESHOLD = max(1.0, _env_float("ANALYZE_SHOWROOM_DELTA_THRESHOLD", 12.0))
-ANALYZE_SHOWROOM_DELTA_DILATE = max(0, _env_int("ANALYZE_SHOWROOM_DELTA_DILATE", 2))
-ANALYZE_SHOWROOM_DELTA_MIN_RETAIN_RATIO = min(
-    0.99,
-    max(0.10, _env_float("ANALYZE_SHOWROOM_DELTA_MIN_RETAIN_RATIO", 0.58)),
-)
-ANALYZE_SHOWROOM_DELTA_SKIN_EXTRA = max(0.0, _env_float("ANALYZE_SHOWROOM_DELTA_SKIN_EXTRA", 8.0))
-ANALYZE_TOP_RECOVER_MAX_SKIN_RATIO = min(0.95, max(0.0, _env_float("ANALYZE_TOP_RECOVER_MAX_SKIN_RATIO", 0.30)))
-ANALYZE_TOP_RECOVER_NEAR_DILATE = max(7, _env_int("ANALYZE_TOP_RECOVER_NEAR_DILATE", 31))
 ANALYZE_TOP_SKIN_RIM_CLEANUP = os.getenv("ANALYZE_TOP_SKIN_RIM_CLEANUP", "1") == "1"
 ANALYZE_TOP_SKIN_RIM_MAX_RATIO = min(0.30, max(0.0, _env_float("ANALYZE_TOP_SKIN_RIM_MAX_RATIO", 0.08)))
-ANALYZE_VTON_MAX_SHOWROOM_MAE = max(0.0, _env_float("ANALYZE_VTON_MAX_SHOWROOM_MAE", 3.5))
-ANALYZE_VTON_MIN_SHOWROOM_CHANGE_RATIO = max(0.0, _env_float("ANALYZE_VTON_MIN_SHOWROOM_CHANGE_RATIO", 0.02))
-ANALYZE_VTON_FALLBACK_ENABLED = os.getenv("ANALYZE_VTON_FALLBACK_ENABLED", "1") == "1"
-ANALYZE_VTON_CLOTH_ONLY_ENDPOINT = os.getenv("ANALYZE_VTON_CLOTH_ONLY_ENDPOINT", "").strip()
-ANALYZE_VTON_TIMEOUT_S = max(10, _env_int("ANALYZE_VTON_TIMEOUT_S", 120))
-ANALYZE_VTON_QUALITY_PRESET = os.getenv("ANALYZE_VTON_QUALITY_PRESET", "balanced").strip().lower()
-if ANALYZE_VTON_QUALITY_PRESET not in {"balanced", "high", "max"}:
-    ANALYZE_VTON_QUALITY_PRESET = "balanced"
-ANALYZE_VTON_NUM_TIMESTEPS = max(10, _env_int("ANALYZE_VTON_NUM_TIMESTEPS", 28))
-ANALYZE_VTON_GUIDANCE_SCALE = _env_float("ANALYZE_VTON_GUIDANCE_SCALE", 2.2)
-ANALYZE_VTON_SEED = max(0, _env_int("ANALYZE_VTON_SEED", 23))
-ANALYZE_VTON_SEGMENTATION_FREE = os.getenv("ANALYZE_VTON_SEGMENTATION_FREE", "1") == "1"
-ANALYZE_VTON_CUTOUT_FEATHER_PX = max(0, _env_int("ANALYZE_VTON_CUTOUT_FEATHER_PX", 2))
-ANALYZE_VTON_ZOOM_PADDING_RATIO = _env_float("ANALYZE_VTON_ZOOM_PADDING_RATIO", 0.12)
-ANALYZE_VTON_ALLOW_SOURCE_FALLBACK = os.getenv("ANALYZE_VTON_ALLOW_SOURCE_FALLBACK", "0") == "1"
-ANALYZE_VTON_REJECT_SOURCE_PASSTHROUGH = os.getenv("ANALYZE_VTON_REJECT_SOURCE_PASSTHROUGH", "1") == "1"
-ANALYZE_VTON_MIRROR_RAW_OUTPUT = os.getenv("ANALYZE_VTON_MIRROR_RAW_OUTPUT", "0") == "1"
-ANALYZE_VTON_STRICT_SAFETY_CHECKS = os.getenv("ANALYZE_VTON_STRICT_SAFETY_CHECKS", "0") == "1"
-ANALYZE_VTON_MAX_SOURCE_MAE = _env_float("ANALYZE_VTON_MAX_SOURCE_MAE", 2.0)
-ANALYZE_VTON_USE_SHOWROOM_PERSON = os.getenv("ANALYZE_VTON_USE_SHOWROOM_PERSON", "0") == "1"
-ANALYZE_VTON_SHOWROOM_PERSON_IMAGE_URL = os.getenv("ANALYZE_VTON_SHOWROOM_PERSON_IMAGE_URL", "").strip()
-ANALYZE_VTON_DRESS_USE_FULL_IMAGE = os.getenv("ANALYZE_VTON_DRESS_USE_FULL_IMAGE", "1") == "1"
-ANALYZE_VTON_SINGLE_ITEM_USE_FULL_IMAGE = os.getenv("ANALYZE_VTON_SINGLE_ITEM_USE_FULL_IMAGE", "1") == "1"
-ANALYZE_VTON_CROP_PAD_RATIO = _env_float("ANALYZE_VTON_CROP_PAD_RATIO", 0.18)
-ANALYZE_VTON_CROP_PAD_RATIO_DRESS = _env_float("ANALYZE_VTON_CROP_PAD_RATIO_DRESS", 0.28)
-ANALYZE_VTON_CROP_BOTTOM_EXTRA_RATIO_DRESS = _env_float("ANALYZE_VTON_CROP_BOTTOM_EXTRA_RATIO_DRESS", 0.32)
-ANALYZE_VTON_CROP_TOP_EXTRA_RATIO_BOTTOM = _env_float("ANALYZE_VTON_CROP_TOP_EXTRA_RATIO_BOTTOM", 0.12)
-ANALYZE_VTON_CROP_TOP_EXTRA_RATIO_BOTTOM_MULTI = _env_float("ANALYZE_VTON_CROP_TOP_EXTRA_RATIO_BOTTOM_MULTI", 0.12)
-ANALYZE_VTON_TOP_ZOOM_ENABLED = os.getenv("ANALYZE_VTON_TOP_ZOOM_ENABLED", "0") == "1"
-ANALYZE_VTON_BOTTOM_UPSCALE_ENABLED = os.getenv("ANALYZE_VTON_BOTTOM_UPSCALE_ENABLED", "0") == "1"
 ANALYZE_REQUIRE_EXTRACTED_PROMPT = os.getenv("ANALYZE_REQUIRE_EXTRACTED_PROMPT", "1") == "1"
-ANALYZE_REQUIRE_MIRRORED_VTON_URL = os.getenv("ANALYZE_REQUIRE_MIRRORED_VTON_URL", "1") == "1"
-ANALYZE_VTON_MIN_ALPHA_RATIO = _env_float("ANALYZE_VTON_MIN_ALPHA_RATIO", 0.004)
-ANALYZE_VTON_MIN_RGB_STD = _env_float("ANALYZE_VTON_MIN_RGB_STD", 1.2)
 ANALYZE_GARMENT_POSTPROCESS_ENABLED = os.getenv("ANALYZE_GARMENT_POSTPROCESS_ENABLED", "1") == "1"
 ANALYZE_GARMENT_TARGET_ASPECT_W = max(1, _env_int("ANALYZE_GARMENT_TARGET_ASPECT_W", 2))
 ANALYZE_GARMENT_TARGET_ASPECT_H = max(1, _env_int("ANALYZE_GARMENT_TARGET_ASPECT_H", 3))
@@ -409,6 +420,13 @@ ANALYZE_GARMENT_ENHANCE_LIGHTING_AUTO = os.getenv("ANALYZE_GARMENT_ENHANCE_LIGHT
 ANALYZE_GARMENT_OUTPUT_BACKGROUND = os.getenv("ANALYZE_GARMENT_OUTPUT_BACKGROUND", "white").strip().lower()
 if ANALYZE_GARMENT_OUTPUT_BACKGROUND not in {"transparent", "white"}:
     ANALYZE_GARMENT_OUTPUT_BACKGROUND = "white"
+ANALYZE_BG_REMOVAL_BACKEND = os.getenv("ANALYZE_BG_REMOVAL_BACKEND", "raw").strip().lower()
+if ANALYZE_BG_REMOVAL_BACKEND not in {"raw", "white", "rembg", "birefnet"}:
+    ANALYZE_BG_REMOVAL_BACKEND = "raw"
+ANALYZE_BIREFNET_MODEL_ID = os.getenv("ANALYZE_BIREFNET_MODEL_ID", "ZhengPeng7/BiRefNet").strip()
+ANALYZE_BIREFNET_INPUT_SIZE = max(512, _env_int("ANALYZE_BIREFNET_INPUT_SIZE", 1024))
+ANALYZE_PROGRESS_SYNC_ASYNC = os.getenv("ANALYZE_PROGRESS_SYNC_ASYNC", "1") == "1"
+ANALYZE_PROGRESS_SYNC_MAX_WORKERS = max(1, _env_int("ANALYZE_PROGRESS_SYNC_MAX_WORKERS", 2))
 ENABLE_WARDROBE_PROGRESS_SYNC = os.getenv("ENABLE_WARDROBE_PROGRESS_SYNC", "0") == "1"
 WARDROBE_PROGRESS_API_BASE_URL = os.getenv("WARDROBE_PROGRESS_API_BASE_URL", "").strip()
 WARDROBE_PROGRESS_SYNC_TIMEOUT_S = max(5, _env_int("WARDROBE_PROGRESS_SYNC_TIMEOUT_S", 20))
@@ -423,6 +441,23 @@ PARSER_FUSION_WEIGHT_OPENCLIP = _env_float("PARSER_FUSION_WEIGHT_OPENCLIP", 0.40
 PARSER_FUSION_MIN_SCORE_KEEP = _env_float("PARSER_FUSION_MIN_SCORE_KEEP", 0.24)
 PARSER_FUSION_AMBIGUITY_GAP = _env_float("PARSER_FUSION_AMBIGUITY_GAP", 0.08)
 gpu_semaphore = asyncio.Semaphore(GPU_CONCURRENCY)
+_WARDROBE_PROGRESS_EXECUTOR = ThreadPoolExecutor(max_workers=ANALYZE_PROGRESS_SYNC_MAX_WORKERS)
+_REMBG_SESSION = None
+_REMBG_SESSION_LOCK = threading.Lock()
+_BIREFNET_MODEL = None
+_BIREFNET_LOCK = threading.Lock()
+STARTUP_BACKGROUND_PRELOAD = os.getenv("STARTUP_BACKGROUND_PRELOAD", "1") == "1"
+_STARTUP_PRELOAD_STATE = {
+    "mode": "background" if STARTUP_BACKGROUND_PRELOAD else "blocking",
+    "started": False,
+    "running": False,
+    "completed": False,
+    "started_at": None,
+    "completed_at": None,
+    "duration_s": None,
+    "errors": [],
+}
+_STARTUP_PRELOAD_TASK = None
 
 GARMENT_TYPE_SYNONYMS = {
     "top": "top",
@@ -431,6 +466,17 @@ GARMENT_TYPE_SYNONYMS = {
     "t-shirt": "top",
     "tee": "top",
     "blouse": "top",
+    "shortsleevetop": "top",
+    "longsleevetop": "top",
+    "shortsleevedshirt": "top",
+    "longsleevedshirt": "top",
+    "bra": "top",
+    "bralette": "top",
+    "brassiere": "top",
+    "bikinitop": "top",
+    "bustier": "top",
+    "vest": "top",
+    "sling": "top",
     "bottom": "bottom",
     "pant": "bottom",
     "pants": "bottom",
@@ -443,12 +489,23 @@ GARMENT_TYPE_SYNONYMS = {
     "dress": "dress",
     "gown": "dress",
     "kurti": "dress",
+    "shortsleevedress": "dress",
+    "longsleevedress": "dress",
+    "vestdress": "dress",
+    "slingdress": "dress",
     "outer": "outer",
     "outerwear": "outer",
+    "outwear": "outer",
     "jacket": "outer",
     "coat": "outer",
     "blazer": "outer",
     "hoodie": "outer",
+    "shortsleeveoutwear": "outer",
+    "longsleeveoutwear": "outer",
+    "shortsleevedoutwear": "outer",
+    "longsleevedoutwear": "outer",
+    "shortsleeveouterwear": "outer",
+    "longsleeveouterwear": "outer",
 }
 
 app = FastAPI(
@@ -470,7 +527,25 @@ class AIEngine:
         self.minicpm = MiniCPMVRunner()
         self.openclip = OpenCLIPRunner()
         self.flux2 = Flux2CVTONRunner()
+        self._analyze_flux2: Optional[Flux2CVTONRunner] = None
+        self._analyze_flux2_lock = threading.Lock()
         self.board_builder = BoardBuilder()
+
+    def get_flux2_for_analyze(self) -> Flux2CVTONRunner:
+        # Strict isolation: /analyze can run on a separate no-LoRA runner so try-on remains unchanged.
+        if not ANALYZE_FLUX_DISABLE_LORA:
+            return self.flux2
+        if self._analyze_flux2 is None:
+            with self._analyze_flux2_lock:
+                if self._analyze_flux2 is None:
+                    self._analyze_flux2 = Flux2CVTONRunner(
+                        config={
+                            "enable_lora": False,
+                            "require_lora": False,
+                            "fuse_lora": False,
+                        }
+                    )
+        return self._analyze_flux2
         
     def ensure_vto_ready(self):
         self.flux2.ensure_ready()
@@ -502,17 +577,36 @@ class AIEngine:
         self.yolo_runner.ensure_ready()
         if self.parser_runner:
             self.parser_runner.ensure_ready()
+        if ANALYZE_PRELOAD_FLORENCE:
+            self.florence._ensure_loaded()
+        if ANALYZE_PRELOAD_FLUX_RUNNER:
+            self.get_flux2_for_analyze().ensure_ready()
 
     def model_status(self):
+        analyze_flux2 = self._analyze_flux2
+        analyze_startup = dict(getattr(analyze_flux2, "_startup_metrics", {}) or {}) if analyze_flux2 else {}
         return {
             "flux2_loaded": self.flux2._pipeline is not None,
+            "analyze_flux2_loaded": bool(analyze_flux2 and analyze_flux2._pipeline is not None),
+            "analyze_flux2_isolated": bool(ANALYZE_FLUX_DISABLE_LORA),
+            "analyze_flux2_lora_enabled": bool(
+                analyze_startup.get("lora_enabled", False)
+            ) if analyze_flux2 else False,
+            "analyze_flux2_lora_loaded": bool(
+                analyze_startup.get("lora_loaded", False)
+            ) if analyze_flux2 else False,
             "florence_loaded": self.florence._model is not None,
             "qwen25vl_loaded": self.qwen25vl.is_loaded,
             "joycaption_loaded": self.joycaption.is_loaded,
             "minicpm_loaded": self.minicpm.is_loaded,
+            "minicpm_model_id": str(getattr(self.minicpm, "model_id", "")),
             "openclip_loaded": self.openclip.is_loaded,
             "openclip_available": self.openclip.is_available,
             "yolo_loaded": self.yolo_runner.is_loaded,
+            "yolo_model_path": self.yolo_runner.model_path,
+            "yolo_expected_label_family": self.yolo_runner.expected_label_family,
+            "yolo_label_family": self.yolo_runner.label_family,
+            "yolo_class_count": self.yolo_runner.class_count,
             "human_parser_loaded": bool(self.parser_runner and self.parser_runner.is_loaded),
         }
 
@@ -771,6 +865,65 @@ def _strip_descriptor_color_clause(description: str) -> str:
     normalized = ", ".join(out).strip(" ,")
     return normalized or text
 
+
+def _descriptor_word_count(text: str) -> int:
+    return len(re.findall(r"[A-Za-z0-9#]+", str(text or "")))
+
+
+def _descriptor_is_weak(text: str, *, min_words: int = MINICPM_SERVICE_GARMENT_MIN_WORDS) -> bool:
+    clean = " ".join(str(text or "").split()).strip()
+    if not clean:
+        return True
+    words = _descriptor_word_count(clean)
+    if words < max(4, int(min_words)):
+        return True
+    if ";" in clean and "=" in clean:
+        # Structured output from VLM is usually rich enough.
+        return False
+    richness_markers = (
+        "type",
+        "material",
+        "silhouette",
+        "construction",
+        "details",
+        "coverage",
+        "sleeve",
+        "neckline",
+        "hem",
+        "ruffle",
+        "pleat",
+    )
+    lower = clean.lower()
+    return not any(token in lower for token in richness_markers)
+
+
+def _enrich_garment_descriptor(primary: str, fallback: str, garment_type: str) -> str:
+    """
+    Ensure analyze/extract prompts stay descriptive even when VLM emits a short sentence.
+    """
+    primary_clean = _sanitize_florence_garment_description(primary or "")
+    fallback_clean = _sanitize_florence_garment_description(fallback or "")
+    primary_clean = " ".join(primary_clean.split()).strip(" ,.")
+    fallback_clean = " ".join(fallback_clean.split()).strip(" ,.")
+
+    if not fallback_clean:
+        return primary_clean or fallback_clean
+    if not primary_clean:
+        return fallback_clean
+    if fallback_clean.lower() in primary_clean.lower():
+        return primary_clean
+    if primary_clean.lower() in fallback_clean.lower():
+        return fallback_clean
+
+    # Keep strongest descriptor first, append fallback context once.
+    joined = f"{primary_clean}. {fallback_clean}"
+    joined = re.sub(r"\s{2,}", " ", joined).strip(" .")
+    if joined and garment_type:
+        g = _normalize_garment_type(garment_type) or garment_type
+        if g.lower() not in joined.lower():
+            joined = f"{g} garment. {joined}"
+    return joined
+
 def _augment_identity_lock(user_description: str) -> str:
     base = str(user_description or "").strip()
     lock = (
@@ -886,6 +1039,14 @@ _COLOR_LABEL_RGB: List[Tuple[str, Tuple[int, int, int]]] = [
 ]
 
 _DETAIL_LOCK_TERMS: List[Tuple[str, str]] = [
+    ("button", "button count and placement"),
+    ("buttons", "button count and placement"),
+    ("dotted button", "dotted button detailing"),
+    ("dot button", "dotted button detailing"),
+    ("stud", "stud detailing"),
+    ("lapel", "lapel shape"),
+    ("pocket flap", "pocket flap placement"),
+    ("border", "border placement"),
     ("sequined", "sequined surface"),
     ("sequin", "sequined surface"),
     ("beaded", "beadwork"),
@@ -1540,6 +1701,26 @@ def _extract_masked_dominant_color_labels(image: Image.Image, top_k: int = 3) ->
             break
     return out
 
+
+def _color_labels_from_hex_palette(hexes: List[str], top_k: int = 3) -> List[str]:
+    out: List[str] = []
+    for hx in hexes:
+        token = str(hx or "").strip()
+        if not re.fullmatch(r"#[0-9A-Fa-f]{6}", token):
+            continue
+        r = int(token[1:3], 16)
+        g = int(token[3:5], 16)
+        b = int(token[5:7], 16)
+        label = _nearest_color_label((r, g, b))
+        if label == "grey":
+            label = "gray"
+        label = _canonical_color_token(label)
+        if label and label not in out:
+            out.append(label)
+        if len(out) >= max(1, int(top_k)):
+            break
+    return out
+
 def _extract_detail_lock_terms(description: str, max_items: int = 6) -> List[str]:
     low = str(description or "").lower()
     if not low:
@@ -1633,8 +1814,11 @@ def _build_flux2_visual_lock_clauses(
             desc = garment_descriptions[idx] if idx < len(garment_descriptions) else ""
             profile = color_profiles[idx] if idx < len(color_profiles) and isinstance(color_profiles[idx], dict) else {}
             text_colors = [_canonical_color_token(c) for c in _extract_text_color_terms(desc, max_items=FLUX2_COLOR_LOCK_TOP_K)]
-            masked_colors = _extract_masked_dominant_color_labels(img, top_k=FLUX2_COLOR_LOCK_TOP_K)
-            image_colors = masked_colors or _extract_dominant_color_labels(img, top_k=FLUX2_COLOR_LOCK_TOP_K)
+            dominant_hexes = color_palettes[idx] if idx < len(color_palettes) else []
+            image_colors = _color_labels_from_hex_palette(dominant_hexes, top_k=FLUX2_COLOR_LOCK_TOP_K)
+            if not image_colors:
+                masked_colors = _extract_masked_dominant_color_labels(img, top_k=FLUX2_COLOR_LOCK_TOP_K)
+                image_colors = masked_colors or _extract_dominant_color_labels(img, top_k=FLUX2_COLOR_LOCK_TOP_K)
             if image_colors:
                 norm_colors = [_canonical_color_token(c) for c in image_colors]
                 high_chroma = bool(
@@ -1946,6 +2130,8 @@ def _build_flux2_targeted_prompt(
         "Use image 1 as strict identity source for face, body shape, skin tone, and pose. "
         f"TRANSFER the {target_hint} from image 2 onto the person in image 1. "
         "Match exact garment attributes from image 2: color tone, print/pattern, neckline, sleeve length, hem length, fit, and trims. "
+        "Preserve exact source garment color arrangement from image 2: dominant tone, accent tone, border/trim colors, "
+        "brightness depth, undertone, and contrast distribution across the fabric. "
         "Do not invent a new garment design, new pattern, or new fabric. "
     )
     if color_lock_clause:
@@ -1991,6 +2177,13 @@ def _build_flux2_targeted_prompt(
                 "Do not edit anything above the natural waistline except minor occlusion cleanup. "
                 "Preserve upper-body garment pixels and folds as in image 1. "
             )
+        if types == {"outer"}:
+            prompt += (
+                "Outerwear-only lock: keep the original lower-body garment completely unchanged "
+                "(pants/skirt/shorts/shoes, including silhouette, color, texture, folds, and hem). "
+                "Keep the original inner top from image 1 unchanged except where the outerwear naturally covers it. "
+                "Do not recolor or redesign the pants, and do not replace the full outfit when only outerwear is targeted. "
+            )
 
     if is_multi:
         prompt += (
@@ -1999,6 +2192,13 @@ def _build_flux2_targeted_prompt(
         )
         if collage_item_clause:
             prompt += collage_item_clause
+
+    prompt += (
+        "Preserve the exact number of visible arms and hands from image 1. "
+        "Never generate an extra hand, extra arm, duplicate fingers, mirrored limb, or floating hand. "
+        "Hands must stay naturally attached to the original arms and remain separate from the transferred garment, "
+        "except for realistic occlusion caused by the original pose. "
+    )
 
     if is_dress_mode:
         prompt += (
@@ -2101,6 +2301,11 @@ def _build_flux2_negative_prompt(
             "modified shirt, modified top, modified jacket, altered upper-body garment color, "
             "upper-body garment structure change"
         )
+    elif types == {"outer"}:
+        parts.append(
+            "modified pants, modified skirt, modified shorts, modified shoes, altered lower-body garment color, "
+            "altered lower-body garment structure, recolored inner top, full outfit replacement instead of outerwear-only edit"
+        )
 
     return " | ".join([p for p in parts if p]).strip()
 
@@ -2132,6 +2337,8 @@ def _build_flux2_runtime_negative_prompt(
         "white cast on garment",
         "metallic sheen",
         "glossy silver cast",
+        "wrong border color",
+        "wrong trim color",
         "pattern drift",
         "print placement shift",
         "texture swap",
@@ -2143,6 +2350,13 @@ def _build_flux2_runtime_negative_prompt(
         "face identity change",
         "skin tone change",
         "body shape change",
+        "extra hand",
+        "third hand",
+        "duplicate arm",
+        "floating hand",
+        "hand fused to garment",
+        "garment fused to skin",
+        "duplicate fingers",
     ]
     if board_mode == "collage" and len(target_types) > 1:
         base_terms.extend(
@@ -2186,6 +2400,19 @@ def _build_flux2_runtime_negative_prompt(
                 "edits above waistline",
             ]
         )
+    elif types == {"outer"}:
+        base_terms.extend(
+            [
+                "changed pants",
+                "changed skirt",
+                "changed shorts",
+                "changed shoes",
+                "modified lower-body garment color",
+                "modified lower-body garment structure",
+                "recolored inner top",
+                "full outfit replacement",
+            ]
+        )
 
     return ", ".join(dict.fromkeys(base_terms))
 
@@ -2210,8 +2437,33 @@ _MINICPM_DESCRIPTOR_CACHE: Dict[str, Tuple[float, str]] = {}
 _MINICPM_DESCRIPTOR_CACHE_LOCK = threading.Lock()
 
 
-def _minicpm_service_cache_key(kind: str, image_url: str, max_new_tokens: int, prompt: str) -> str:
-    raw = f"{kind}|{image_url}|{int(max_new_tokens)}|{prompt}"
+def _image_signature_for_cache(image: Optional[Image.Image]) -> str:
+    if not isinstance(image, Image.Image):
+        return ""
+    try:
+        rgb = image.convert("RGB")
+        arr = np.asarray(rgb, dtype=np.uint8)
+        if arr.size <= 0:
+            return ""
+        h = hashlib.sha256()
+        h.update(arr.tobytes())
+        h.update(f"{rgb.width}x{rgb.height}".encode("utf-8"))
+        return h.hexdigest()
+    except Exception:
+        return ""
+
+
+def _minicpm_service_cache_key(
+    kind: str,
+    image_url: str,
+    max_new_tokens: int,
+    prompt: str,
+    image_signature: str = "",
+    service_url: str = "",
+) -> str:
+    cache_source = str(image_signature or image_url or "").strip()
+    base = str(service_url or "").strip().lower()
+    raw = f"{kind}|{base}|{cache_source}|{int(max_new_tokens)}|{prompt}"
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
@@ -2245,24 +2497,33 @@ def _minicpm_service_cache_put(cache_key: str, value: str) -> None:
         _MINICPM_DESCRIPTOR_CACHE.pop(oldest_key, None)
 
 
-def _describe_with_minicpm_service(image_url: Optional[str], kind: str) -> str:
+def _describe_with_minicpm_service(
+    image_url: Optional[str],
+    kind: str,
+    image_signature: str = "",
+    service_url: Optional[str] = None,
+    prompt_override: Optional[str] = None,
+) -> str:
     """
     Fetch descriptor text from standalone MiniCPM service using source image URL.
     """
     clean_url = str(image_url or "").strip()
     if not clean_url:
         raise RuntimeError("minicpm_service requires a valid image URL")
-    if not MINICPM_SERVICE_URL:
+    base_url = str(service_url or MINICPM_SERVICE_URL or "").strip().rstrip("/")
+    if not base_url:
         raise RuntimeError("MINICPM_SERVICE_URL is not configured")
 
     if kind == "person":
-        endpoint = f"{MINICPM_SERVICE_URL}/describe/person"
+        endpoint = f"{base_url}/describe/person"
         max_new_tokens = MINICPM_SERVICE_PERSON_MAX_NEW_TOKENS
         prompt = MINICPM_SERVICE_PERSON_PROMPT
     else:
-        endpoint = f"{MINICPM_SERVICE_URL}/describe/garment"
+        endpoint = f"{base_url}/describe/garment"
         max_new_tokens = MINICPM_SERVICE_GARMENT_MAX_NEW_TOKENS
         prompt = MINICPM_SERVICE_GARMENT_PROMPT
+    if prompt_override:
+        prompt = str(prompt_override).strip() or prompt
 
     payload = {
         "image_url": clean_url,
@@ -2274,6 +2535,8 @@ def _describe_with_minicpm_service(image_url: Optional[str], kind: str) -> str:
         image_url=clean_url,
         max_new_tokens=int(max_new_tokens),
         prompt=prompt,
+        image_signature=str(image_signature or "").strip(),
+        service_url=base_url,
     )
     cached = _minicpm_service_cache_get(cache_key)
     if cached:
@@ -2326,13 +2589,33 @@ def _describe_garment_with_backend(
     image: Image.Image,
     backend: str,
     image_url: Optional[str] = None,
+    service_url: Optional[str] = None,
+    garment_type: Optional[str] = None,
+    dominant_color_hexes: Optional[List[str]] = None,
+    color_hints: Optional[List[str]] = None,
 ) -> str:
     resolved = _normalize_descriptor_backend(backend)
     if resolved == "minicpm_service":
         try:
             if not image_url:
                 raise RuntimeError("minicpm_service requires a valid image URL for garment description")
-            return _describe_with_minicpm_service(image_url=image_url, kind="garment")
+            cache_img = _resize_for_qwen_caption(
+                image=image,
+                max_side=FLUX2_MINICPM_PRODUCT_CAPTION_MAX_SIDE,
+                min_side=FLUX2_MINICPM_PRODUCT_CAPTION_MIN_SIDE,
+            )
+            image_signature = _image_signature_for_cache(cache_img)
+            return _describe_with_minicpm_service(
+                image_url=image_url,
+                kind="garment",
+                image_signature=image_signature,
+                service_url=service_url,
+                prompt_override=_build_minicpm_garment_prompt(
+                    garment_type=str(garment_type or ""),
+                    dominant_color_hexes=dominant_color_hexes,
+                    color_hints=color_hints,
+                ),
+            )
         except Exception as err:
             raise RuntimeError(f"MiniCPM service garment description failed: {err}") from err
     if resolved == "minicpm":
@@ -2366,6 +2649,7 @@ def _describe_user_image_for_flux2(
     user_img: Image.Image,
     backend: str = "florence",
     image_url: Optional[str] = None,
+    service_url: Optional[str] = None,
 ) -> str:
     """
     Ask selected descriptor model for a full-person detailed description.
@@ -2375,7 +2659,18 @@ def _describe_user_image_for_flux2(
         try:
             if not image_url:
                 raise RuntimeError("minicpm_service requires a valid image URL for person description")
-            return _describe_with_minicpm_service(image_url=image_url, kind="person")
+            cache_img = _resize_for_qwen_caption(
+                image=user_img,
+                max_side=FLUX2_MINICPM_USER_CAPTION_MAX_SIDE,
+                min_side=FLUX2_MINICPM_USER_CAPTION_MIN_SIDE,
+            )
+            image_signature = _image_signature_for_cache(cache_img)
+            return _describe_with_minicpm_service(
+                image_url=image_url,
+                kind="person",
+                image_signature=image_signature,
+                service_url=service_url,
+            )
         except Exception as err:
             raise RuntimeError(f"MiniCPM service user description failed: {err}") from err
     if resolved == "minicpm":
@@ -2861,6 +3156,60 @@ def _score_untargeted_region_preservation(
     except Exception:
         return 0.0
 
+def _score_identity_face_preservation(
+    reference_image: Image.Image,
+    output_image: Image.Image,
+) -> float:
+    """
+    Score identity preservation from upper-body/face region.
+    Higher is better and focuses on face+skin consistency for try-on outputs.
+    """
+    try:
+        ref = reference_image.convert("RGB").resize((256, 384), Image.BICUBIC)
+        out = output_image.convert("RGB").resize((256, 384), Image.BICUBIC)
+        ref_arr = np.asarray(ref, dtype=np.float32) / 255.0
+        out_arr = np.asarray(out, dtype=np.float32) / 255.0
+
+        h, w = ref_arr.shape[:2]
+        y1 = max(8, int(h * 0.45))
+        x0 = int(w * 0.18)
+        x1 = max(x0 + 8, int(w * 0.82))
+        ref_roi = ref_arr[:y1, x0:x1, :]
+        out_roi = out_arr[:y1, x0:x1, :]
+        if ref_roi.size == 0 or out_roi.size == 0:
+            return 0.0
+
+        mae = float(np.mean(np.abs(ref_roi - out_roi)))
+        base_score = max(0.0, min(1.0, 1.0 - (mae / 0.30)))
+
+        # Optional skin-tone consistency bonus using coarse YCrCb skin mask.
+        ref_u8 = (ref_roi * 255.0).clip(0, 255).astype(np.uint8)
+        out_u8 = (out_roi * 255.0).clip(0, 255).astype(np.uint8)
+        ref_ycc = cv2.cvtColor(ref_u8, cv2.COLOR_RGB2YCrCb)
+        out_ycc = cv2.cvtColor(out_u8, cv2.COLOR_RGB2YCrCb)
+
+        ref_skin = (
+            (ref_ycc[:, :, 1] >= 133) & (ref_ycc[:, :, 1] <= 173)
+            & (ref_ycc[:, :, 2] >= 77) & (ref_ycc[:, :, 2] <= 127)
+        )
+        out_skin = (
+            (out_ycc[:, :, 1] >= 133) & (out_ycc[:, :, 1] <= 173)
+            & (out_ycc[:, :, 2] >= 77) & (out_ycc[:, :, 2] <= 127)
+        )
+
+        if int(ref_skin.sum()) < 128 or int(out_skin.sum()) < 128:
+            return float(base_score)
+
+        ref_lab = cv2.cvtColor(ref_u8, cv2.COLOR_RGB2LAB).astype(np.float32)
+        out_lab = cv2.cvtColor(out_u8, cv2.COLOR_RGB2LAB).astype(np.float32)
+        ref_mean = np.mean(ref_lab[ref_skin], axis=0)
+        out_mean = np.mean(out_lab[out_skin], axis=0)
+        skin_delta = float(np.linalg.norm(ref_mean - out_mean))
+        skin_score = max(0.0, min(1.0, 1.0 - (skin_delta / 28.0)))
+        return float((0.70 * base_score) + (0.30 * skin_score))
+    except Exception:
+        return 0.0
+
 def _focus_score(image: Image.Image) -> float:
     """
     Lightweight blur metric: higher score means sharper image.
@@ -3317,6 +3666,30 @@ def _item_rank_score(item: dict) -> float:
         return float(conf.get("hybrid", conf.get("yolo", 0.0)))
     return 0.0
 
+
+def _requested_type_geometry_score(item: dict, requested_type: str, image_height: int) -> float:
+    bbox = item.get("bbox")
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4 or image_height <= 0:
+        return _item_rank_score(item)
+    _, y0, _, y1 = [int(v) for v in bbox]
+    box_h = max(1, y1 - y0)
+    center_y = y0 + (box_h / 2.0)
+    center_ratio = float(center_y) / float(image_height)
+    height_ratio = float(box_h) / float(image_height)
+    base = _item_rank_score(item)
+    req = _normalize_garment_type(requested_type)
+
+    if req in {"top", "outer"}:
+        # Prefer upper-body candidates with smaller center_y and meaningful height.
+        return base + (1.0 - center_ratio) + (0.25 * min(height_ratio, 0.6))
+    if req == "bottom":
+        # Prefer lower-body candidates with larger center_y.
+        return base + center_ratio + (0.15 * min(height_ratio, 0.75))
+    if req == "dress":
+        # Prefer tall full-body candidates spanning most of the frame.
+        return base + (1.5 * height_ratio) - abs(center_ratio - 0.52)
+    return base
+
 def _dedupe_items(items: list[dict], iou_threshold: float = 0.60) -> list[dict]:
     if not items:
         return []
@@ -3362,6 +3735,127 @@ def _should_collapse_same_type(items: list[dict]) -> bool:
             min_iou = min(min_iou, bbox_iou(bboxes[i], bboxes[j]))
     return min_iou >= ANALYZE_COLLAPSE_SAME_TYPE_MIN_IOU
 
+
+def _caption_fullbody_dress_signal(text: str) -> bool:
+    t = " ".join(str(text or "").strip().lower().split())
+    if not t:
+        return False
+    dress_terms = (
+        "dress", "gown", "one-piece", "one piece", "maxi", "midi", "mini",
+        "anarkali", "saree", "sari", "lehenga", "jumpsuit", "romper", "kurti",
+        "traditional drape", "draped garment", "full-length drape",
+    )
+    return any(term in t for term in dress_terms)
+
+
+def _maybe_force_uncertain_fullbody_to_dress(
+    items: list[dict],
+    *,
+    image_width: int,
+    image_height: int,
+    requested_type: Optional[str] = None,
+) -> tuple[list[dict], Optional[dict]]:
+    if (
+        requested_type
+        or not ANALYZE_UNCERTAIN_FULLBODY_TO_DRESS
+        or len(items) < 2
+        or image_width <= 0
+        or image_height <= 0
+    ):
+        return items, None
+
+    normalized_types = [_normalize_garment_type(str(item.get("type") or "")) for item in items]
+    unique_types = {t for t in normalized_types if t}
+
+    candidates: list[tuple[int, dict]] = []
+    for idx, item in enumerate(items):
+        bbox = item.get("bbox")
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            continue
+        x0, y0, x1, y1 = [int(v) for v in bbox]
+        width = max(1, x1 - x0)
+        height = max(1, y1 - y0)
+        area_ratio = float(width * height) / max(1.0, float(image_width * image_height))
+        height_ratio = float(height) / float(image_height)
+        top_ratio = float(y0) / float(image_height)
+        bottom_ratio = float(y1) / float(image_height)
+        prompt_text = " ".join(
+            str(item.get(key) or "")
+            for key in ("promptDescription", "description", "style", "category_key")
+        ).strip()
+        candidates.append(
+            (
+                idx,
+                {
+                    "item": item,
+                    "bbox": [x0, y0, x1, y1],
+                    "area_ratio": area_ratio,
+                    "height_ratio": height_ratio,
+                    "top_ratio": top_ratio,
+                    "bottom_ratio": bottom_ratio,
+                    "type": _normalize_garment_type(str(item.get("type") or "")),
+                    "rank_score": _item_rank_score(item),
+                    "dress_signal": _caption_fullbody_dress_signal(prompt_text),
+                },
+            )
+        )
+
+    if len(candidates) < 2:
+        return items, None
+
+    candidates.sort(key=lambda pair: (pair[1]["area_ratio"], pair[1]["rank_score"]), reverse=True)
+    dominant_idx, dominant = candidates[0]
+    runner_up_area = float(candidates[1][1]["area_ratio"])
+    area_advantage = float(dominant["area_ratio"]) / max(1e-6, runner_up_area)
+
+    dominant_is_fullbody = (
+        dominant["height_ratio"] >= ANALYZE_UNCERTAIN_FULLBODY_MIN_HEIGHT_RATIO
+        and dominant["area_ratio"] >= ANALYZE_UNCERTAIN_FULLBODY_MIN_AREA_RATIO
+        and dominant["top_ratio"] <= ANALYZE_UNCERTAIN_FULLBODY_MAX_TOP_RATIO
+        and dominant["bottom_ratio"] >= ANALYZE_UNCERTAIN_FULLBODY_MIN_BOTTOM_RATIO
+    )
+    if not dominant_is_fullbody:
+        return items, None
+
+    types_allow_fallback = len(unique_types) <= 1 or dominant["dress_signal"]
+    if not types_allow_fallback:
+        return items, None
+
+    required_area_advantage = ANALYZE_UNCERTAIN_FULLBODY_MIN_AREA_ADVANTAGE
+    if dominant["dress_signal"]:
+        required_area_advantage = min(required_area_advantage, 1.30)
+    if area_advantage < required_area_advantage:
+        return items, None
+
+    chosen = dict(items[dominant_idx])
+    original_type = chosen.get("type")
+    chosen["type_original"] = original_type
+    chosen["garment_type_original"] = chosen.get("garment_type")
+    chosen["type"] = "dress"
+    chosen["garment_type"] = "dress"
+    chosen["type_source"] = "uncertain_fullbody_dress_fallback"
+    chosen["dress_fallback"] = {
+        "triggered": True,
+        "dominant_index": int(dominant_idx),
+        "area_ratio": round(float(dominant["area_ratio"]), 4),
+        "height_ratio": round(float(dominant["height_ratio"]), 4),
+        "top_ratio": round(float(dominant["top_ratio"]), 4),
+        "bottom_ratio": round(float(dominant["bottom_ratio"]), 4),
+        "area_advantage": round(area_advantage, 4),
+        "required_area_advantage": round(required_area_advantage, 4),
+        "unique_types_before": sorted(unique_types),
+        "dress_signal": bool(dominant["dress_signal"]),
+    }
+    inferred_style = _infer_style_from_text(
+        str(chosen.get("promptDescription") or chosen.get("description") or ""),
+        garment_type="dress",
+    )
+    category_meta = _wardrobe_category_from_garment_type("dress", style=inferred_style if inferred_style else None)
+    chosen["style"] = category_meta["style"]
+    chosen["category_key"] = category_meta["category_key"]
+    chosen["primary_category_key"] = category_meta["primary_category_key"]
+    return [chosen], chosen["dress_fallback"]
+
 def _is_shorts_like_caption(text: str) -> bool:
     t = (text or "").lower()
     keys = ("shorts", "cargo shorts", "bermuda", "skirt", "mini skirt", "midi skirt", "maxi skirt")
@@ -3379,7 +3873,7 @@ def _infer_type_from_caption(text: str) -> Optional[str]:
         return "outer"
     if any(k in t for k in ("pant", "pants", "trouser", "trousers", "jean", "jeans", "shorts", "skirt", "bottom")):
         return "bottom"
-    if any(k in t for k in ("shirt", "t-shirt", "tshirt", "tee", "blouse", "crop top", "tank top", "sports top", "camisole")):
+    if any(k in t for k in ("shirt", "t-shirt", "tshirt", "tee", "blouse", "crop top", "tank top", "sports top", "camisole", "bra", "bralette", "brassiere", "bikini top", "bustier")):
         return "top"
     return None
 
@@ -3391,7 +3885,7 @@ def _caption_garment_signal(text: str) -> bool:
         "dress", "gown", "kurti", "jumpsuit",
         "shirt", "t-shirt", "tee", "blouse", "hoodie", "sweater", "cardigan", "jacket", "coat", "blazer",
         "pant", "pants", "trouser", "trousers", "jean", "jeans", "shorts", "skirt", "sweatpants", "leggings",
-        "camisole", "tank top", "crop top", "bodysuit",
+        "camisole", "tank top", "crop top", "bodysuit", "bra", "bralette", "brassiere", "bikini top", "bustier",
     )
     return any(term in t for term in garment_terms)
 
@@ -3486,56 +3980,36 @@ def _suppress_auxiliary_instances(instances: list[dict], image_width: int, image
 def _to_public_item(item: dict) -> dict:
     return {k: v for k, v in item.items() if not str(k).startswith("_")}
 
-def _write_temp_png(image: Image.Image) -> str:
-    fd, path = tempfile.mkstemp(prefix="analyze_crop_", suffix=".png")
-    os.close(fd)
-    image.save(path, format="PNG")
-    return f"file://{path}"
-
-def _prepare_vton_source_image(
+def _prepare_extract_source_image(
     full_image: Image.Image,
     bbox: Optional[list[int]],
     garment_type: str,
     total_items: int,
-) -> tuple[Image.Image, list[int], str]:
-    width, height = full_image.size
-    if ANALYZE_VTON_SINGLE_ITEM_USE_FULL_IMAGE and total_items <= 1:
-        return full_image.copy(), [0, 0, width, height], "full_image_single_item"
-
-    if not bbox or len(bbox) != 4:
-        return full_image.copy(), [0, 0, width, height], "full_image_no_bbox"
-
-    x0, y0, x1, y1 = [int(v) for v in bbox]
-    x0 = max(0, min(x0, width - 1))
-    y0 = max(0, min(y0, height - 1))
-    x1 = max(x0 + 1, min(x1, width))
-    y1 = max(y0 + 1, min(y1, height))
-
-    if garment_type == "dress" and ANALYZE_VTON_DRESS_USE_FULL_IMAGE and total_items <= 1:
-        return full_image.copy(), [0, 0, width, height], "full_image_dress_single"
-
-    bw = max(1, x1 - x0)
-    bh = max(1, y1 - y0)
-    pad_ratio = ANALYZE_VTON_CROP_PAD_RATIO_DRESS if garment_type == "dress" else ANALYZE_VTON_CROP_PAD_RATIO
-    pad_ratio = max(0.0, min(0.8, pad_ratio))
-    x_pad = int(bw * pad_ratio)
-    y_pad_top = int(bh * pad_ratio)
-    y_pad_bottom = int(bh * pad_ratio)
-    if garment_type == "dress":
-        y_pad_bottom = int(bh * max(pad_ratio, ANALYZE_VTON_CROP_BOTTOM_EXTRA_RATIO_DRESS))
-    elif garment_type == "bottom":
-        top_extra_ratio = max(0.0, ANALYZE_VTON_CROP_TOP_EXTRA_RATIO_BOTTOM)
-        if total_items > 1:
-            top_extra_ratio = min(top_extra_ratio, max(0.0, ANALYZE_VTON_CROP_TOP_EXTRA_RATIO_BOTTOM_MULTI))
-            y_pad_top = min(y_pad_top, int(bh * top_extra_ratio))
-        else:
-            y_pad_top = max(y_pad_top, int(bh * top_extra_ratio))
-
-    ex0 = max(0, x0 - x_pad)
-    ey0 = max(0, y0 - y_pad_top)
-    ex1 = min(width, x1 + x_pad)
-    ey1 = min(height, y1 + y_pad_bottom)
-    return full_image.crop((ex0, ey0, ex1, ey1)), [ex0, ey0, ex1, ey1], "expanded_bbox"
+    detector_mask: Optional[np.ndarray] = None,
+    semantic_bbox: Optional[list[int]] = None,
+):
+    extractor = GarmentExtractor(
+        config=GarmentExtractionConfig(
+            force_bbox_crop=ANALYZE_EXTRACT_FORCE_BBOX_CROP,
+            crop_pad_ratio=ANALYZE_EXTRACT_CROP_PAD_RATIO,
+            crop_pad_ratio_dress=ANALYZE_EXTRACT_CROP_PAD_RATIO_DRESS,
+            crop_bottom_extra_ratio_dress=ANALYZE_EXTRACT_CROP_BOTTOM_EXTRA_RATIO_DRESS,
+            crop_top_extra_ratio_bottom=ANALYZE_EXTRACT_CROP_TOP_EXTRA_RATIO_BOTTOM,
+            crop_top_extra_ratio_bottom_multi=ANALYZE_EXTRACT_CROP_TOP_EXTRA_RATIO_BOTTOM_MULTI,
+            dress_top_recovery_ratio=ANALYZE_EXTRACT_DRESS_TOP_RECOVERY_RATIO,
+            top_top_recovery_ratio=ANALYZE_EXTRACT_TOP_TOP_RECOVERY_RATIO,
+        )
+    )
+    return extractor.prepare(
+        GarmentExtractionRequest(
+            full_image=full_image,
+            garment_type=garment_type,
+            total_items=total_items,
+            detected_bbox=bbox,
+            detector_mask=detector_mask,
+            semantic_bbox=semantic_bbox,
+        )
+    )
 
 def _flatten_rgba_on_white(image: Image.Image) -> Image.Image:
     if image.mode != "RGBA":
@@ -4873,7 +5347,7 @@ def _build_flux2_garment_only_prompt(
     if hexes:
         color_lock_clause = (
             f" Keep exact source colors with strict palette lock: {', '.join(hexes)}. "
-            "Do not recolor and do not shift hue/saturation/value."
+            "Do not recolor and do not shift hue/saturation/value. Preserve true fabric color under neutral lighting."
         )
     return (
         "Generate a standalone product shot of the garment only (no person, no mannequin, no body parts). "
@@ -4885,6 +5359,40 @@ def _build_flux2_garment_only_prompt(
         f"and color palette.{color_lock_clause} Garment details: {clean_desc}"
     )
 
+
+def _build_minicpm_garment_prompt(
+    garment_type: str,
+    dominant_color_hexes: Optional[List[str]] = None,
+    color_hints: Optional[List[str]] = None,
+) -> str:
+    gtype = _normalize_garment_type(garment_type) or "garment"
+    type_label = {
+        "top": "top",
+        "bottom": "bottom",
+        "dress": "dress",
+        "outer": "outerwear",
+    }.get(gtype, "garment")
+    hexes = [str(v).strip().upper() for v in (dominant_color_hexes or []) if str(v).strip()]
+    hints = [str(v).strip().lower() for v in (color_hints or []) if str(v).strip()]
+    color_clause = ""
+    if hexes:
+        color_clause += " Use the source garment colors exactly with palette lock: " + ", ".join(hexes) + "."
+    if hints:
+        color_clause += " Keep the color family locked to: " + ", ".join(hints[: max(2, FLUX2_COLOR_LOCK_TOP_K)]) + "."
+    type_clause = (
+        f"The required garment category is {type_label}. "
+        f"Describe only that single {type_label} and ignore every other clothing item or body region."
+    )
+    return (
+        f"{MINICPM_SERVICE_GARMENT_PROMPT} {type_clause} "
+        "If body parts, face, hair, hands, legs, room, bed, mirror, phone, bag, or props are visible, ignore them completely. "
+        "Do not mention a person wearing the garment. "
+        "Do not describe pose, scene, background, or accessories. "
+        "If visible, explicitly preserve and report front placket shape, button or snap count, button spacing, button size, and button placement. "
+        "Return category and type for the requested garment only."
+        f"{color_clause}"
+    ).strip()
+
 def _build_flux2_single_garment_extract_prompt(
     garment_type: str,
     prompt_description: str,
@@ -4894,8 +5402,34 @@ def _build_flux2_single_garment_extract_prompt(
     color_profile: Optional[Dict[str, object]] = None,
 ) -> str:
     gtype = _normalize_garment_type(garment_type) or "top"
-    explicit_category = str(category_text or _parser_candidate_category_text(gtype)).strip().lower()
     clean_desc = " ".join(str(prompt_description or "").split()).strip()
+    low_desc = clean_desc.lower()
+
+    inferred_subtype = ""
+    subtype_map = (
+        ("saree", "saree"),
+        ("sari", "saree"),
+        ("lehenga", "lehenga"),
+        ("anarkali", "anarkali"),
+        ("blazer", "blazer"),
+        ("jacket", "jacket"),
+        ("coat", "coat"),
+        ("bralette", "bralette"),
+        ("bra", "bra"),
+        ("bustier", "bustier"),
+        ("corset", "corset"),
+        ("blouse", "blouse"),
+        ("shirt", "shirt"),
+        ("skirt", "skirt"),
+        ("trouser", "trousers"),
+        ("pants", "pants"),
+    )
+    for needle, subtype in subtype_map:
+        if needle in low_desc:
+            inferred_subtype = subtype
+            break
+
+    explicit_category = str(category_text or inferred_subtype or _parser_candidate_category_text(gtype)).strip().lower()
     if not clean_desc:
         clean_desc = (
             "category=unknown; type=unknown; colors=unknown; pattern=unknown; material=unknown; "
@@ -4943,14 +5477,36 @@ def _build_flux2_single_garment_extract_prompt(
         ),
     }.get(gtype, "Generate only one garment from the requested category.")
 
+    subtype_lock_clause = ""
+    if inferred_subtype == "saree":
+        subtype_lock_clause = (
+            " This garment is a saree. Generate a full saree drape only, never a blouse-only top, kurti, gown, or generic dress. "
+            "Preserve pallu drape, border bands, pleated fall, tassels, textile continuity, and full-length vertical silhouette exactly as in the source."
+        )
+    elif inferred_subtype == "blazer":
+        subtype_lock_clause = (
+            " This garment is a blazer. Preserve exact lapel shape, front opening depth, button count, button size, button spacing, button placement, pocket flap placement, shoulder line, and sleeve length."
+        )
+    elif inferred_subtype in {"bra", "bralette", "bustier", "corset"}:
+        subtype_lock_clause = (
+            f" This garment is a {inferred_subtype}. Preserve exact cup shape, neckline, strap geometry, closure placement, and bust contour from the source."
+        )
+
     return (
         "Extract and regenerate a standalone ecommerce product image from the provided garment crop. "
-        "No person, no mannequin, no body parts, no hanger, no props, no text, no watermark. "
+        "This is garment extraction only, not person generation. "
+        "No person, no mannequin, no body parts, no skin regions, no neck, no shoulders, no torso, no arms, no hands, no legs, no feet, "
+        "no hanger, no props, no text, no watermark. "
         "Use pure white background (RGB 255,255,255). Keep one centered garment with full silhouette visible. "
         "Output must be vertically composed in 2:3 ratio and center aligned. "
         f"Generate only one {explicit_category} category garment and nothing from other categories. "
-        f"{type_lock_clause}{color_lock_clause}{color_hint_clause}{profile_clause}"
-        "Preserve exact garment structure, fabric, texture, print placement, seams, pleats, closures, and trims. "
+        "Do not generate any artificial fashion variant, redesign, or alternate styling. "
+        "Reconstruct only the exact source garment visible in the crop. "
+        f"{type_lock_clause}{subtype_lock_clause}{color_lock_clause}{color_hint_clause}{profile_clause}"
+        "Preserve exact garment structure, fabric, texture, print placement, seams, pleats, closures, trims, closures, button count, button size, button spacing, button placement, front placket geometry, border placement, lapel geometry, and pocket placement. "
+        "Keep every visible button, snap, stud, or dot-button exactly where it appears in the source, with the same count and vertical spacing. "
+        "Preserve the exact source color and material appearance; do not brighten black garments into gray, silver, or white. "
+        "Do not include visible limbs, face, torso, neck, shoulders, hands, fingers, legs, feet, or any human remnants in the output garment region. "
         f"Garment descriptor: {clean_desc}"
     )
 
@@ -4966,13 +5522,13 @@ def _build_flux2_single_garment_extract_negative_prompt(
         parts.append(custom)
 
     parts.append(
-        "person, human body, face, eyes, hair, skin, hands, fingers, arms, legs, feet, mannequin, hanger, "
-        "background scene, props, accessories, bag, jewelry, watermark, text, logo"
+        "person, human body, face, eyes, hair, skin, neck, shoulders, chest, torso, hands, fingers, arms, legs, feet, toes, mannequin, hanger, "
+        "background scene, props, accessories, bag, jewelry, watermark, text, logo, human silhouette, skin patch, limb fragment, body fragment, arm fragment, leg fragment"
     )
     parts.append(
         "wrong garment color, recolored fabric, hue shift, saturation drift, value drift, pattern drift, print swap, "
         "texture swap, material swap, wrong garment category, extra garment, duplicate garment, merged garments, "
-        "broken silhouette, distorted seams, wrong neckline, wrong sleeve length, wrong waistline, wrong hem length, "
+        "broken silhouette, distorted seams, wrong neckline, wrong sleeve length, wrong waistline, wrong hem length, artificial variant, redesigned garment, alternate style, "
         "blur, low detail, overexposed, underexposed"
     )
 
@@ -5179,39 +5735,285 @@ def _enhance_garment_image(image: Image.Image) -> Image.Image:
     res.putalpha(alpha)
     return res
 
-def _postprocess_extracted_garment_bytes(image_bytes: bytes, garment_type: str = "") -> tuple[bytes, dict]:
+def _get_rembg_session():
+    global _REMBG_SESSION
+    if _REMBG_SESSION is not None:
+        return _REMBG_SESSION
+    with _REMBG_SESSION_LOCK:
+        if _REMBG_SESSION is not None:
+            return _REMBG_SESSION
+        try:
+            from rembg import new_session
+            _REMBG_SESSION = new_session("isnet-general-use")
+        except Exception as rembg_err:
+            logger.warning(f"rembg session init failed: {rembg_err}")
+            _REMBG_SESSION = False
+        return _REMBG_SESSION
+
+
+def _get_birefnet_model():
+    global _BIREFNET_MODEL
+    if _BIREFNET_MODEL is not None:
+        return _BIREFNET_MODEL
+    with _BIREFNET_LOCK:
+        if _BIREFNET_MODEL is not None:
+            return _BIREFNET_MODEL
+        try:
+            from transformers import AutoModelForImageSegmentation
+
+            model = AutoModelForImageSegmentation.from_pretrained(
+                ANALYZE_BIREFNET_MODEL_ID,
+                trust_remote_code=True,
+            )
+            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            model = model.to(device)
+            model.eval()
+            _BIREFNET_MODEL = {
+                "model": model,
+                "device": device,
+            }
+        except Exception as birefnet_err:
+            logger.warning(f"BiRefNet init failed: {birefnet_err}")
+            _BIREFNET_MODEL = False
+        return _BIREFNET_MODEL
+
+
+def _remove_background_with_birefnet(image_bytes: bytes) -> tuple[Optional[bytes], dict]:
+    bundle = _get_birefnet_model()
+    if not bundle:
+        return None, {"mode": "birefnet_unavailable"}
+    try:
+        from torchvision import transforms
+
+        model = bundle["model"]
+        device = bundle["device"]
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        orig_w, orig_h = image.size
+        transform = transforms.Compose([
+            transforms.Resize((ANALYZE_BIREFNET_INPUT_SIZE, ANALYZE_BIREFNET_INPUT_SIZE)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ])
+        tensor = transform(image).unsqueeze(0).to(device)
+        with torch.no_grad():
+            preds = model(tensor)
+        if isinstance(preds, (list, tuple)):
+            pred = preds[-1]
+        elif isinstance(preds, dict):
+            pred = preds.get("pred") or preds.get("out") or next(iter(preds.values()))
+        else:
+            pred = preds
+        if isinstance(pred, (list, tuple)):
+            pred = pred[-1]
+        pred = torch.sigmoid(pred)
+        if pred.ndim == 4:
+            pred = pred[0, 0]
+        elif pred.ndim == 3:
+            pred = pred[0]
+        mask = pred.detach().float().cpu().numpy()
+        mask_u8 = np.clip(mask * 255.0, 0, 255).astype(np.uint8)
+        alpha = Image.fromarray(mask_u8, mode="L").resize((orig_w, orig_h), Image.LANCZOS)
+
+        rgba = image.convert("RGBA")
+        rgba.putalpha(alpha)
+        out = io.BytesIO()
+        rgba.save(out, format="PNG")
+        alpha_arr = np.asarray(alpha)
+        return out.getvalue(), {
+            "mode": "birefnet",
+            "model_id": ANALYZE_BIREFNET_MODEL_ID,
+            "input_size": ANALYZE_BIREFNET_INPUT_SIZE,
+            "original_size": {"width": int(orig_w), "height": int(orig_h)},
+            "output_size": {"width": int(orig_w), "height": int(orig_h)},
+            "opaque_pixels": int(np.sum(alpha_arr >= 250)),
+            "transparent_pixels": int(np.sum(alpha_arr <= 4)),
+        }
+    except Exception as birefnet_err:
+        logger.warning(f"BiRefNet background removal failed: {birefnet_err}")
+        return None, {"mode": "birefnet_failed", "error": str(birefnet_err)}
+
+def _remove_background_with_rembg(image_bytes: bytes) -> tuple[Optional[bytes], dict]:
+    session = _get_rembg_session()
+    if not session:
+        return None, {"mode": "rembg_unavailable"}
+    try:
+        from rembg import remove
+
+        output = remove(
+            image_bytes,
+            session=session,
+            alpha_matting=False,
+            only_mask=False,
+            post_process_mask=False,
+            force_return_bytes=True,
+        )
+        out_img = Image.open(io.BytesIO(output)).convert("RGBA")
+        out = io.BytesIO()
+        out_img.save(out, format="PNG")
+        alpha = np.asarray(out_img)[:, :, 3]
+        return out.getvalue(), {
+            "mode": "rembg_isnet_general_use",
+            "original_size": {"width": int(out_img.width), "height": int(out_img.height)},
+            "output_size": {"width": int(out_img.width), "height": int(out_img.height)},
+            "opaque_pixels": int(np.sum(alpha >= 250)),
+            "transparent_pixels": int(np.sum(alpha <= 4)),
+        }
+    except Exception as rembg_err:
+        logger.warning(f"rembg background removal failed: {rembg_err}")
+        return None, {"mode": "rembg_failed", "error": str(rembg_err)}
+
+def _white_background_to_transparent_bytes(image_bytes: bytes) -> tuple[bytes, dict]:
     image = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+    arr = np.asarray(image).copy()
+    rgb = arr[:, :, :3].astype(np.uint8)
+
+    # Only remove near-white background that is connected to the frame border.
+    near_white = (
+        (rgb[:, :, 0] >= ANALYZE_GARMENT_WHITE_THRESHOLD)
+        & (rgb[:, :, 1] >= ANALYZE_GARMENT_WHITE_THRESHOLD)
+        & (rgb[:, :, 2] >= ANALYZE_GARMENT_WHITE_THRESHOLD)
+    )
+    low_chroma = (
+        (np.max(rgb, axis=2).astype(np.int16) - np.min(rgb, axis=2).astype(np.int16))
+        <= 12
+    )
+    background_seed = near_white & low_chroma
+
+    h, w = background_seed.shape
+    background = np.zeros((h, w), dtype=bool)
+    q: deque[tuple[int, int]] = deque()
+
+    def _enqueue(y: int, x: int) -> None:
+        if 0 <= y < h and 0 <= x < w and background_seed[y, x] and not background[y, x]:
+            background[y, x] = True
+            q.append((y, x))
+
+    for x in range(w):
+        _enqueue(0, x)
+        _enqueue(h - 1, x)
+    for y in range(h):
+        _enqueue(y, 0)
+        _enqueue(y, w - 1)
+
+    while q:
+        y, x = q.popleft()
+        _enqueue(y - 1, x)
+        _enqueue(y + 1, x)
+        _enqueue(y, x - 1)
+        _enqueue(y, x + 1)
+
+    alpha = np.full((h, w), 255, dtype=np.uint8)
+    alpha[background] = 0
+    arr[:, :, 3] = alpha
+    out_img = Image.fromarray(arr, mode="RGBA")
+
+    out = io.BytesIO()
+    out_img.save(out, format="PNG")
+    return out.getvalue(), {
+        "mode": "white_to_transparent_border_connected",
+        "original_size": {"width": int(image.width), "height": int(image.height)},
+        "output_size": {"width": int(out_img.width), "height": int(out_img.height)},
+        "white_threshold": int(ANALYZE_GARMENT_WHITE_THRESHOLD),
+        "background_pixels": int(background.sum()),
+    }
+
+def _postprocess_extracted_garment_bytes(
+    image_bytes: bytes,
+    garment_type: str = "",
+    force_transparent: bool = False,
+    transparent_only: bool = False,
+) -> tuple[bytes, dict]:
+    if transparent_only:
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+        original_meta = {
+            "enabled": False,
+            "original_size": {"width": int(image.width), "height": int(image.height)},
+            "content_bbox": [0, 0, int(image.width), int(image.height)],
+            "content_size": {"width": int(image.width), "height": int(image.height)},
+            "output_size": {"width": int(image.width), "height": int(image.height)},
+            "target_aspect": None,
+            "enhance_enabled": False,
+            "transparent_only": True,
+            "alpha_seed_mode": "disabled_return_raw_flux",
+            "output_background": "transparent",
+            "top_skin_rim_cleanup": False,
+            "white_bg_alpha": {"mode": "disabled"},
+            "background_removal_backend": ANALYZE_BG_REMOVAL_BACKEND,
+        }
+        bg_removed = None
+        bg_meta: Dict[str, object] = {}
+        if ANALYZE_BG_REMOVAL_BACKEND == "birefnet":
+            bg_removed, bg_meta = _remove_background_with_birefnet(image_bytes)
+        elif ANALYZE_BG_REMOVAL_BACKEND == "rembg":
+            bg_removed, bg_meta = _remove_background_with_rembg(image_bytes)
+        elif ANALYZE_BG_REMOVAL_BACKEND == "white":
+            bg_removed, bg_meta = _white_background_to_transparent_bytes(image_bytes)
+
+        if bg_removed:
+            out_img = Image.open(io.BytesIO(bg_removed)).convert("RGBA")
+            out = io.BytesIO()
+            out_img.save(out, format="PNG")
+            original_meta["output_size"] = {"width": int(out_img.width), "height": int(out_img.height)}
+            original_meta["background_removal"] = bg_meta
+            return out.getvalue(), original_meta
+
+        if bg_meta:
+            original_meta["background_removal"] = bg_meta
+        out = io.BytesIO()
+        image.save(out, format="PNG")
+        return out.getvalue(), original_meta
+
+    image = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+    alpha_seed_mode = "existing_alpha"
+    try:
+        alpha_mask = _extract_alpha_mask(image, threshold=24)
+        if not isinstance(alpha_mask, np.ndarray):
+            alpha_mask = _estimate_foreground_mask_from_border(image)
+            if isinstance(alpha_mask, np.ndarray):
+                alpha_seed_mode = "border_estimate"
+            else:
+                alpha_seed_mode = "none"
+        if isinstance(alpha_mask, np.ndarray) and alpha_mask.shape[:2] == (image.height, image.width):
+            alpha_u8 = build_soft_alpha(alpha_mask, feather_px=max(1, ANALYZE_EXTRACT_EDGE_FEATHER_PX)).astype(np.uint8)
+            rgba_arr = np.asarray(image).copy()
+            rgba_arr[:, :, 3] = alpha_u8
+            image = Image.fromarray(rgba_arr, mode="RGBA")
+    except Exception as alpha_seed_err:
+        alpha_seed_mode = f"failed:{alpha_seed_err}"
+        logger.warning(f"Initial transparent alpha synthesis skipped: {alpha_seed_err}")
     
     # 0. Safe Hole Filling (Fixes 'missing cloth patches' on patterned garments)
-    try:
-        from scipy.ndimage import binary_fill_holes, label
-        alpha = image.split()[-1]
-        alpha_arr = np.asarray(alpha)
-        # Use a high threshold to find true interior holes and only fill smaller ones.
-        mask = (alpha_arr > 50)
-        filled = binary_fill_holes(mask)
-        holes = filled & (~mask)
-        new_alpha = alpha_arr.copy()
-        if np.any(holes):
-            labeled, num_labels = label(holes)
-            for idx in range(1, int(num_labels) + 1):
-                hole_area = int(np.sum(labeled == idx))
-                if hole_area <= ANALYZE_GARMENT_HOLE_FILL_MAX_PIXELS:
-                    new_alpha[labeled == idx] = 255
-        image.putalpha(Image.fromarray(new_alpha.astype(np.uint8), mode="L"))
-    except Exception as hole_e:
-        logger.warning(f"Simple hole filling failed: {hole_e}")
+    if not transparent_only and alpha_seed_mode != "border_estimate":
+        try:
+            from scipy.ndimage import binary_fill_holes, label
+            alpha = image.split()[-1]
+            alpha_arr = np.asarray(alpha)
+            # Use a high threshold to find true interior holes and only fill smaller ones.
+            mask = (alpha_arr > 50)
+            filled = binary_fill_holes(mask)
+            holes = filled & (~mask)
+            new_alpha = alpha_arr.copy()
+            if np.any(holes):
+                labeled, num_labels = label(holes)
+                for idx in range(1, int(num_labels) + 1):
+                    hole_area = int(np.sum(labeled == idx))
+                    if hole_area <= ANALYZE_GARMENT_HOLE_FILL_MAX_PIXELS:
+                        new_alpha[labeled == idx] = 255
+            image.putalpha(Image.fromarray(new_alpha.astype(np.uint8), mode="L"))
+        except Exception as hole_e:
+            logger.warning(f"Simple hole filling failed: {hole_e}")
 
     # 0.5 Edge cleanup: reduce fuzzy borders and retain cleaner garment silhouette.
-    try:
-        alpha_arr = np.asarray(image.split()[-1]).astype(np.uint8)
-        edge_mask = alpha_arr > max(16, ANALYZE_GARMENT_ALPHA_THRESHOLD)
-        edge_mask = binary_open(edge_mask, 3)
-        edge_mask = binary_close(edge_mask, 3)
-        alpha_clean = build_soft_alpha(edge_mask, feather_px=ANALYZE_EXTRACT_EDGE_FEATHER_PX)
-        image.putalpha(Image.fromarray(alpha_clean.astype(np.uint8), mode="L"))
-    except Exception as edge_e:
-        logger.warning(f"Alpha edge cleanup failed: {edge_e}")
+    if not transparent_only:
+        try:
+            alpha_arr = np.asarray(image.split()[-1]).astype(np.uint8)
+            edge_mask = alpha_arr > max(16, ANALYZE_GARMENT_ALPHA_THRESHOLD)
+            edge_mask = binary_open(edge_mask, 3)
+            edge_mask = binary_close(edge_mask, 3)
+            alpha_clean = build_soft_alpha(edge_mask, feather_px=ANALYZE_EXTRACT_EDGE_FEATHER_PX)
+            image.putalpha(Image.fromarray(alpha_clean.astype(np.uint8), mode="L"))
+        except Exception as edge_e:
+            logger.warning(f"Alpha edge cleanup failed: {edge_e}")
 
     # Crop to content
     original_size = (int(image.width), int(image.height))
@@ -5235,10 +6037,11 @@ def _postprocess_extracted_garment_bytes(image_bytes: bytes, garment_type: str =
             aspect_w=ANALYZE_GARMENT_TARGET_ASPECT_W,
             aspect_h=ANALYZE_GARMENT_TARGET_ASPECT_H,
         )
-        processed = _enhance_garment_image(processed)
+        if not transparent_only:
+            processed = _enhance_garment_image(processed)
 
     # Top-only rim cleanup: trims skin-like fringe on neckline/lower edge without touching sleeves.
-    if ANALYZE_TOP_SKIN_RIM_CLEANUP and _normalize_garment_type(garment_type) in {"top", "outer"}:
+    if (not transparent_only) and ANALYZE_TOP_SKIN_RIM_CLEANUP and _normalize_garment_type(garment_type) in {"top", "outer"}:
         try:
             import cv2
 
@@ -5271,7 +6074,7 @@ def _postprocess_extracted_garment_bytes(image_bytes: bytes, garment_type: str =
 
     # Optional final render mode for frontend-facing outputs.
     # White background is more forgiving for minor alpha-edge artifacts.
-    if ANALYZE_GARMENT_OUTPUT_BACKGROUND == "white":
+    if ANALYZE_GARMENT_OUTPUT_BACKGROUND == "white" and not force_transparent:
         try:
             import cv2
 
@@ -5312,7 +6115,9 @@ def _postprocess_extracted_garment_bytes(image_bytes: bytes, garment_type: str =
         "output_size": {"width": int(processed.width), "height": int(processed.height)},
         "target_aspect": f"{ANALYZE_GARMENT_TARGET_ASPECT_W}:{ANALYZE_GARMENT_TARGET_ASPECT_H}",
         "enhance_enabled": ANALYZE_GARMENT_ENHANCE_ENABLED,
-        "output_background": ANALYZE_GARMENT_OUTPUT_BACKGROUND,
+        "transparent_only": bool(transparent_only),
+        "alpha_seed_mode": alpha_seed_mode,
+        "output_background": "transparent" if force_transparent else ANALYZE_GARMENT_OUTPUT_BACKGROUND,
         "top_skin_rim_cleanup": bool(
             ANALYZE_TOP_SKIN_RIM_CLEANUP and _normalize_garment_type(garment_type) in {"top", "outer"}
         ),
@@ -5320,6 +6125,22 @@ def _postprocess_extracted_garment_bytes(image_bytes: bytes, garment_type: str =
 
 def _crop_and_fit_garment_bytes(image_bytes: bytes) -> tuple[bytes, dict]:
     image = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+    alpha_seed_mode = "existing_alpha"
+    try:
+        alpha_mask = _extract_alpha_mask(image, threshold=24)
+        if not isinstance(alpha_mask, np.ndarray):
+            alpha_mask = _estimate_foreground_mask_from_border(image)
+            if isinstance(alpha_mask, np.ndarray):
+                alpha_seed_mode = "border_estimate"
+            else:
+                alpha_seed_mode = "none"
+        if isinstance(alpha_mask, np.ndarray) and alpha_mask.shape[:2] == (image.height, image.width):
+            alpha_u8 = build_soft_alpha(alpha_mask, feather_px=max(1, ANALYZE_EXTRACT_EDGE_FEATHER_PX)).astype(np.uint8)
+            rgba_arr = np.asarray(image).copy()
+            rgba_arr[:, :, 3] = alpha_u8
+            image = Image.fromarray(rgba_arr, mode="RGBA")
+    except Exception as alpha_seed_err:
+        alpha_seed_mode = f"failed:{alpha_seed_err}"
     original_size = (int(image.width), int(image.height))
     bbox = _content_bbox_from_image(image)
     cropped = image.crop(bbox)
@@ -5335,6 +6156,7 @@ def _crop_and_fit_garment_bytes(image_bytes: bytes) -> tuple[bytes, dict]:
     return out.getvalue(), {
         "enabled": ANALYZE_GARMENT_POSTPROCESS_ENABLED,
         "mode": "crop_then_aspect_only",
+        "alpha_seed_mode": alpha_seed_mode,
         "original_size": {"width": original_size[0], "height": original_size[1]},
         "content_bbox": [int(v) for v in bbox],
         "content_size": {"width": int(cropped.width), "height": int(cropped.height)},
@@ -5381,133 +6203,6 @@ def _pixel_change_ratio(source_bytes: bytes, output_bytes: bytes, size: int = 25
         return 0.0
     diff = np.mean(np.abs(src_arr - out_arr), axis=2)
     return float(np.mean(diff > float(delta)))
-
-def _refine_with_showroom_delta(
-    extracted_rgba: Image.Image,
-    raw_vton_bytes: bytes,
-    showroom_bytes: bytes,
-    garment_type: str = "",
-) -> tuple[Image.Image, dict]:
-    try:
-        import cv2
-
-        ex = extracted_rgba.convert("RGBA")
-        ex_arr = np.asarray(ex).copy()
-        alpha = ex_arr[:, :, 3]
-        visible = alpha > max(8, ANALYZE_GARMENT_ALPHA_THRESHOLD)
-        visible_px = int(np.sum(visible))
-        if visible_px <= 0:
-            return ex, {"enabled": True, "applied": False, "reason": "empty_alpha"}
-
-        raw_img = _flatten_rgba_on_white(Image.open(io.BytesIO(raw_vton_bytes)))
-        show_img = _flatten_rgba_on_white(Image.open(io.BytesIO(showroom_bytes)))
-        if show_img.size != raw_img.size:
-            show_img = show_img.resize(raw_img.size, Image.BICUBIC)
-        if ex.size != raw_img.size:
-            ex = ex.resize(raw_img.size, Image.LANCZOS).convert("RGBA")
-            ex_arr = np.asarray(ex).copy()
-            alpha = ex_arr[:, :, 3]
-            visible = alpha > max(8, ANALYZE_GARMENT_ALPHA_THRESHOLD)
-            visible_px = int(np.sum(visible))
-            if visible_px <= 0:
-                return ex, {"enabled": True, "applied": False, "reason": "empty_after_resize"}
-
-        raw_arr = np.asarray(raw_img, dtype=np.float32)
-        show_arr = np.asarray(show_img, dtype=np.float32)
-        diff = np.mean(np.abs(raw_arr - show_arr), axis=2)
-        delta_threshold = np.full(diff.shape, float(ANALYZE_SHOWROOM_DELTA_THRESHOLD), dtype=np.float32)
-        # For tops/outerwear, be stricter on skin-like regions to suppress residual body strips.
-        if _normalize_garment_type(garment_type) in {"top", "outer"}:
-            skin_like = _skin_like_mask(raw_arr.astype(np.uint8))
-            delta_threshold[skin_like] = float(ANALYZE_SHOWROOM_DELTA_THRESHOLD + ANALYZE_SHOWROOM_DELTA_SKIN_EXTRA)
-        delta_mask = diff >= delta_threshold
-        if ANALYZE_SHOWROOM_DELTA_DILATE > 0:
-            k = int(ANALYZE_SHOWROOM_DELTA_DILATE)
-            delta_mask = cv2.dilate(delta_mask.astype(np.uint8), np.ones((k, k), np.uint8), iterations=1) > 0
-
-        refined_mask = visible & delta_mask
-        refined_px = int(np.sum(refined_mask))
-        retain_ratio = float(refined_px) / float(max(1, visible_px))
-
-        meta = {
-            "enabled": True,
-            "applied": False,
-            "visible_before": visible_px,
-            "visible_after": refined_px,
-            "retain_ratio": round(retain_ratio, 6),
-            "threshold": float(ANALYZE_SHOWROOM_DELTA_THRESHOLD),
-            "skin_extra_threshold": float(ANALYZE_SHOWROOM_DELTA_SKIN_EXTRA),
-            "dilate": int(ANALYZE_SHOWROOM_DELTA_DILATE),
-            "min_retain_ratio": float(ANALYZE_SHOWROOM_DELTA_MIN_RETAIN_RATIO),
-        }
-
-        if retain_ratio < ANALYZE_SHOWROOM_DELTA_MIN_RETAIN_RATIO:
-            meta["reason"] = "retain_ratio_too_low"
-            return ex, meta
-
-        alpha_new = np.where(refined_mask, alpha, 0).astype(np.uint8)
-        alpha_new = build_soft_alpha(alpha_new > max(8, ANALYZE_GARMENT_ALPHA_THRESHOLD), feather_px=ANALYZE_EXTRACT_EDGE_FEATHER_PX).astype(np.uint8)
-        ex_arr[:, :, 3] = alpha_new
-        meta["applied"] = True
-        return Image.fromarray(ex_arr, mode="RGBA"), meta
-    except Exception as exc:
-        return extracted_rgba, {"enabled": True, "applied": False, "reason": f"error:{exc}"}
-
-def _type_to_vton_category(garment_type: str) -> str:
-    g = (_normalize_garment_type(garment_type) or garment_type or "dress").strip().lower()
-    if g in {"top", "outer"}:
-        return "tops"
-    if g == "bottom":
-        return "bottoms"
-    return "one-pieces"
-
-def _validate_vton_output_bytes(image_bytes: bytes) -> dict:
-    try:
-        img = Image.open(io.BytesIO(image_bytes))
-    except Exception as exc:
-        raise RuntimeError(f"Invalid VTON output image bytes: {exc}") from exc
-
-    arr = np.asarray(img)
-    if arr.ndim == 2:
-        arr = np.stack([arr, arr, arr], axis=-1)
-    if arr.ndim != 3 or arr.shape[2] not in {3, 4}:
-        raise RuntimeError(f"Unsupported VTON output image shape: {arr.shape}")
-
-    has_alpha = arr.shape[2] == 4
-    if has_alpha:
-        alpha = arr[:, :, 3].astype(np.uint8)
-        alpha_ratio = float(np.mean(alpha > 8))
-        visible_mask = alpha > 8
-        visible_rgb = arr[:, :, :3][visible_mask]
-    else:
-        alpha_ratio = 1.0
-        visible_rgb = arr[:, :, :3].reshape(-1, 3)
-
-    if visible_rgb.size == 0:
-        rgb_std = 0.0
-        non_white_ratio = 0.0
-    else:
-        visible_f = visible_rgb.astype(np.float32)
-        rgb_std = float(np.std(visible_f))
-        non_white_ratio = float(np.mean(np.any(visible_rgb < 245, axis=1)))
-
-    if has_alpha and alpha_ratio < ANALYZE_VTON_MIN_ALPHA_RATIO:
-        raise RuntimeError(
-            f"VTON output appears mostly transparent (alpha_ratio={alpha_ratio:.6f})."
-        )
-    if has_alpha and alpha_ratio > 0.95 and rgb_std < ANALYZE_VTON_MIN_RGB_STD and non_white_ratio < 0.01:
-        raise RuntimeError("VTON output appears as a near-solid blank frame.")
-    if (not has_alpha) and rgb_std < ANALYZE_VTON_MIN_RGB_STD and non_white_ratio < 0.01:
-        raise RuntimeError("VTON output appears blank/near-uniform white.")
-
-    return {
-        "has_alpha": has_alpha,
-        "alpha_ratio": round(alpha_ratio, 6),
-        "rgb_std": round(rgb_std, 4),
-        "non_white_ratio": round(non_white_ratio, 6),
-        "width": int(img.width),
-        "height": int(img.height),
-    }
 
 def _parser_category_ids(category: str, fallback: Optional[list[int]] = None) -> list[int]:
     if engine.parser is not None and hasattr(engine.parser, "category_ids"):
@@ -5828,6 +6523,7 @@ def _extract_cloth_from_crop(
     garment_type: str,
     enforce_safety_guards: bool = True,
     allow_top_dress_backfill: bool = True,
+    parser_only_override: Optional[bool] = None,
 ) -> tuple[Image.Image, dict]:
     """
     High-quality garment extraction from a person/mannequin image.
@@ -5837,6 +6533,12 @@ def _extract_cloth_from_crop(
     total_pixels = float(max(1, crop.width * crop.height))
     img_np = np.asarray(crop.convert("RGB"))
     h, w = img_np.shape[:2]
+
+    effective_parser_only = (
+        ANALYZE_EXTRACT_PARSER_ONLY
+        if parser_only_override is None
+        else bool(parser_only_override)
+    )
 
     try:
         import cv2
@@ -5868,7 +6570,7 @@ def _extract_cloth_from_crop(
                         "applied": True,
                     }
 
-        if ANALYZE_EXTRACT_PARSER_ONLY:
+        if effective_parser_only:
             # Strict parser-only extraction: keep only the requested garment region
             # from the try-on frame, then pass that output to enhancement.
             seed_mask = np.isin(parsing, strict_keep_ids)
@@ -6045,7 +6747,7 @@ def _extract_cloth_from_crop(
                     rescue_mode = "body_only"
 
     except Exception as e:
-        if ANALYZE_EXTRACT_PARSER_ONLY:
+        if effective_parser_only:
             raise RuntimeError(f"Parser-only extraction failed: {e}")
         logger.warning(f"Primary extraction path failed, falling back to parser: {e}")
         try:
@@ -6155,282 +6857,420 @@ def _extract_cloth_from_crop(
     }
     return cloth_image, meta
 
-def _run_vton_cloth_only_fallback(image_url: str, garment_type: str, vto_mode: bool = False) -> dict:
+def _run_flux2_cloth_only_extract(
+    source_image: Image.Image,
+    garment_type: str,
+    prompt_description: str = "",
+    fallback_prompt_description: str = "",
+    negative_prompt: str = "",
+    description_backend: Optional[str] = None,
+    use_parser_post_extract: Optional[bool] = None,
+    steps: Optional[int] = None,
+    seed: Optional[int] = None,
+    color_reference_image: Optional[Image.Image] = None,
+    color_reference_mask: Optional[np.ndarray] = None,
+) -> dict:
+    """
+    Internal analyze-path garment extraction using Flux2 single-garment prompt logic.
+    Uses parser-guided post-extraction to suppress person/object leakage and preserve cloth-only output.
+    """
     t_all_start = time.time()
-    t_vton_start = time.time()
-    strict_safety = bool(ANALYZE_VTON_STRICT_SAFETY_CHECKS)
-    guard_warnings: list[str] = []
-    if not ANALYZE_VTON_CLOTH_ONLY_ENDPOINT:
-        raise RuntimeError("ANALYZE_VTON_CLOTH_ONLY_ENDPOINT is empty.")
-    category = _type_to_vton_category(garment_type)
-    person_image_url = image_url
-    if ANALYZE_VTON_USE_SHOWROOM_PERSON:
-        if not ANALYZE_VTON_SHOWROOM_PERSON_IMAGE_URL:
-            raise RuntimeError(
-                "ANALYZE_VTON_SHOWROOM_PERSON_IMAGE_URL is empty while ANALYZE_VTON_USE_SHOWROOM_PERSON=1."
-            )
-        person_image_url = ANALYZE_VTON_SHOWROOM_PERSON_IMAGE_URL
-        logger.info(f"VTON fallback using showroom person reference: {person_image_url}")
-    else:
-        logger.info(f"VTON fallback using original image as person reference: {person_image_url}")
-    
-    # --- FASHN PAYLOAD CONFIG ---
-    # To understand the root cause of the 'holes', we now request the FULL tryon result
-    # (mannequin wearing the dress) instead of the cutout.
-    # This reveals if the generator itself is failing or if the cutout process is the culprit.
-    should_cutout = False 
+    resolved_type = _normalize_garment_type(garment_type)
+    mapped_from_outer = False
+    if resolved_type == "outer":
+        resolved_type = "top"
+        mapped_from_outer = True
+    if resolved_type not in {"top", "bottom", "dress"}:
+        raise RuntimeError(f"Unsupported garment_type for flux2 extract: {garment_type}")
 
-    payload = {
-        "image_url": person_image_url,
-        "garment_image_url": image_url,
-        "category": category,
-        "garment_photo_type": "model",
-        "quality_preset": ANALYZE_VTON_QUALITY_PRESET,
-        "num_timesteps": ANALYZE_VTON_NUM_TIMESTEPS,
-        "guidance_scale": ANALYZE_VTON_GUIDANCE_SCALE,
-        "seed": ANALYZE_VTON_SEED,
-        "skip_cfg_last_n_steps": 1,
-        "num_samples": 1,
-        "segmentation_free": bool(ANALYZE_VTON_SEGMENTATION_FREE),
-        "output_format": "png",
-        "cutout_enabled": should_cutout,
-        "cutout_feather_px": 2,
-        "cutout_background": "original",
-        "drop_shadow": False,
-        "zoom_enabled": bool(ANALYZE_VTON_TOP_ZOOM_ENABLED and category == "tops"),
-        "zoom_padding_ratio": max(0.0, min(0.5, ANALYZE_VTON_ZOOM_PADDING_RATIO)),
-        "upscale_enabled": bool(ANALYZE_VTON_BOTTOM_UPSCALE_ENABLED and category == "bottoms"),
-        "upscale_factor": 2,
-        "upscale_allow_bicubic_fallback": True,
-        "allow_source_fallback": ANALYZE_VTON_ALLOW_SOURCE_FALLBACK,
+    if source_image is None:
+        raise RuntimeError("source image is required for flux2 extract")
+
+    requested_backend = _normalize_descriptor_backend(
+        str(description_backend or FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND)
+    )
+    resolved_backend = requested_backend if requested_backend in {"minicpm", "minicpm_service"} else "minicpm"
+    analyze_service_url = str(ANALYZE_MINICPM_SERVICE_URL or MINICPM_SERVICE_URL or "").strip().rstrip("/")
+    run_steps = int(steps if isinstance(steps, int) and steps >= 4 else FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS)
+    run_seed = int(seed if isinstance(seed, int) and seed >= 0 else FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_SEED)
+    if use_parser_post_extract is None:
+        effective_use_parser_post_extract = bool(ANALYZE_USE_PARSER_POST_EXTRACT)
+    else:
+        effective_use_parser_post_extract = bool(use_parser_post_extract)
+    if FLUX2_SINGLE_GARMENT_EXTRACT_DISABLE_PARSER and effective_use_parser_post_extract:
+        helper_warnings = ["parser_disabled_by_config"]
+        effective_use_parser_post_extract = False
+    else:
+        helper_warnings = []
+
+    src = source_image.convert("RGB")
+    descriptor_image = src
+    selected_crop_url = None
+    selected_crop_url_source = ""
+    selected_crop_local_path = ""
+    descriptor_color_ctx_image = (
+        color_reference_image.convert("RGB")
+        if isinstance(color_reference_image, Image.Image)
+        else descriptor_image
+    )
+    descriptor_color_ctx = _build_single_image_color_context(
+        image=descriptor_color_ctx_image,
+        description="",
+        mask=color_reference_mask if isinstance(color_reference_mask, np.ndarray) else None,
+        top_k=7,
+    )
+    descriptor_dominant_hexes = [
+        str(v) for v in (descriptor_color_ctx.get("paletteHexes") or []) if str(v).strip()
+    ]
+    descriptor_color_hints = [
+        str(v) for v in (descriptor_color_ctx.get("colorHints") or []) if str(v).strip()
+    ]
+    stage = {
+        "descriptor_input_s": 0.0,
+        "descriptor_s": 0.0,
+        "prompt_build_s": 0.0,
+        "flux_generation_s": 0.0,
+        "flux_extract_s": 0.0,
+        "upload_s": 0.0,
+        "total_s": 0.0,
     }
-    response = requests.post(ANALYZE_VTON_CLOTH_ONLY_ENDPOINT, json=payload, timeout=ANALYZE_VTON_TIMEOUT_S)
-    if not (200 <= response.status_code < 300):
-        raise RuntimeError(f"VTON cloth-only fallback failed: {response.status_code} {response.text[:200]}")
-    t_vton_s = time.time() - t_vton_start
-            
-    body = response.json()
-    url = body.get("url") or body.get("azure_url")
-    if not url:
-        raise RuntimeError("VTON fallback response missing url.")
-    public_url = str(url)
-    mirrored_ok = False
-    image_quality = {}
-    source_similarity = {}
-    showroom_similarity = {}
-    source_bytes = b""
-    showroom_bytes = b""
-    raw_vton_bytes = b""
-    processed_vton_bytes = b""
-    postprocess_meta = {}
 
-    t_fetch_start = time.time()
-    # Parallelize source/raw fetches to reduce wall-clock IO time.
-    with ThreadPoolExecutor(max_workers=3) as pool:
-        source_fut = pool.submit(_fetch_image_bytes, image_url, 45)
-        raw_fut = pool.submit(_fetch_image_bytes, public_url, 45)
-        showroom_fut = None
-        if ANALYZE_VTON_USE_SHOWROOM_PERSON:
-            showroom_fut = pool.submit(_fetch_image_bytes, person_image_url, 45)
-        source_bytes = source_fut.result()
-        raw_vton_bytes = raw_fut.result()
-        if showroom_fut is not None:
-            showroom_bytes = showroom_fut.result()
-    t_fetch_s = time.time() - t_fetch_start
-
-    if ANALYZE_VTON_USE_SHOWROOM_PERSON and showroom_bytes:
-        showroom_similarity = _compare_image_similarity(showroom_bytes, raw_vton_bytes)
-        showroom_similarity["change_ratio"] = round(
-            _pixel_change_ratio(showroom_bytes, raw_vton_bytes),
-            6,
+    t_stage = time.time()
+    selected_crop_buf = io.BytesIO()
+    descriptor_upload_image = descriptor_image
+    if resolved_backend == "minicpm_service":
+        descriptor_upload_image = _resize_for_qwen_caption(
+            image=descriptor_image,
+            max_side=FLUX2_MINICPM_PRODUCT_CAPTION_MAX_SIDE,
+            min_side=FLUX2_MINICPM_PRODUCT_CAPTION_MIN_SIDE,
         )
-        if showroom_similarity.get("exact_bytes"):
-            msg = "VTON returned showroom model image unchanged (exact match)."
-            if strict_safety:
-                raise RuntimeError(msg)
-            guard_warnings.append("showroom_exact_match")
-            logger.warning(msg)
-        if (
-            float(showroom_similarity.get("resized_mae", 999.0)) <= ANALYZE_VTON_MAX_SHOWROOM_MAE
-            and float(showroom_similarity.get("change_ratio", 0.0)) < ANALYZE_VTON_MIN_SHOWROOM_CHANGE_RATIO
-        ):
-            msg = (
-                "VTON returned showroom-like output "
-                f"(resized_mae={showroom_similarity.get('resized_mae')}, "
-                f"change_ratio={showroom_similarity.get('change_ratio')})."
-            )
-            if strict_safety:
-                raise RuntimeError(msg)
-            guard_warnings.append("showroom_similarity_high")
-            logger.warning(msg)
+    descriptor_upload_image.save(selected_crop_buf, format="PNG")
+    selected_crop_bytes = selected_crop_buf.getvalue()
+    if resolved_backend == "minicpm_service":
+        if MINICPM_SERVICE_LOCAL_FILE_FIRST:
+            try:
+                fd, tmp_path = tempfile.mkstemp(prefix="minicpm_desc_", suffix=".png")
+                os.close(fd)
+                with open(tmp_path, "wb") as fp:
+                    fp.write(selected_crop_bytes)
+                selected_crop_local_path = tmp_path
+                selected_crop_url = f"file://{tmp_path}"
+                selected_crop_url_source = "local_file_url"
+            except Exception as file_err:
+                helper_warnings.append(f"selected_crop_file_prep_failed:{file_err}")
+        if not selected_crop_url:
+            try:
+                selected_crop_url = _upload_or_raise(selected_crop_bytes, container=VTO_OUTPUT_CONTAINER)
+                if selected_crop_url:
+                    selected_crop_url_source = "azure_upload_url"
+            except Exception as upload_err:
+                helper_warnings.append(f"selected_crop_upload_failed:{upload_err}")
+        if not str(selected_crop_url or "").startswith("http"):
+            if not str(selected_crop_url or "").startswith("file://"):
+                resolved_backend = "minicpm"
+    stage["descriptor_input_s"] = round(time.time() - t_stage, 4)
 
-    # --- LOCAL EXTRACTION FROM MANNEQUIN ---
-    # We now have the mannequin wearing the garment (raw_vton_bytes).
-    # We perform local extraction to isolate the garment and ensure no holes are introduced.
-    t_extract_start = time.time()
-    vton_img_mannequin = Image.open(io.BytesIO(raw_vton_bytes)).convert("RGB")
-    logger.info(f"Loaded VTON mannequin image for local extraction: {vton_img_mannequin.size} {vton_img_mannequin.mode}")
-    extraction_meta = {}
-    try:
-        extracted_cloth, extraction_meta = _extract_cloth_from_crop(
-            vton_img_mannequin,
-            garment_type,
-            enforce_safety_guards=strict_safety,
-        )
-        extraction_meta["parser_input_source"] = "vton_raw_tryon_frame"
-        extraction_meta["parser_input_size"] = {
-            "width": int(vton_img_mannequin.width),
-            "height": int(vton_img_mannequin.height),
-        }
-        if (
-            ANALYZE_SHOWROOM_DELTA_REFINEMENT_ENABLED
-            and ANALYZE_VTON_USE_SHOWROOM_PERSON
-            and bool(showroom_bytes)
-            and bool(raw_vton_bytes)
-        ):
-            extracted_cloth, showroom_delta_meta = _refine_with_showroom_delta(
-                extracted_cloth,
-                raw_vton_bytes=raw_vton_bytes,
-                showroom_bytes=showroom_bytes,
-                garment_type=garment_type,
-            )
-            extraction_meta["showroom_delta_refine"] = showroom_delta_meta
-        extraction_meta["vto_path"] = "vton_fallback_mannequin_local_parser"
-    except Exception as extract_err:
-        if strict_safety or ANALYZE_EXTRACT_PARSER_ONLY:
-            raise
-        logger.warning(f"Local extraction failed in relaxed mode, using raw VTON frame: {extract_err}")
-        guard_warnings.append(f"extract_fallback_raw:{str(extract_err)[:120]}")
-        extracted_cloth = vton_img_mannequin.convert("RGBA")
-        extraction_meta = {
-            "path": "vton_raw_passthrough_relaxed",
-            "rescue_mode": "raw_frame",
-            "warning": str(extract_err),
-            "vto_path": "vton_raw_passthrough_relaxed",
-        }
-
-    # Save as bytes for postprocessing
-    buf = io.BytesIO()
-    extracted_cloth.save(buf, format="PNG")
-    final_vton_bytes = buf.getvalue()
-    t_extract_s = time.time() - t_extract_start
-
-    source_similarity = _compare_image_similarity(source_bytes, final_vton_bytes)
-    if ANALYZE_VTON_REJECT_SOURCE_PASSTHROUGH:
-        if source_similarity.get("exact_bytes"):
-            msg = "VTON output is byte-identical to source crop (passthrough)."
-            if strict_safety:
-                raise RuntimeError(msg)
-            guard_warnings.append("source_exact_match")
-            logger.warning(msg)
-        if float(source_similarity.get("resized_mae", 999.0)) <= ANALYZE_VTON_MAX_SOURCE_MAE:
-            msg = f"VTON output too similar to source crop (resized_mae={source_similarity.get('resized_mae')})."
-            if strict_safety:
-                raise RuntimeError(msg)
-            guard_warnings.append("source_similarity_high")
-            logger.warning(msg)
-    
-    t_post_start = time.time()
-    if bool(extraction_meta.get("parser_only")):
-        # Keep parser-only extraction, but still apply final content-crop + 2:3 framing.
-        try:
-            processed_vton_bytes, postprocess_meta = _crop_and_fit_garment_bytes(final_vton_bytes)
-            postprocess_meta["mode"] = "parser_only_crop_then_aspect"
-        except Exception as parser_pp_err:
-            logger.warning(f"Parser-only crop/aspect step failed, returning raw parser extraction: {parser_pp_err}")
-            processed_vton_bytes = final_vton_bytes
-            postprocess_meta = {
-                "enabled": False,
-                "bypassed": "parser_only_direct",
-                "output_background": "transparent",
-                "warning": str(parser_pp_err),
-            }
+    t_stage = time.time()
+    clean_prompt = " ".join(str(prompt_description or "").split()).strip()
+    fallback_prompt = " ".join(str(fallback_prompt_description or "").split()).strip()
+    if clean_prompt:
+        garment_desc = clean_prompt
+        prompt_source = "request"
     else:
-        processed_vton_bytes, postprocess_meta = _postprocess_extracted_garment_bytes(
-            final_vton_bytes,
-            garment_type=garment_type,
-        )
-    try:
-        image_quality = _validate_vton_output_bytes(processed_vton_bytes)
-    except Exception as quality_err:
-        if strict_safety:
-            raise
-        logger.warning(f"VTON output quality validation skipped in relaxed mode: {quality_err}")
-        guard_warnings.append(f"quality_validation_skipped:{str(quality_err)[:120]}")
-        image_quality = {
-            "validated": False,
-            "warning": str(quality_err),
-        }
-    t_post_s = time.time() - t_post_start
-
-    # Normalize to publicly consumable URLs
-    mirrored_raw_url = str(url)
-    t_upload_start = time.time()
-    if ANALYZE_VTON_MIRROR_RAW_OUTPUT:
+        garment_desc = ""
+        prompt_source = resolved_backend
+        desc_err: Optional[Exception] = None
         try:
-            # Optional debug mirror for raw VTON payload.
-            raw_mirrored = _upload_or_raise(raw_vton_bytes)
-            if raw_mirrored:
-                mirrored_raw_url = str(raw_mirrored)
-        except Exception as raw_e:
-            logger.warning(f"Failed to upload raw VTON for debug: {raw_e}")
+            garment_desc = _describe_garment_with_backend(
+                image=descriptor_image,
+                backend=resolved_backend,
+                image_url=selected_crop_url,
+                service_url=analyze_service_url if resolved_backend == "minicpm_service" else None,
+                garment_type=resolved_type,
+                dominant_color_hexes=descriptor_dominant_hexes,
+                color_hints=descriptor_color_hints,
+            )
+        except Exception as err:
+            desc_err = err
 
-    try:
-        mirrored = _upload_or_raise(processed_vton_bytes)
-        if mirrored:
-            public_url = str(mirrored)
-            mirrored_ok = True
-        else:
-            mirrored_ok = False
-    except Exception as mirror_err:
-        if ANALYZE_REQUIRE_MIRRORED_VTON_URL:
-            raise RuntimeError(f"Could not mirror VTON output URL to public Azure blob: {mirror_err}") from mirror_err
-        logger.warning(f"Could not mirror VTON output URL to Azure: {mirror_err}")
-        mirrored_ok = False
-    if not mirrored_ok:
-        raise RuntimeError(
-            "Processed garment output could not be mirrored; refusing to return raw try-on/showroom output."
+        if desc_err and resolved_backend == "minicpm_service" and selected_crop_url_source == "local_file_url":
+            # Fallback transport path when service process cannot read file:// URLs.
+            try:
+                selected_crop_url = _upload_or_raise(selected_crop_bytes, container=VTO_OUTPUT_CONTAINER)
+                if selected_crop_url:
+                    selected_crop_url_source = "azure_upload_url_retry"
+                    garment_desc = _describe_garment_with_backend(
+                        image=descriptor_image,
+                        backend=resolved_backend,
+                        image_url=selected_crop_url,
+                        service_url=analyze_service_url if resolved_backend == "minicpm_service" else None,
+                        garment_type=resolved_type,
+                        dominant_color_hexes=descriptor_dominant_hexes,
+                        color_hints=descriptor_color_hints,
+                    )
+                    desc_err = None
+                else:
+                    helper_warnings.append("selected_crop_retry_upload_empty_url")
+            except Exception as retry_err:
+                helper_warnings.append(f"selected_crop_retry_upload_failed:{retry_err}")
+
+        garment_desc = " ".join(str(garment_desc or "").split()).strip()
+        if desc_err and not garment_desc and fallback_prompt:
+            garment_desc = fallback_prompt
+            prompt_source = "selection_fallback_on_descriptor_error"
+            helper_warnings.append(f"descriptor_failed_fallback_used:{desc_err}")
+        elif desc_err and not garment_desc:
+            raise desc_err
+
+        if fallback_prompt and _descriptor_is_weak(garment_desc):
+            enriched = _enrich_garment_descriptor(
+                primary=garment_desc,
+                fallback=fallback_prompt,
+                garment_type=resolved_type,
+            )
+            enriched = " ".join(str(enriched or "").split()).strip()
+            if enriched and enriched != garment_desc:
+                garment_desc = enriched
+                prompt_source = f"{prompt_source}+selection_fallback_enrich"
+                helper_warnings.append("descriptor_enriched_from_selection_fallback")
+    stage["descriptor_s"] = round(time.time() - t_stage, 4)
+    if selected_crop_local_path:
+        try:
+            os.remove(selected_crop_local_path)
+        except Exception:
+            pass
+    if not garment_desc:
+        raise RuntimeError("Could not generate garment description for flux2 extract")
+
+    color_ctx_image = descriptor_color_ctx_image
+    input_color_ctx = _build_single_image_color_context(
+        image=color_ctx_image,
+        description=garment_desc,
+        mask=color_reference_mask if isinstance(color_reference_mask, np.ndarray) else None,
+        top_k=7,
+    )
+    dominant_hexes = [str(v) for v in (input_color_ctx.get("paletteHexes") or []) if str(v).strip()]
+    if not dominant_hexes:
+        dominant_hexes = _extract_dominant_hex_colors(
+            image=color_ctx_image,
+            mask=color_reference_mask if isinstance(color_reference_mask, np.ndarray) else None,
+            top_k=4,
         )
-    t_upload_s = time.time() - t_upload_start
-    t_all_s = time.time() - t_all_start
+    color_hints = [str(v) for v in (input_color_ctx.get("hints") or []) if str(v).strip()]
+    color_profile = input_color_ctx.get("profile") if isinstance(input_color_ctx.get("profile"), dict) else {}
 
-    # Avoid exposing mannequin/showroom raw images to client response payloads.
-    public_raw_url = ""
-    if ANALYZE_VTON_MIRROR_RAW_OUTPUT and mirrored_raw_url:
-        public_raw_url = str(mirrored_raw_url)
+    t_stage = time.time()
+    flux_prompt = _build_flux2_single_garment_extract_prompt(
+        garment_type=resolved_type,
+        prompt_description=garment_desc,
+        category_text=resolved_type,
+        dominant_color_hexes=dominant_hexes,
+        color_hints=color_hints,
+        color_profile=color_profile,
+    )
+    built_negative_prompt = _build_flux2_single_garment_extract_negative_prompt(
+        garment_type=resolved_type,
+        custom_negative_prompt=" ".join(str(negative_prompt or "").split()).strip(),
+    )
+    stage["prompt_build_s"] = round(time.time() - t_stage, 4)
+
+    t_stage = time.time()
+    analyze_flux_runner = engine.get_flux2_for_analyze()
+    flux_result = analyze_flux_runner.run_tryon(
+        person_image=src,
+        board_image=src,
+        prompt=flux_prompt,
+        steps=run_steps,
+        seed=run_seed,
+        negative_prompt=built_negative_prompt,
+    )
+    stage["flux_generation_s"] = round(time.time() - t_stage, 4)
+
+    raw_img = flux_result["image"].convert("RGBA")
+    raw_buf = io.BytesIO()
+    raw_img.save(raw_buf, format="PNG")
+    raw_bytes = raw_buf.getvalue()
+    raw_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+    parser_input_source = "flux_raw"
+    parser_input_sha256 = raw_sha256
+    source_bytes_cache: Optional[bytes] = None
+
+    t_stage = time.time()
+    final_bytes = raw_bytes
+    extraction_meta: Dict[str, object] = {}
+    postprocess_meta: Dict[str, object] = {}
+    extraction_path = "raw_flux_output"
+    extracted_rgba = None
+    try:
+        if effective_use_parser_post_extract:
+            try:
+                extracted_rgba, extraction_meta = _extract_cloth_from_crop(
+                    raw_img.convert("RGB"),
+                    resolved_type,
+                    enforce_safety_guards=True,
+                    allow_top_dress_backfill=True,
+                    parser_only_override=False,
+                )
+            except Exception as strict_extract_err:
+                helper_warnings.append(f"strict_extract_failed:{strict_extract_err}")
+                if ANALYZE_EXTRACT_ALLOW_SOURCE_FALLBACK:
+                    try:
+                        if source_bytes_cache is None:
+                            src_buf = io.BytesIO()
+                            src.save(src_buf, format="PNG")
+                            source_bytes_cache = src_buf.getvalue()
+                        parser_input_source = "source_input"
+                        parser_input_sha256 = hashlib.sha256(source_bytes_cache).hexdigest()
+                        extracted_rgba, extraction_meta = _extract_cloth_from_crop(
+                            src,
+                            resolved_type,
+                            enforce_safety_guards=False,
+                            allow_top_dress_backfill=True,
+                            parser_only_override=False,
+                        )
+                        extraction_meta = dict(extraction_meta or {})
+                        extraction_meta["fallback"] = "source_parser_after_strict_flux_fail"
+                    except Exception as source_extract_err:
+                        helper_warnings.append(f"source_extract_failed:{source_extract_err}")
+                        parser_input_source = "flux_raw"
+                        parser_input_sha256 = raw_sha256
+                        extracted_rgba, extraction_meta = _extract_cloth_from_crop(
+                            raw_img.convert("RGB"),
+                            resolved_type,
+                            enforce_safety_guards=False,
+                            allow_top_dress_backfill=True,
+                            parser_only_override=False,
+                        )
+                        extraction_meta = dict(extraction_meta or {})
+                        extraction_meta["fallback"] = "non_strict_guard"
+                else:
+                    parser_input_source = "flux_raw"
+                    parser_input_sha256 = raw_sha256
+                    extracted_rgba, extraction_meta = _extract_cloth_from_crop(
+                        raw_img.convert("RGB"),
+                        resolved_type,
+                        enforce_safety_guards=False,
+                        allow_top_dress_backfill=True,
+                        parser_only_override=False,
+                    )
+                    extraction_meta = dict(extraction_meta or {})
+                    extraction_meta["fallback"] = "non_strict_guard_flux_only"
+        else:
+            extraction_path = "crop_then_aspect_only_no_parser"
+            final_bytes, postprocess_meta = _postprocess_extracted_garment_bytes(
+                raw_bytes,
+                garment_type=resolved_type,
+                force_transparent=True,
+                transparent_only=True,
+            )
+            extraction_meta = {
+                "path": extraction_path,
+                "parserSkipped": True,
+            }
+            parser_input_source = "none"
+            parser_input_sha256 = ""
+
+        if extracted_rgba is not None:
+            ext_buf = io.BytesIO()
+            extracted_rgba.save(ext_buf, format="PNG")
+            extracted_bytes = ext_buf.getvalue()
+            final_bytes, postprocess_meta = _postprocess_extracted_garment_bytes(
+                extracted_bytes,
+                garment_type=resolved_type,
+                force_transparent=True,
+            )
+            extraction_path = "parser_extract_then_postprocess"
+
+            # Guard against postprocess color drift: fallback to non-enhanced fit when drift is high.
+            try:
+                final_img = Image.open(io.BytesIO(final_bytes)).convert("RGBA")
+                output_color_ctx = _build_single_image_color_context(
+                    image=final_img.convert("RGB"),
+                    description="",
+                    mask=_extract_alpha_mask(final_img, threshold=24),
+                    top_k=7,
+                )
+                output_hexes = [
+                    str(v) for v in (output_color_ctx.get("paletteHexes") or []) if str(v).strip()
+                ]
+                color_compare = _compute_palette_delta_e(
+                    input_hexes=[str(v) for v in dominant_hexes if str(v).strip()],
+                    output_hexes=output_hexes,
+                    max_colors=5,
+                )
+                drift_limit = max(8.0, float(FLUX2_COLOR_FIRST_GATE_MAX_DRIFT_DELTA))
+                drift_now = float((color_compare or {}).get("avgDrift", 0.0) or 0.0)
+                if color_compare and drift_now > drift_limit:
+                    color_safe_bytes, color_safe_meta = _crop_and_fit_garment_bytes(extracted_bytes)
+                    final_bytes = color_safe_bytes
+                    extraction_path = "parser_extract_then_color_safe_fit"
+                    postprocess_meta = dict(postprocess_meta or {})
+                    postprocess_meta["color_guard_fallback"] = {
+                        "applied": True,
+                        "avgDrift": round(drift_now, 4),
+                        "driftLimit": round(drift_limit, 4),
+                        "fallback_mode": str(color_safe_meta.get("mode", "crop_then_aspect_only")),
+                    }
+            except Exception as color_guard_err:
+                helper_warnings.append(f"color_guard_check_failed:{color_guard_err}")
+    except Exception as extract_err:
+        helper_warnings.append(f"extract_postprocess_failed:{extract_err}")
+        final_bytes, postprocess_meta = _crop_and_fit_garment_bytes(raw_bytes)
+        extraction_meta = {"warning": str(extract_err)}
+        extraction_path = "crop_then_aspect_only_fallback"
+
+    extraction_meta = dict(extraction_meta or {})
+    extraction_meta["raw_flux_sha256"] = raw_sha256
+    extraction_meta["parser_input_source"] = parser_input_source
+    extraction_meta["parser_input_sha256"] = parser_input_sha256
+    extraction_meta["use_parser_post_extract"] = bool(effective_use_parser_post_extract)
+    extraction_meta["parser_skipped"] = not bool(effective_use_parser_post_extract)
+    extraction_meta["parser_used_flux_raw"] = parser_input_source == "flux_raw"
+    extraction_meta["parser_input_matches_flux_raw"] = parser_input_sha256 == raw_sha256
+
+    stage["flux_extract_s"] = round(time.time() - t_stage, 4)
+
+    t_stage = time.time()
+    output_url = _upload_or_raise(final_bytes, container=VTO_OUTPUT_CONTAINER)
+    stage["upload_s"] = round(time.time() - t_stage, 4)
+    stage["total_s"] = round(time.time() - t_all_start, 4)
 
     return {
-        "url": public_url,
-        "raw_url": public_raw_url,
-        "_processed_image_bytes": processed_vton_bytes,
+        "url": output_url,
+        "raw_url": output_url,
+        "_processed_image_bytes": final_bytes,
         "meta": {
-            "path": extraction_meta.get("path", "vton_fallback"),
-            "endpoint": ANALYZE_VTON_CLOTH_ONLY_ENDPOINT,
-            "category": category,
-            "vto_mode": vto_mode,
-            "showroom_person_enabled": ANALYZE_VTON_USE_SHOWROOM_PERSON,
-            "person_image_url": person_image_url,
-            "fashn_raw_url": str(url),
-            "raw_output_url": mirrored_raw_url,
-            "mirrored": mirrored_ok,
-            "quality": image_quality,
-            "source_similarity": source_similarity,
-            "showroom_similarity": showroom_similarity,
-            "postprocess": postprocess_meta,
-            "strict_safety": strict_safety,
-            "guard_warnings": guard_warnings,
-            "timings": {
-                "total": round(t_all_s, 4),
-                "vton_request": round(t_vton_s, 4),
-                "fetch_io": round(t_fetch_s, 4),
-                "local_extract": round(t_extract_s, 4),
-                "postprocess": round(t_post_s, 4),
-                "upload": round(t_upload_s, 4),
+            "pipeline": "flux2_extract",
+            "endpoint": "/v1/flux2/extract-garment",
+            "path": extraction_path,
+            "postprocess": postprocess_meta or {"enabled": False, "reason": "postprocess_not_applied"},
+            "extraction_meta": extraction_meta or {},
+            "descriptor_backend_requested": requested_backend,
+            "descriptor_backend_resolved": resolved_backend,
+            "descriptor_service_url": analyze_service_url if resolved_backend == "minicpm_service" else "",
+            "descriptor_service_url_source": "analyze_override" if ANALYZE_MINICPM_SERVICE_URL else "default",
+            "descriptor_transport_source": selected_crop_url_source,
+            "prompt_source": prompt_source,
+            "prompt_description": garment_desc,
+            "flux_prompt": flux_prompt,
+            "negative_prompt": built_negative_prompt,
+            "warnings": helper_warnings,
+            "steps": run_steps,
+            "seed": run_seed,
+            "resolved_type": resolved_type,
+            "mapped_from_outer": mapped_from_outer,
+            "timings": stage,
+            "flux": {
+                "latency_s": round(float(flux_result.get("latency", 0.0)), 4),
+                "metadata": flux_result.get("metadata", {}),
             },
-            "request_payload": payload,
-            "hybrid_meta": extraction_meta
+            "runner": {
+                "analyze_flux_isolated": bool(ANALYZE_FLUX_DISABLE_LORA),
+                "analyze_flux_lora_disabled": bool(getattr(analyze_flux_runner, "enable_lora", True) is False),
+            },
         },
     }
+
 
 def _sync_wardrobe_progress(
     *,
@@ -6504,6 +7344,49 @@ def _sync_wardrobe_progress(
             "request_payload": payload,
         }
 
+
+def _sync_wardrobe_progress_dispatch(
+    *,
+    authorization: Optional[str],
+    progress_id: str,
+    output_url: Optional[str],
+    prompt_description: str,
+    metadata: dict,
+) -> dict:
+    if not ANALYZE_PROGRESS_SYNC_ASYNC:
+        return _sync_wardrobe_progress(
+            authorization=authorization,
+            progress_id=progress_id,
+            output_url=output_url,
+            prompt_description=prompt_description,
+            metadata=metadata,
+        )
+    try:
+        _WARDROBE_PROGRESS_EXECUTOR.submit(
+            _sync_wardrobe_progress,
+            authorization=authorization,
+            progress_id=progress_id,
+            output_url=output_url,
+            prompt_description=prompt_description,
+            metadata=metadata,
+        )
+        return {
+            "enabled": bool(ENABLE_WARDROBE_PROGRESS_SYNC),
+            "synced": False,
+            "queued": True,
+            "mode": "async_background",
+            "id": progress_id,
+        }
+    except Exception as queue_err:
+        logger.warning(f"Async wardrobe progress queue failed. Falling back to sync call. error={queue_err}")
+        return _sync_wardrobe_progress(
+            authorization=authorization,
+            progress_id=progress_id,
+            output_url=output_url,
+            prompt_description=prompt_description,
+            metadata=metadata,
+        )
+
 # --- Schemas ---
 
 class VTORequest(BaseModel):
@@ -6551,14 +7434,43 @@ class ParserJoyCaptionAnalyzeRequest(BaseModel):
 # --- Endpoints ---
 @app.on_event("startup")
 async def startup_load():
-    t0 = time.time()
-    if os.getenv("PRELOAD", "1") == "1":
-        await asyncio.to_thread(engine.ensure_vto_ready)
-    
-    if os.getenv("PRELOAD_ANALYZE", "1") == "1":
-        await asyncio.to_thread(engine.ensure_analyze_ready)
-    
-    logger.info(f"Startup preloading completed in {time.time() - t0:.2f}s")
+    async def _run_preload():
+        t0 = time.time()
+        _STARTUP_PRELOAD_STATE["started"] = True
+        _STARTUP_PRELOAD_STATE["running"] = True
+        _STARTUP_PRELOAD_STATE["completed"] = False
+        _STARTUP_PRELOAD_STATE["started_at"] = t0
+        _STARTUP_PRELOAD_STATE["completed_at"] = None
+        _STARTUP_PRELOAD_STATE["duration_s"] = None
+        _STARTUP_PRELOAD_STATE["errors"] = []
+        try:
+            if os.getenv("PRELOAD", "1") == "1":
+                await asyncio.to_thread(engine.ensure_vto_ready)
+            if os.getenv("PRELOAD_ANALYZE", "1") == "1":
+                await asyncio.to_thread(engine.ensure_analyze_ready)
+            _STARTUP_PRELOAD_STATE["completed"] = True
+        except Exception as preload_err:
+            logger.exception(f"Startup preloading failed: {preload_err}")
+            _STARTUP_PRELOAD_STATE["errors"] = [str(preload_err)]
+        finally:
+            _STARTUP_PRELOAD_STATE["running"] = False
+            _STARTUP_PRELOAD_STATE["completed_at"] = time.time()
+            _STARTUP_PRELOAD_STATE["duration_s"] = round(
+                _STARTUP_PRELOAD_STATE["completed_at"] - t0, 4
+            )
+            logger.info(
+                "Startup preloading finished mode=%s completed=%s duration=%.2fs",
+                _STARTUP_PRELOAD_STATE["mode"],
+                _STARTUP_PRELOAD_STATE["completed"],
+                _STARTUP_PRELOAD_STATE["duration_s"] or 0.0,
+            )
+
+    global _STARTUP_PRELOAD_TASK
+    if STARTUP_BACKGROUND_PRELOAD:
+        _STARTUP_PRELOAD_TASK = asyncio.create_task(_run_preload())
+        logger.info("Startup preloading scheduled in background")
+        return
+    await _run_preload()
 
 @app.get("/")
 def read_root():
@@ -6943,6 +7855,10 @@ async def flux2_extract_single_garment(
         "prompt_build_s": 0.0,
         "flux_generation_s": 0.0,
         "flux_extract_s": 0.0,
+        "upload_input_debug_s": 0.0,
+        "upload_selected_crop_s": 0.0,
+        "upload_raw_output_s": 0.0,
+        "upload_final_output_s": 0.0,
         "upload_s": 0.0,
         "api_total_s": 0.0,
     }
@@ -6960,10 +7876,14 @@ async def flux2_extract_single_garment(
         "descriptionBackendResolved": "",
         "hasPromptDescription": False,
         "hasCustomNegativePrompt": False,
+        "useFullImageContextRequested": bool(use_full_image_context),
         "useFullImageContext": bool(use_full_image_context),
         "strictSectionEnforcement": bool(strict_section_enforcement),
+        "useParserBoardReferenceRequested": bool(use_parser_board_reference),
+        "useParserPostExtractRequested": bool(use_parser_post_extract),
         "useParserBoardReference": bool(use_parser_board_reference),
         "useParserPostExtract": bool(use_parser_post_extract),
+        "parserDisabledByConfig": bool(FLUX2_SINGLE_GARMENT_EXTRACT_DISABLE_PARSER),
     }
 
     def _build_error_response(
@@ -7049,6 +7969,27 @@ async def flux2_extract_single_garment(
 
         provided_prompt = " ".join(str(prompt_description or promptDescription or "").split()).strip()
         provided_negative = " ".join(str(negative_prompt or negativePrompt or "").split()).strip()
+        requested_use_full_image_context = bool(use_full_image_context)
+        requested_use_parser_board_reference = bool(use_parser_board_reference)
+        requested_use_parser_post_extract = bool(use_parser_post_extract)
+
+        effective_use_full_image_context = requested_use_full_image_context
+        effective_use_parser_board_reference = requested_use_parser_board_reference
+        effective_use_parser_post_extract = requested_use_parser_post_extract
+        if FLUX2_SINGLE_GARMENT_EXTRACT_DISABLE_PARSER:
+            effective_use_full_image_context = True
+            effective_use_parser_board_reference = False
+            effective_use_parser_post_extract = False
+            if (
+                requested_use_parser_board_reference
+                or requested_use_parser_post_extract
+                or (not requested_use_full_image_context)
+            ):
+                warnings.append("parser_disabled_for_extract_endpoint")
+
+        expose_intermediate_urls = bool(
+            upload_debug_images or FLUX2_SINGLE_GARMENT_EXTRACT_EXPOSE_INTERMEDIATE_URLS
+        )
 
         input_summary["garmentTypeRaw"] = raw_type
         input_summary["garmentTypeResolved"] = resolved_type
@@ -7059,11 +8000,16 @@ async def flux2_extract_single_garment(
         input_summary["descriptionBackendResolved"] = resolved_backend
         input_summary["hasPromptDescription"] = bool(provided_prompt)
         input_summary["hasCustomNegativePrompt"] = bool(provided_negative)
+        input_summary["useFullImageContext"] = bool(effective_use_full_image_context)
+        input_summary["useParserBoardReference"] = bool(effective_use_parser_board_reference)
+        input_summary["useParserPostExtract"] = bool(effective_use_parser_post_extract)
 
         input_image_url = None
-        if bool(upload_debug_images):
+        if expose_intermediate_urls:
             try:
+                t_upload_part = time.time()
                 input_image_url = _upload_or_raise(image_bytes, container=VTO_OUTPUT_CONTAINER)
+                stage_timings["upload_input_debug_s"] = round(time.time() - t_upload_part, 4)
             except Exception as upload_in_err:
                 warnings.append(f"input_upload_failed:{upload_in_err}")
 
@@ -7073,7 +8019,7 @@ async def flux2_extract_single_garment(
             descriptor_image = source_image
             selected_candidate_obj: dict = {}
 
-            if bool(use_full_image_context):
+            if effective_use_full_image_context:
                 parser_meta = {
                     "strategy": "full_image_context",
                     "selectedIndex": 0,
@@ -7085,7 +8031,7 @@ async def flux2_extract_single_garment(
                 stage_timings["parser_select_s"] = 0.0
                 # Optional parser assist:
                 # keep full image for person/context, but use focused garment crop as board reference.
-                if bool(use_parser_board_reference) and engine.parser is not None:
+                if effective_use_parser_board_reference and engine.parser is not None:
                     t_stage = time.time()
                     try:
                         focused_board, focused_meta = _select_single_garment_candidate(
@@ -7124,9 +8070,12 @@ async def flux2_extract_single_garment(
             selected_crop_bytes = selected_crop_bytes_io.getvalue()
 
             selected_crop_url = None
-            if bool(upload_debug_images) or resolved_backend == "minicpm_service":
+            need_selected_crop_upload = (resolved_backend == "minicpm_service")
+            if expose_intermediate_urls or need_selected_crop_upload:
                 try:
+                    t_upload_part = time.time()
                     selected_crop_url = _upload_or_raise(selected_crop_bytes, container=VTO_OUTPUT_CONTAINER)
+                    stage_timings["upload_selected_crop_s"] = round(time.time() - t_upload_part, 4)
                 except Exception as selected_upload_err:
                     warnings.append(f"selected_crop_upload_failed:{selected_upload_err}")
 
@@ -7210,11 +8159,14 @@ async def flux2_extract_single_garment(
             raw_buf = io.BytesIO()
             flux_raw_img.save(raw_buf, format="PNG")
             raw_bytes = raw_buf.getvalue()
+            raw_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+            parser_input_source = "flux_raw"
+            parser_input_sha256 = raw_sha256
 
             t_stage = time.time()
             extraction_warning = ""
             extraction_mode = "parser_extract_then_postprocess"
-            if bool(use_parser_post_extract):
+            if effective_use_parser_post_extract:
                 try:
                     extracted_rgba, extraction_meta = _extract_cloth_from_crop(
                         flux_raw_img,
@@ -7245,6 +8197,13 @@ async def flux2_extract_single_garment(
                 }
                 final_bytes, postprocess_meta = _crop_and_fit_garment_bytes(raw_bytes)
 
+            extraction_meta = dict(extraction_meta or {})
+            extraction_meta["raw_flux_sha256"] = raw_sha256
+            extraction_meta["parser_input_source"] = parser_input_source
+            extraction_meta["parser_input_sha256"] = parser_input_sha256
+            extraction_meta["parser_used_flux_raw"] = parser_input_source == "flux_raw"
+            extraction_meta["parser_input_matches_flux_raw"] = parser_input_sha256 == raw_sha256
+
             try:
                 final_img = Image.open(io.BytesIO(final_bytes))
                 if final_img.mode not in {"RGB", "RGBA"}:
@@ -7271,8 +8230,14 @@ async def flux2_extract_single_garment(
             stage_timings["flux_extract_s"] = round(time.time() - t_stage, 4)
 
             t_stage = time.time()
-            raw_output_url = _upload_or_raise(raw_bytes, container=VTO_OUTPUT_CONTAINER)
+            raw_output_url = None
+            if expose_intermediate_urls and FLUX2_SINGLE_GARMENT_EXTRACT_UPLOAD_RAW_DEBUG:
+                t_upload_part = time.time()
+                raw_output_url = _upload_or_raise(raw_bytes, container=VTO_OUTPUT_CONTAINER)
+                stage_timings["upload_raw_output_s"] = round(time.time() - t_upload_part, 4)
+            t_upload_part = time.time()
             final_output_url = _upload_or_raise(final_bytes, container=VTO_OUTPUT_CONTAINER)
+            stage_timings["upload_final_output_s"] = round(time.time() - t_upload_part, 4)
             stage_timings["upload_s"] = round(time.time() - t_stage, 4)
 
         stage_timings["api_total_s"] = round(time.time() - t0, 4)
@@ -7325,10 +8290,10 @@ async def flux2_extract_single_garment(
                     "centerAligned": True,
                 },
                 "outputs": {
-                    "inputImageUrl": input_image_url,
-                    "selectedCropUrl": selected_crop_url,
-                    "rawOutputUrl": raw_output_url,
-                    "rawOutputPurpose": "debug_before_parser_extraction",
+                    "inputImageUrl": input_image_url if expose_intermediate_urls else None,
+                    "selectedCropUrl": selected_crop_url if expose_intermediate_urls else None,
+                    "rawOutputUrl": raw_output_url if expose_intermediate_urls else None,
+                    "rawOutputPurpose": "debug_before_parser_extraction" if raw_output_url else None,
                     "outputUrl": final_output_url or raw_output_url,
                 },
                 "stageTimings": stage_timings,
@@ -7369,6 +8334,8 @@ async def analyze_garment(
     image: Optional[UploadFile] = File(None),
     garment_type: Optional[str] = Form(None, alias="type"),
     garmentType: Optional[str] = Form(None),
+    use_parser_post_extract: Optional[bool] = Form(None),
+    useParserPostExtract: Optional[bool] = Form(None),
     selected_index: Optional[int] = Form(None),
     debug: bool = Form(False),
     _authorization: Optional[str] = Header(None, alias="Authorization")
@@ -7379,6 +8346,16 @@ async def analyze_garment(
     - optional binary parts (extracted_cloth, item_1, item_2, ...)
     """
     t0 = time.time()
+    analyze_stage_timings = {
+        "read_input_s": 0.0,
+        "blur_check_s": 0.0,
+        "yolo_detect_s": 0.0,
+        "yolo_crop_s": 0.0,
+        "caption_total_s": 0.0,
+        "primary_type_total_s": 0.0,
+        "extract_total_s": 0.0,
+        "progress_sync_s": 0.0,
+    }
 
     # ── AUTH ──
     try:
@@ -7406,10 +8383,14 @@ async def analyze_garment(
 
     effective_type = garment_type or garmentType
     requested_type = _normalize_garment_type(effective_type)
+    # /analyze parser extraction fallback is disabled by design for color consistency and latency stability.
+    requested_use_parser_post_extract = False
 
     try:
         # 1. Load Image
+        t_stage = time.time()
         image_bytes = await upload.read()
+        analyze_stage_timings["read_input_s"] = round(time.time() - t_stage, 4)
         if len(image_bytes) > ANALYZE_MAX_FILE_BYTES:
             payload = _build_error_payload(
                 title="File Too Large",
@@ -7420,7 +8401,9 @@ async def analyze_garment(
             return _multipart_form_response(payload)
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         if ANALYZE_BLUR_CHECK_ENABLED:
+            t_stage = time.time()
             focus_score = _focus_score(img)
+            analyze_stage_timings["blur_check_s"] = round(time.time() - t_stage, 4)
             if focus_score < ANALYZE_BLUR_MIN_FOCUS_SCORE:
                 payload = _build_error_payload(
                     title="Image Too Blurry",
@@ -7430,297 +8413,426 @@ async def analyze_garment(
                 )
                 return _multipart_form_response(payload)
 
-        async with gpu_semaphore:
-            # 2. Detect & Crop (YOLO)
+        gpu_queue_wait_s = 0.0
+        gpu_slot_acquired = False
+        t_gpu_wait = time.time()
+        try:
+            await asyncio.wait_for(gpu_semaphore.acquire(), timeout=ANALYZE_GPU_QUEUE_TIMEOUT_S)
+            gpu_slot_acquired = True
+            gpu_queue_wait_s = round(time.time() - t_gpu_wait, 4)
+
+            # 2. Detect & Crop (YOLO) or explicit-type fast path.
+            direct_requested_type_mode = requested_type in {"top", "bottom", "dress", "outer"} and selected_index is None
             parser_split_used = False
             parser_candidates_count = 0
             parser_split_reject_reason = ""
             heuristic_split_used = False
             heuristic_candidates_count = 0
-            instances = engine.yolo.detect_instances(img)
-            if not instances:
-                payload = _build_error_payload(
-                    title="No Clothing Found",
-                    description="No clothing item was detected in the uploaded image.",
-                    reason_codes=["NO_CLOTHING"],
-                    status_code=400,
-                )
-                return _multipart_form_response(payload)
-            else:
-                # Finalize crops
-                instances = engine.yolo.get_crops(img, instances)
-
-            # 2a. Optional parser split fallback (disabled by default for routing stability).
-            raw_detected_count = len(instances)
-            if (
-                ANALYZE_USE_PARSER_FOR_PREROUTING
-                and ANALYZE_ENABLE_PARSER_SPLIT
-                and engine.parser is not None
-                and len(instances) <= 1
-            ):
-                try:
-                    parser_candidates = _parser_split_candidates(img)
-                    parser_candidates_count = len(parser_candidates)
-                    if len(parser_candidates) >= 2:
-                        plausible, reason = _parser_split_is_plausible(parser_candidates, img.height)
-                        if plausible:
-                            parser_split_used = True
-                            instances = parser_candidates
-                        else:
-                            parser_split_reject_reason = reason
-                except Exception as parser_err:
-                    logger.warning(f"Human parser split fallback failed: {parser_err}")
-
-            # 2b. Heuristic split when parser could not split:
-            # - single full-body candidate
-            # - multi-candidate same-type full-body detections (prevents top-only collapse)
-            if ANALYZE_ENABLE_HEURISTIC_SPLIT and not parser_split_used and instances:
-                try:
-                    trigger_split = False
-                    base_inst = instances[0]
-                    if len(instances) == 1:
-                        trigger_split = True
-                    elif _should_force_fullbody_split(instances, img.height):
-                        largest = _largest_instance(instances)
-                        if largest is not None:
-                            base_inst = largest
-                            trigger_split = True
-
-                    if trigger_split:
-                        classify = engine.florence.classify_garment_type(base_inst["image"], hint_type=requested_type)
-                        base_type = str(classify.get("type") or "").strip().lower()
-                        base_score = float(classify.get("score", 0.0) or 0.0)
-                        dress_locked = (
-                            base_type == "dress"
-                            and base_score >= ANALYZE_FLORENCE_DRESS_LOCK_MIN_SCORE
-                            and requested_type not in {"top", "bottom"}
-                        )
-                        allow_split = not dress_locked
-                        if allow_split:
-                            heuristics = _heuristic_split_candidates(img, base_inst)
-                            heuristic_candidates_count = max(heuristic_candidates_count, len(heuristics))
-                            if len(heuristics) >= 2:
-                                heuristic_split_used = True
-                                instances = heuristics
-                except Exception as heur_err:
-                    logger.warning(f"Heuristic split fallback failed: {heur_err}")
-
-            # 2b.1 Optional parser tightening. Keep disabled for first-step routing by default.
-            if ANALYZE_USE_PARSER_FOR_PREROUTING and len(instances) >= 1 and engine.parser is not None:
-                try:
-                    instances = _tighten_instances_with_parser_masks(img, instances)
-                except Exception as tighten_err:
-                    logger.warning(f"Parser-based crop tightening failed: {tighten_err}")
-
-            instances = _suppress_auxiliary_instances(instances, img.width, img.height)
-
-            # 2c. Optional hybrid semantic rerank with Florence-2 (feature-flagged).
-            if USE_FLORENCE_HYBRID_VERIFY and instances:
-                ranked = sorted(instances, key=lambda x: float(x.get("confidence", 0.0)), reverse=True)
-                for idx, inst in enumerate(ranked):
-                    yolo_conf = float(inst.get("confidence", 0.0))
-                    bbox = inst.get("bbox") or [0, 0, img.width, img.height]
-                    prior = _bbox_prior(bbox, img.width, img.height)
-
-                    florence_type = _normalize_garment_type(str(inst.get("label", ""))) or "top"
-                    florence_conf = 0.50
-                    florence_reason = "fallback_no_florence"
-                    florence_caption = ""
-
-                    if idx < HYBRID_TOP_K:
-                        try:
-                            source_hint = _normalize_garment_type(str(inst.get("label", "")))
-                            hint = requested_type or source_hint
-                            verdict = engine.florence.classify_garment_type(inst["image"], hint_type=hint)
-                            florence_type = verdict.get("type") or florence_type
-                            florence_conf = float(verdict.get("score", florence_conf))
-                            florence_reason = str(verdict.get("reason", "ok"))
-                            florence_caption = str(verdict.get("caption", ""))
-                            # Keep heuristic split labels stable unless Florence is very confident.
-                            if (
-                                str(inst.get("source", "")) == "heuristic_split"
-                                and source_hint
-                                and florence_type != source_hint
-                                and florence_conf < 0.90
-                            ):
-                                florence_type = source_hint
-                                florence_reason = f"{florence_reason}|locked_to_heuristic_label"
-
-                            # For shorts/skirt-like bottoms, trim lower leg-heavy region from heuristic split.
-                            if (
-                                str(inst.get("source", "")) == "heuristic_split"
-                                and source_hint == "bottom"
-                                and _is_shorts_like_caption(florence_caption)
-                            ):
-                                bx = inst.get("bbox") or [0, 0, img.width, img.height]
-                                x0, y0, x1, y1 = [int(v) for v in bx]
-                                h = max(1, y1 - y0)
-                                keep_h = max(int(img.height * 0.16), int(h * ANALYZE_HEURISTIC_BOTTOM_TRIM_SHORTS_RATIO))
-                                new_y1 = min(y1, y0 + keep_h)
-                                if new_y1 - y0 >= 48:
-                                    inst["bbox"] = [x0, y0, x1, new_y1]
-                                    inst["image"] = img.crop((x0, y0, x1, new_y1))
-                                    bbox = inst["bbox"]
-                                    prior = _bbox_prior(bbox, img.width, img.height)
-                        except Exception as classify_err:
-                            logger.warning(f"Florence hybrid classify failed, falling back to YOLO candidate ordering: {classify_err}")
-
-                    score = _hybrid_score(yolo_conf=yolo_conf, florence_conf=florence_conf, bbox_prior=prior)
-                    if requested_type and florence_type == requested_type:
-                        score = min(1.0, score + 0.06)
-
-                    inst["_hybrid"] = {
-                        "predicted_type": florence_type,
-                        "yolo_confidence": yolo_conf,
-                        "florence_confidence": florence_conf,
-                        "bbox_prior": prior,
-                        "score": score,
-                        "florence_reason": florence_reason,
-                        "florence_caption": florence_caption,
-                    }
-
-                ranked = sorted(ranked, key=lambda inst: float(inst.get("_hybrid", {}).get("score", 0.0)), reverse=True)
-                if HYBRID_MIN_SCORE > 0.0:
-                    thresholded = [inst for inst in ranked if float(inst.get("_hybrid", {}).get("score", 0.0)) >= HYBRID_MIN_SCORE]
-                    if thresholded:
-                        ranked = thresholded
-                instances = ranked[:ANALYZE_MAX_ITEMS]
-
-            # 3. Analyze with Florence-2 (Auto-Captioning)
+            raw_detected_count = 0
             items = []
-            for idx, inst in enumerate(instances):
-                if ANALYZE_CAPTION_MODE == "detailed":
-                    prompt_desc = engine.florence.describe_garment(inst["image"])
-                else:
-                    prompt_desc = engine.florence.describe_garment_short(inst["image"])
 
-                hybrid_meta = inst.get("_hybrid", {})
-                autotype_meta = {}
-                if USE_FLORENCE_HYBRID_VERIFY:
-                    resolved_type = hybrid_meta.get("predicted_type")
-                    type_source = "florence_hybrid"
-                else:
-                    resolved_type = _normalize_garment_type(str(inst.get("label")))
-                    type_source = "yolo"
-                    if not resolved_type:
-                        caption_guess = _infer_type_from_caption(prompt_desc)
-                        if caption_guess:
-                            resolved_type = caption_guess
-                            type_source = "caption_autotype"
-                            autotype_meta = {"reason": "caption_guess"}
-                        else:
-                            try:
-                                verdict = engine.florence.classify_garment_type(inst["image"], hint_type=requested_type)
-                                guess = _normalize_garment_type(str(verdict.get("type")))
-                                if guess:
-                                    resolved_type = guess
-                                    type_source = "florence_autotype"
-                                    autotype_meta = {
-                                        "score": float(verdict.get("score", 0.0)),
-                                        "reason": str(verdict.get("reason", "")),
-                                    }
-                            except Exception as auto_type_err:
-                                logger.warning(f"Per-instance automatic type resolution failed: {auto_type_err}")
-                    if not resolved_type:
-                        resolved_type = "top"
-                detection_source = str(inst.get("source", "yolo"))
-
-                bbox = inst["bbox"]
-                x0, y0, x1, y1 = bbox
-                crop_w = max(1, int(x1) - int(x0))
-                crop_h = max(1, int(y1) - int(y0))
-                crop_area_ratio = min(1.0, float(crop_w * crop_h) / max(1.0, float(img.width * img.height)))
-
-                # Drop obvious non-garment detections (for example furniture/background objects),
-                # but keep plausible garment crops even when caption text is weak.
-                non_garment_caption = _caption_non_garment_signal(prompt_desc)
-                has_garment_caption = _caption_garment_signal(prompt_desc)
-                if non_garment_caption and not has_garment_caption:
-                    det_conf = float(inst.get("confidence", 0.0))
-                    label_hint = (
-                        _normalize_garment_type(str(inst.get("label") or ""))
-                        or _normalize_garment_type(str(resolved_type or ""))
-                    )
-                    plausible_garment = (
-                        label_hint in {"top", "bottom", "dress", "outer"}
-                        and crop_area_ratio >= 0.045
-                        and det_conf >= 0.35
-                    )
-                    if not plausible_garment:
-                        logger.info(
-                            "Suppressing non-garment candidate from caption: %s",
-                            (prompt_desc or "")[:140],
-                        )
-                        continue
-
-                # Category mapping from prompt/auto-type
-                style_infer = autotype_meta.get("specific_clothing_style") if autotype_meta else None
-                if not style_infer and prompt_desc:
-                    style_infer = _infer_style_from_text(prompt_desc, garment_type=resolved_type)
-                
-                category_meta = _wardrobe_category_from_garment_type(resolved_type, style=style_infer)
-
-                items.append({
-                    "garment_id": idx,
-                    "type": resolved_type,
-                    "garment_type": resolved_type,
-                    "type_source": type_source,
-                    "detection_source": detection_source,
-                    "promptDescription": prompt_desc,
-                    "description": prompt_desc,
-                    "style": category_meta["style"],
-                    "category_key": category_meta["category_key"],
-                    "primary_category_key": category_meta["primary_category_key"],
+            if direct_requested_type_mode:
+                direct_category_meta = _wardrobe_category_from_garment_type(requested_type, style=None)
+                items = [{
+                    "garment_id": 0,
+                    "type": requested_type,
+                    "garment_type": requested_type,
+                    "type_source": "requested_type_direct",
+                    "detection_source": "type_direct_image",
+                    "promptDescription": "",
+                    "description": "",
+                    "style": direct_category_meta["style"],
+                    "category_key": direct_category_meta["category_key"],
+                    "primary_category_key": direct_category_meta["primary_category_key"],
                     "url": None,
-                    "bbox": bbox,
+                    "bbox": [0, 0, img.width, img.height],
                     "crop": {
-                        "width": crop_w,
-                        "height": crop_h,
-                        "area_ratio": crop_area_ratio,
+                        "width": int(img.width),
+                        "height": int(img.height),
+                        "area_ratio": 1.0,
                     },
                     "confidence": {
-                        "yolo": float(hybrid_meta.get("yolo_confidence", inst.get("confidence", 0.0))),
-                        "florence_type": float(hybrid_meta.get("florence_confidence", 0.0)),
-                        "bbox_prior": float(hybrid_meta.get("bbox_prior", 0.0)),
-                        "hybrid": float(hybrid_meta.get("score", 0.0)),
-                    } if USE_FLORENCE_HYBRID_VERIFY else {
-                        "yolo": float(inst.get("confidence", 0.0)),
+                        "yolo": 1.0,
                     },
-                    "_image_obj": inst["image"],
-                })
-                if autotype_meta:
-                    items[-1]["autotype"] = autotype_meta
-                if detection_source == "human_parser":
-                    items[-1]["parser_area_ratio"] = float(inst.get("parser_area_ratio", 0.0))
-                if inst.get("tighten_source"):
-                    items[-1]["tighten_source"] = str(inst.get("tighten_source"))
-                if inst.get("tighten_adjustment"):
-                    items[-1]["tighten_adjustment"] = str(inst.get("tighten_adjustment"))
+                    "_image_obj": img.copy(),
+                    "_mask_obj": None,
+                }]
+            else:
+                t_stage = time.time()
+                instances = engine.yolo.detect_instances(img)
+                analyze_stage_timings["yolo_detect_s"] = round(time.time() - t_stage, 4)
+                if not instances:
+                    payload = _build_error_payload(
+                        title="No Clothing Found",
+                        description="No clothing item was detected in the uploaded image.",
+                        reason_codes=["NO_CLOTHING"],
+                        status_code=400,
+                    )
+                    return _multipart_form_response(payload)
+                else:
+                    # Finalize crops
+                    t_stage = time.time()
+                    instances = engine.yolo.get_crops(img, instances)
+                    analyze_stage_timings["yolo_crop_s"] = round(time.time() - t_stage, 4)
 
-            if not items:
-                payload = _build_error_payload(
-                    title="No Clothing Found",
-                    description="No clothing item was detected in the uploaded image.",
-                    reason_codes=["NO_CLOTHING"],
-                    status_code=400,
-                )
-                return _multipart_form_response(payload)
+                # 2a. Optional parser split fallback (disabled by default for routing stability).
+                raw_detected_count = len(instances)
+                if (
+                    False
+                    and ANALYZE_USE_PARSER_FOR_PREROUTING
+                    and ANALYZE_ENABLE_PARSER_SPLIT
+                    and engine.parser is not None
+                    and len(instances) <= 1
+                ):
+                    try:
+                        parser_candidates = _parser_split_candidates(img)
+                        parser_candidates_count = len(parser_candidates)
+                        if len(parser_candidates) >= 2:
+                            plausible, reason = _parser_split_is_plausible(parser_candidates, img.height)
+                            if plausible:
+                                parser_split_used = True
+                                instances = parser_candidates
+                            else:
+                                parser_split_reject_reason = reason
+                    except Exception as parser_err:
+                        logger.warning(f"Human parser split fallback failed: {parser_err}")
 
-            deduped_items = _dedupe_items(items, iou_threshold=0.60)
-            dedup_removed = len(items) - len(deduped_items)
-            items = deduped_items
+                # 2b. Heuristic split when parser could not split:
+                # - single full-body candidate
+                # - multi-candidate same-type full-body detections (prevents top-only collapse)
+                if ANALYZE_ENABLE_HEURISTIC_SPLIT and not parser_split_used and instances:
+                    try:
+                        trigger_split = False
+                        base_inst = instances[0]
+                        if len(instances) == 1:
+                            trigger_split = True
+                        elif _should_force_fullbody_split(instances, img.height):
+                            largest = _largest_instance(instances)
+                            if largest is not None:
+                                base_inst = largest
+                                trigger_split = True
 
-            # Collapse to single candidate when all remaining detections map to same type.
-            unique_types = sorted({str(it.get("type")) for it in items if it.get("type")})
+                        if trigger_split:
+                            classify = engine.florence.classify_garment_type(base_inst["image"], hint_type=requested_type)
+                            base_type = str(classify.get("type") or "").strip().lower()
+                            base_score = float(classify.get("score", 0.0) or 0.0)
+                            dress_locked = (
+                                base_type == "dress"
+                                and base_score >= ANALYZE_FLORENCE_DRESS_LOCK_MIN_SCORE
+                                and requested_type not in {"top", "bottom"}
+                            )
+                            allow_split = not dress_locked
+                            if allow_split:
+                                heuristics = _heuristic_split_candidates(img, base_inst)
+                                heuristic_candidates_count = max(heuristic_candidates_count, len(heuristics))
+                                if len(heuristics) >= 2:
+                                    heuristic_split_used = True
+                                    instances = heuristics
+                    except Exception as heur_err:
+                        logger.warning(f"Heuristic split fallback failed: {heur_err}")
+
+                # 2b.1 Optional parser tightening. Keep disabled for first-step routing by default.
+                if False and ANALYZE_USE_PARSER_FOR_PREROUTING and len(instances) >= 1 and engine.parser is not None:
+                    try:
+                        instances = _tighten_instances_with_parser_masks(img, instances)
+                    except Exception as tighten_err:
+                        logger.warning(f"Parser-based crop tightening failed: {tighten_err}")
+
+                instances = _suppress_auxiliary_instances(instances, img.width, img.height)
+
+                # 2c. Optional hybrid semantic rerank with Florence-2 (feature-flagged).
+                if USE_FLORENCE_HYBRID_VERIFY and instances:
+                    ranked = sorted(instances, key=lambda x: float(x.get("confidence", 0.0)), reverse=True)
+                    for idx, inst in enumerate(ranked):
+                        yolo_conf = float(inst.get("confidence", 0.0))
+                        bbox = inst.get("bbox") or [0, 0, img.width, img.height]
+                        prior = _bbox_prior(bbox, img.width, img.height)
+
+                        florence_type = _normalize_garment_type(str(inst.get("label", ""))) or "top"
+                        florence_conf = 0.50
+                        florence_reason = "fallback_no_florence"
+                        florence_caption = ""
+
+                        if idx < HYBRID_TOP_K:
+                            try:
+                                source_hint = _normalize_garment_type(str(inst.get("label", "")))
+                                hint = requested_type or source_hint
+                                verdict = engine.florence.classify_garment_type(inst["image"], hint_type=hint)
+                                florence_type = verdict.get("type") or florence_type
+                                florence_conf = float(verdict.get("score", florence_conf))
+                                florence_reason = str(verdict.get("reason", "ok"))
+                                florence_caption = str(verdict.get("caption", ""))
+                                # Keep heuristic split labels stable unless Florence is very confident.
+                                if (
+                                    str(inst.get("source", "")) == "heuristic_split"
+                                    and source_hint
+                                    and florence_type != source_hint
+                                    and florence_conf < 0.90
+                                ):
+                                    florence_type = source_hint
+                                    florence_reason = f"{florence_reason}|locked_to_heuristic_label"
+
+                                # For shorts/skirt-like bottoms, trim lower leg-heavy region from heuristic split.
+                                if (
+                                    str(inst.get("source", "")) == "heuristic_split"
+                                    and source_hint == "bottom"
+                                    and _is_shorts_like_caption(florence_caption)
+                                ):
+                                    bx = inst.get("bbox") or [0, 0, img.width, img.height]
+                                    x0, y0, x1, y1 = [int(v) for v in bx]
+                                    h = max(1, y1 - y0)
+                                    keep_h = max(int(img.height * 0.16), int(h * ANALYZE_HEURISTIC_BOTTOM_TRIM_SHORTS_RATIO))
+                                    new_y1 = min(y1, y0 + keep_h)
+                                    if new_y1 - y0 >= 48:
+                                        inst["bbox"] = [x0, y0, x1, new_y1]
+                                        inst["image"] = img.crop((x0, y0, x1, new_y1))
+                                        bbox = inst["bbox"]
+                                        prior = _bbox_prior(bbox, img.width, img.height)
+                            except Exception as classify_err:
+                                logger.warning(f"Florence hybrid classify failed, falling back to YOLO candidate ordering: {classify_err}")
+
+                        score = _hybrid_score(yolo_conf=yolo_conf, florence_conf=florence_conf, bbox_prior=prior)
+                        if requested_type and florence_type == requested_type:
+                            score = min(1.0, score + 0.06)
+
+                        inst["_hybrid"] = {
+                            "predicted_type": florence_type,
+                            "yolo_confidence": yolo_conf,
+                            "florence_confidence": florence_conf,
+                            "bbox_prior": prior,
+                            "score": score,
+                            "florence_reason": florence_reason,
+                            "florence_caption": florence_caption,
+                        }
+
+                    ranked = sorted(ranked, key=lambda inst: float(inst.get("_hybrid", {}).get("score", 0.0)), reverse=True)
+                    if HYBRID_MIN_SCORE > 0.0:
+                        thresholded = [inst for inst in ranked if float(inst.get("_hybrid", {}).get("score", 0.0)) >= HYBRID_MIN_SCORE]
+                        if thresholded:
+                            ranked = thresholded
+                    instances = ranked[:ANALYZE_MAX_ITEMS]
+
+                # 3. Analyze with Florence-2 (Auto-Captioning)
+                items = []
+                for idx, inst in enumerate(instances):
+                    t_caption = time.time()
+                    if ANALYZE_CAPTION_MODE == "detailed":
+                        prompt_desc = engine.florence.describe_garment(inst["image"])
+                    else:
+                        prompt_desc = engine.florence.describe_garment_short(inst["image"])
+                    analyze_stage_timings["caption_total_s"] += (time.time() - t_caption)
+
+                    hybrid_meta = inst.get("_hybrid", {})
+                    autotype_meta = {}
+                    if USE_FLORENCE_HYBRID_VERIFY:
+                        resolved_type = hybrid_meta.get("predicted_type")
+                        type_source = "florence_hybrid"
+                    else:
+                        resolved_type = _normalize_garment_type(str(inst.get("label")))
+                        type_source = "yolo"
+                        if not resolved_type:
+                            caption_guess = _infer_type_from_caption(prompt_desc)
+                            if caption_guess:
+                                resolved_type = caption_guess
+                                type_source = "caption_autotype"
+                                autotype_meta = {"reason": "caption_guess"}
+                            else:
+                                try:
+                                    verdict = engine.florence.classify_garment_type(inst["image"], hint_type=requested_type)
+                                    guess = _normalize_garment_type(str(verdict.get("type")))
+                                    if guess:
+                                        resolved_type = guess
+                                        type_source = "florence_autotype"
+                                        autotype_meta = {
+                                            "score": float(verdict.get("score", 0.0)),
+                                            "reason": str(verdict.get("reason", "")),
+                                        }
+                                except Exception as auto_type_err:
+                                    logger.warning(f"Per-instance automatic type resolution failed: {auto_type_err}")
+                        if not resolved_type:
+                            resolved_type = "top"
+                    detection_source = str(inst.get("source", "yolo"))
+
+                    bbox = inst["bbox"]
+                    x0, y0, x1, y1 = bbox
+                    crop_w = max(1, int(x1) - int(x0))
+                    crop_h = max(1, int(y1) - int(y0))
+                    crop_area_ratio = min(1.0, float(crop_w * crop_h) / max(1.0, float(img.width * img.height)))
+
+                    # Drop obvious non-garment detections (for example furniture/background objects),
+                    # but keep plausible garment crops even when caption text is weak.
+                    non_garment_caption = _caption_non_garment_signal(prompt_desc)
+                    has_garment_caption = _caption_garment_signal(prompt_desc)
+                    if non_garment_caption and not has_garment_caption:
+                        det_conf = float(inst.get("confidence", 0.0))
+                        label_hint = (
+                            _normalize_garment_type(str(inst.get("label") or ""))
+                            or _normalize_garment_type(str(resolved_type or ""))
+                        )
+                        plausible_garment = (
+                            label_hint in {"top", "bottom", "dress", "outer"}
+                            and crop_area_ratio >= 0.045
+                            and det_conf >= 0.35
+                        )
+                        if not plausible_garment:
+                            logger.info(
+                                "Suppressing non-garment candidate from caption: %s",
+                                (prompt_desc or "")[:140],
+                            )
+                            continue
+
+                    # Category mapping from prompt/auto-type
+                    style_infer = autotype_meta.get("specific_clothing_style") if autotype_meta else None
+                    if not style_infer and prompt_desc:
+                        style_infer = _infer_style_from_text(prompt_desc, garment_type=resolved_type)
+
+                    category_meta = _wardrobe_category_from_garment_type(resolved_type, style=style_infer)
+
+                    items.append({
+                        "garment_id": idx,
+                        "type": resolved_type,
+                        "garment_type": resolved_type,
+                        "type_source": type_source,
+                        "detection_source": detection_source,
+                        "promptDescription": prompt_desc,
+                        "description": prompt_desc,
+                        "style": category_meta["style"],
+                        "category_key": category_meta["category_key"],
+                        "primary_category_key": category_meta["primary_category_key"],
+                        "url": None,
+                        "bbox": bbox,
+                        "crop": {
+                            "width": crop_w,
+                            "height": crop_h,
+                            "area_ratio": crop_area_ratio,
+                        },
+                        "confidence": {
+                            "yolo": float(hybrid_meta.get("yolo_confidence", inst.get("confidence", 0.0))),
+                            "florence_type": float(hybrid_meta.get("florence_confidence", 0.0)),
+                            "bbox_prior": float(hybrid_meta.get("bbox_prior", 0.0)),
+                            "hybrid": float(hybrid_meta.get("score", 0.0)),
+                        } if USE_FLORENCE_HYBRID_VERIFY else {
+                            "yolo": float(inst.get("confidence", 0.0)),
+                        },
+                        "_image_obj": inst["image"],
+                        "_mask_obj": inst.get("mask"),
+                    })
+                    if autotype_meta:
+                        items[-1]["autotype"] = autotype_meta
+                    if detection_source == "human_parser":
+                        items[-1]["parser_area_ratio"] = float(inst.get("parser_area_ratio", 0.0))
+                    if inst.get("tighten_source"):
+                        items[-1]["tighten_source"] = str(inst.get("tighten_source"))
+                    if inst.get("tighten_adjustment"):
+                        items[-1]["tighten_adjustment"] = str(inst.get("tighten_adjustment"))
+
+                if requested_type in {"top", "bottom", "dress", "outer"} and not items:
+                    direct_category_meta = _wardrobe_category_from_garment_type(requested_type, style=None)
+                    items = [{
+                        "garment_id": 0,
+                        "type": requested_type,
+                        "garment_type": requested_type,
+                        "type_source": "requested_type_direct",
+                        "detection_source": "type_forced_full_image",
+                        "promptDescription": "",
+                        "description": "",
+                        "style": direct_category_meta["style"],
+                        "category_key": direct_category_meta["category_key"],
+                        "primary_category_key": direct_category_meta["primary_category_key"],
+                        "url": None,
+                        "bbox": [0, 0, img.width, img.height],
+                        "crop": {
+                            "width": int(img.width),
+                            "height": int(img.height),
+                            "area_ratio": 1.0,
+                        },
+                        "confidence": {
+                            "yolo": 1.0,
+                        },
+                        "_image_obj": img.copy(),
+                        "_mask_obj": None,
+                    }]
+
+                if not items:
+                    payload = _build_error_payload(
+                        title="No Clothing Found",
+                        description="No clothing item was detected in the uploaded image.",
+                        reason_codes=["NO_CLOTHING"],
+                        status_code=400,
+                    )
+                    return _multipart_form_response(payload)
+
+            dedup_removed = 0
             collapsed_same_type = False
-            if len(items) > 1 and len(unique_types) <= 1 and _should_collapse_same_type(items):
-                best = max(items, key=_item_rank_score)
-                items = [best]
-                collapsed_same_type = True
+            forced_dress_fallback = None
+            if not direct_requested_type_mode:
+                deduped_items = _dedupe_items(items, iou_threshold=0.60)
+                dedup_removed = len(items) - len(deduped_items)
+                items = deduped_items
 
-            # Reindex ids after dedupe/collapse to keep selected_index stable for client.
-            for new_idx, item in enumerate(items):
-                item["garment_id"] = new_idx
+                # Collapse to single candidate when all remaining detections map to same type.
+                unique_types = sorted({str(it.get("type")) for it in items if it.get("type")})
+                if len(items) > 1 and len(unique_types) <= 1 and _should_collapse_same_type(items):
+                    best = max(items, key=_item_rank_score)
+                    items = [best]
+                    collapsed_same_type = True
+
+                # Reindex ids after dedupe/collapse to keep selected_index stable for client.
+                for new_idx, item in enumerate(items):
+                    item["garment_id"] = new_idx
+
+            # Primary type identification pass: keep category detection focused on garment crop itself.
+            if (not direct_requested_type_mode) and ANALYZE_PRIMARY_TYPE_WITH_FLORENCE and items:
+                for item in items:
+                    try:
+                        t_type = time.time()
+                        crop_img = item.get("_image_obj")
+                        if crop_img is None:
+                            continue
+                        hint = requested_type or _normalize_garment_type(str(item.get("type") or ""))
+                        verdict = engine.florence.classify_garment_type(crop_img, hint_type=hint)
+                        predicted_type = _normalize_garment_type(str(verdict.get("type") or ""))
+                        predicted_score = float(verdict.get("score", 0.0) or 0.0)
+                        if predicted_type in {"top", "bottom", "dress", "outer"}:
+                            item["type"] = predicted_type
+                            item["garment_type"] = predicted_type
+                            item["type_source"] = "florence_primary"
+                            item["type_model_score"] = round(predicted_score, 4)
+                            inferred_style = _infer_style_from_text(
+                                str(item.get("promptDescription") or item.get("description") or ""),
+                                garment_type=predicted_type,
+                            )
+                            category_meta = _wardrobe_category_from_garment_type(
+                                predicted_type,
+                                style=inferred_style if inferred_style else None,
+                            )
+                            item["style"] = category_meta["style"]
+                            item["category_key"] = category_meta["category_key"]
+                            item["primary_category_key"] = category_meta["primary_category_key"]
+                        analyze_stage_timings["primary_type_total_s"] += (time.time() - t_type)
+                    except Exception as type_err:
+                        logger.warning(f"Primary type identify failed for analyze item {item.get('garment_id')}: {type_err}")
+
+            # Run a second dedupe pass after type normalization. This removes
+            # near-identical candidates that only converge to the same type
+            # after Florence relabeling.
+            if (not direct_requested_type_mode) and len(items) > 1:
+                typed_deduped_items = _dedupe_items(items, iou_threshold=0.75)
+                if typed_deduped_items:
+                    items = typed_deduped_items
+                    for new_idx, item in enumerate(items):
+                        item["garment_id"] = new_idx
+
+            if not direct_requested_type_mode:
+                items, forced_dress_fallback = _maybe_force_uncertain_fullbody_to_dress(
+                    items,
+                    image_width=img.width,
+                    image_height=img.height,
+                    requested_type=requested_type,
+                )
+                if forced_dress_fallback:
+                    for new_idx, item in enumerate(items):
+                        item["garment_id"] = new_idx
 
             auto_selected_index = None
             if selected_index is None and requested_type and len(items) > 1:
@@ -7731,6 +8843,14 @@ async def analyze_garment(
                 # If type is explicitly requested, proceed with the top-ranked matching candidate.
                 if len(matched) >= 1:
                     auto_selected_index = matched[0]
+                else:
+                    # Frontend second-pass sends a cropped image + explicit type. If Florence
+                    # still mislabels the crop, do not ask for selection again; choose the
+                    # best geometry-matching candidate and force the requested type later.
+                    auto_selected_index = max(
+                        range(len(items)),
+                        key=lambda idx: _requested_type_geometry_score(items[idx], requested_type, img.height),
+                    )
             elif (
                 selected_index is None
                 and not requested_type
@@ -7764,15 +8884,70 @@ async def analyze_garment(
                     pub["garment_type"] = mapped_type
                     item_breakdown.append(pub)
 
-                    img = item.get("_image_obj")
-                    if img is not None:
+                    preview = None
+                    try:
+                        preview_variants = _build_adaptive_rect_crop_variants(
+                            full_image=img,
+                            selected_candidate=item,
+                            garment_type=str(mapped_type or ""),
+                            all_candidates=items,
+                        )
+                        if preview_variants:
+                            chosen_preview = preview_variants[0]
+                            preview = chosen_preview.get("image")
+                            if isinstance(preview, Image.Image):
+                                preview = preview.convert("RGB")
+                            pub["preview_crop_bbox"] = [
+                                int(v) for v in (chosen_preview.get("bbox") or item.get("bbox") or [0, 0, img.width, img.height])
+                            ]
+                            pub["preview_geometry_source"] = str(chosen_preview.get("name") or "adaptive_rect")
+                        if preview is None:
+                            preview_plan = _prepare_extract_source_image(
+                                full_image=img,
+                                bbox=item.get("bbox"),
+                                garment_type=str(mapped_type or ""),
+                                total_items=len(items),
+                                detector_mask=item.get("_mask_obj"),
+                            )
+                            preview = preview_plan.image.convert("RGB")
+                            pub["preview_crop_bbox"] = [int(v) for v in preview_plan.extract_bbox]
+                            pub["preview_geometry_source"] = str(preview_plan.geometry_source)
+                    except Exception as preview_err:
+                        logger.warning(
+                            "Analyze selection preview refinement failed for item %s: %s",
+                            pub.get("selection_index"),
+                            preview_err,
+                        )
+                        item_img = item.get("_image_obj")
+                        if item_img is not None:
+                            preview = item_img.convert("RGB")
+
+                    if preview is not None:
+                        if max(preview.size) > ANALYZE_SELECTION_PREVIEW_MAX_SIDE:
+                            resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+                            preview.thumbnail(
+                                (ANALYZE_SELECTION_PREVIEW_MAX_SIDE, ANALYZE_SELECTION_PREVIEW_MAX_SIDE),
+                                resampling,
+                            )
                         buf = io.BytesIO()
-                        img.save(buf, format="PNG")
+                        if ANALYZE_SELECTION_PREVIEW_FORMAT == "png":
+                            preview.save(buf, format="PNG", optimize=True)
+                            file_ext = "png"
+                            content_type = "image/png"
+                        else:
+                            preview.save(
+                                buf,
+                                format="JPEG",
+                                quality=ANALYZE_SELECTION_PREVIEW_JPEG_QUALITY,
+                                optimize=True,
+                            )
+                            file_ext = "jpg"
+                            content_type = "image/jpeg"
                         part_name = f"item_{int(pub['rank'])}"
                         binary_parts.append({
                             "name": part_name,
-                            "filename": f"{part_name}.png",
-                            "content_type": "image/png",
+                            "filename": f"{part_name}.{file_ext}",
+                            "content_type": content_type,
                             "bytes": buf.getvalue(),
                         })
 
@@ -7794,7 +8969,7 @@ async def analyze_garment(
                     },
                     "item_breakdown": item_breakdown,
                     "multipart_data": _build_multipart_parts(items=item_breakdown),
-                    "latencies": {"total": total_s},
+                    "latencies": {"total": total_s, "gpu_queue_wait": gpu_queue_wait_s},
                     "processing_time_ms": int(total_s * 1000),
                 }
                 payload = _build_success_payload(data=data, status_code=400, message="")
@@ -7849,28 +9024,32 @@ async def analyze_garment(
                 if forced_type and str(selected_item.get("type")) != forced_type:
                     selected_item["type_original"] = selected_item.get("type")
                     selected_item["type"] = forced_type
+                    selected_item["garment_type"] = forced_type
                     selected_item["type_source"] = "requested_type"
 
-                if not ANALYZE_VTON_FALLBACK_ENABLED or not ANALYZE_VTON_CLOTH_ONLY_ENDPOINT:
-                    payload = _build_error_payload(
-                        title="Extraction Not Configured",
-                        description="Garment extraction is not available. Please try again later.",
-                        reason_codes=["EXTRACTION_FAILED"],
-                        status_code=502,
-                        result="REJECTED",
-                    )
-                    return _multipart_form_response(payload)
-
                 try:
-                    vton_source_image, vton_bbox, vton_crop_mode = _prepare_vton_source_image(
-                        full_image=img,
-                        bbox=selected_item.get("bbox"),
-                        garment_type=selected_type,
-                        total_items=len(items),
-                    )
-                    selected_item["vton_crop_bbox"] = vton_bbox
-                    selected_item["vton_crop_mode"] = vton_crop_mode
-                    selected_crop_url = _write_temp_png(vton_source_image)
+                    if direct_requested_type_mode:
+                        selected_item["bbox_geometry_source"] = "requested_type_direct_full_image"
+                        selected_item["extract_crop_bbox"] = [0, 0, img.width, img.height]
+                        selected_item["extract_crop_mode"] = "full_image_direct"
+                        extract_source_image = img.copy()
+                    else:
+                        extract_plan = _prepare_extract_source_image(
+                            full_image=img,
+                            bbox=selected_item.get("bbox"),
+                            garment_type=selected_type,
+                            total_items=len(items),
+                            detector_mask=selected_item.get("_mask_obj"),
+                        )
+                        if selected_item.get("bbox") != extract_plan.anchor_bbox:
+                            selected_item["detector_bbox"] = list(selected_item.get("bbox") or [])
+                            selected_item["bbox"] = list(extract_plan.anchor_bbox)
+                        selected_item["bbox_geometry_source"] = str(extract_plan.geometry_source)
+                        if extract_plan.mask_bbox:
+                            selected_item["mask_bbox"] = list(extract_plan.mask_bbox)
+                        selected_item["extract_crop_bbox"] = list(extract_plan.extract_bbox)
+                        selected_item["extract_crop_mode"] = str(extract_plan.crop_mode)
+                        extract_source_image = extract_plan.image
                 except Exception as crop_save_err:
                     payload = _build_error_payload(
                         title="Invalid Image",
@@ -7880,93 +9059,42 @@ async def analyze_garment(
                     )
                     return _multipart_form_response(payload)
 
-                if ANALYZE_PROMPT_FROM_EXTRACTED:
-                    selected_item["promptDescription"] = ""
-                    selected_item["description"] = ""
+                selected_prompt_hint = " ".join(str(selected_item.get("promptDescription") or "").split()).strip()
+                if (
+                    not selected_prompt_hint
+                    or _descriptor_is_weak(selected_prompt_hint)
+                    or _caption_non_garment_signal(selected_prompt_hint)
+                ):
+                    selected_prompt_hint = ""
 
                 extracted_url = ""
                 extraction_meta = {}
                 extracted_image_bytes = b""
+                fallback: Dict[str, object] = {}
+                t_extract = time.time()
                 try:
-                    # Deep Analysis fix: If single item detected, use vto_mode=True to
-                    # preserve person and prevent truncation during extraction.
-                    is_single_item = len(items) <= 1
-                    fallback = None
-                    last_fallback_err = None
-                    requested_type_forced = bool(forced_type)
-                    candidate_types: list[str] = [selected_type]
-                    if not requested_type_forced:
-                        # Auto mode guard: recover from parser-empty masks by trying
-                        # nearby garment families before returning 502.
-                        if selected_type == "dress":
-                            candidate_types.extend(["top", "bottom"])
-                        else:
-                            candidate_types.append("dress")
-                    # Keep order stable while removing duplicates.
-                    candidate_types = list(dict.fromkeys(candidate_types))
-
-                    active_type = selected_type
-                    for candidate_idx, candidate_type in enumerate(candidate_types):
-                        active_type = candidate_type
-                        max_attempts = 2 if candidate_idx == 0 else 1
-                        for attempt in range(max_attempts):
-                            try:
-                                fallback = _run_vton_cloth_only_fallback(
-                                    selected_crop_url,
-                                    candidate_type,
-                                    vto_mode=is_single_item
-                                )
-                                if candidate_type != selected_type:
-                                    logger.info(
-                                        "Auto extraction type fallback applied: %s -> %s",
-                                        selected_type,
-                                        candidate_type,
-                                    )
-                                break
-                            except Exception as run_err:
-                                last_fallback_err = run_err
-                                logger.warning(
-                                    "VTON extract attempt %d failed (type=%s, bbox=%s): %s",
-                                    attempt + 1,
-                                    candidate_type,
-                                    selected_item.get("bbox"),
-                                    run_err,
-                                )
-                                if attempt < (max_attempts - 1):
-                                    time.sleep(0.35)
-                                    continue
-                                # Only auto-fallback on parser-empty errors.
-                                if (
-                                    not requested_type_forced
-                                    and candidate_idx < (len(candidate_types) - 1)
-                                    and "Parser-only extraction produced empty result" in str(run_err)
-                                ):
-                                    break
-                        if fallback is not None:
-                            break
-
-                    if fallback is None and last_fallback_err is not None:
-                        raise last_fallback_err
-                    extracted_url = str(fallback.get("url") or "")
-                    extraction_meta = dict(fallback.get("meta") or {})
-                    if (
-                        fallback is not None
-                        and active_type != selected_type
-                        and not requested_type_forced
-                    ):
-                        extraction_meta["auto_type_fallback_from"] = selected_type
-                        extraction_meta["auto_type_fallback_to"] = active_type
-                        selected_type = active_type
-                        selected_item["type_original"] = selected_item.get("type")
-                        selected_item["type"] = active_type
-                        selected_item["type_source"] = "auto_extract_fallback"
-                    extracted_image_bytes = bytes(fallback.get("_processed_image_bytes") or b"")
-                except Exception as fallback_err:
+                    flux_fallback = _run_flux2_cloth_only_extract(
+                        source_image=extract_source_image,
+                        garment_type=selected_type,
+                        prompt_description="",
+                        fallback_prompt_description=selected_prompt_hint,
+                        description_backend=FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND,
+                        use_parser_post_extract=False,
+                        steps=FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS,
+                        seed=FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_SEED,
+                        color_reference_image=selected_item.get("_image_obj"),
+                        color_reference_mask=selected_item.get("_mask_obj"),
+                    )
+                    fallback = flux_fallback
+                    extracted_url = str(flux_fallback.get("url") or "")
+                    extraction_meta = dict(flux_fallback.get("meta") or {})
+                    extracted_image_bytes = bytes(flux_fallback.get("_processed_image_bytes") or b"")
+                except Exception as extract_err:
                     logger.error(
-                        "Extraction fallback failed after retries (type=%s, bbox=%s): %s",
+                        "Flux2 extraction failed (type=%s, bbox=%s): %s",
                         selected_type,
                         selected_item.get("bbox"),
-                        fallback_err,
+                        extract_err,
                     )
                     payload = _build_error_payload(
                         title="Extraction Failed",
@@ -7975,6 +9103,7 @@ async def analyze_garment(
                         status_code=502,
                     )
                     return _multipart_form_response(payload)
+                analyze_stage_timings["extract_total_s"] = round(time.time() - t_extract, 4)
 
                 if not extracted_url:
                     payload = _build_error_payload(
@@ -7984,29 +9113,53 @@ async def analyze_garment(
                         status_code=400,
                     )
                     return _multipart_form_response(payload)
-
                 selected_item["url"] = extracted_url
                 selected_item["output_image_url"] = extracted_url
-                selected_item["output_image_source"] = str(extraction_meta.get("path", "vton_fallback"))
+                selected_item["output_image_source"] = str(extraction_meta.get("path", "flux2_extract"))
                 selected_item["raw_image_url"] = str(fallback.get("raw_url") or extracted_url)
-                selected_item["raw_image_source"] = "vton_raw"
+                selected_item["raw_image_source"] = str(extraction_meta.get("pipeline") or "extract")
                 selected_item["extraction"] = extraction_meta
                 selected_item["_extracted_image_bytes"] = extracted_image_bytes
-                selected_item["cloth_verified"] = selected_item["output_image_source"] == "vton_fallback"
-                selected_item["cloth_verification_source"] = "vton_extraction"
+                selected_item["cloth_verified"] = bool(extracted_url)
+                selected_item["cloth_verification_source"] = "flux2_extraction"
+                extracted_prompt_desc = " ".join(
+                    str(extraction_meta.get("prompt_description") or "").split()
+                ).strip()
+                if extracted_prompt_desc:
+                    # Keep the descriptor that was actually used to generate extracted cloth.
+                    selected_item["promptDescriptionRaw"] = extracted_prompt_desc
 
                 if ANALYZE_PROMPT_FROM_EXTRACTED:
-                    try:
-                        if extracted_image_bytes:
-                            cloth_image = Image.open(io.BytesIO(extracted_image_bytes)).convert("RGBA")
-                        else:
-                            cloth_image = download_image(extracted_url)
-                        caption_image = _flatten_rgba_on_white(cloth_image)
-                        if ANALYZE_CAPTION_MODE == "detailed":
-                            prompt_desc = engine.florence.describe_garment(caption_image)
-                        else:
-                            prompt_desc = engine.florence.describe_garment_short(caption_image)
-                        prompt_desc = _sanitize_garment_description(prompt_desc)
+                    prompt_desc = ""
+                    if extracted_prompt_desc:
+                        prompt_desc = extracted_prompt_desc
+                        selected_item["promptDescriptionSource"] = "flux2_extract_descriptor"
+                    else:
+                        try:
+                            if extracted_image_bytes:
+                                cloth_image = Image.open(io.BytesIO(extracted_image_bytes)).convert("RGBA")
+                            else:
+                                cloth_image = download_image(extracted_url)
+                            caption_image = _flatten_rgba_on_white(cloth_image)
+                            if ANALYZE_CAPTION_MODE == "detailed":
+                                prompt_desc = engine.florence.describe_garment(caption_image)
+                            else:
+                                prompt_desc = engine.florence.describe_garment_short(caption_image)
+                            prompt_desc = _sanitize_garment_description(prompt_desc)
+                            selected_item["promptDescriptionSource"] = "florence_extracted_caption"
+                        except Exception as caption_err:
+                            if ANALYZE_REQUIRE_EXTRACTED_PROMPT:
+                                payload = _build_error_payload(
+                                    title="Extraction Failed",
+                                    description="Could not generate garment description. Please retry.",
+                                    reason_codes=["EXTRACTION_FAILED"],
+                                    status_code=400,
+                                )
+                                return _multipart_form_response(payload)
+                            logger.warning(f"Prompt generation from extracted cloth failed: {caption_err}")
+                            prompt_desc = ""
+
+                    if prompt_desc:
                         selected_item["promptDescription"] = prompt_desc
                         selected_item["description"] = prompt_desc
                         extracted_style = _infer_style_from_text(prompt_desc, garment_type=selected_type)
@@ -8014,16 +9167,6 @@ async def analyze_garment(
                         selected_item["style"] = extracted_category["style"]
                         selected_item["category_key"] = extracted_category["category_key"]
                         selected_item["primary_category_key"] = extracted_category["primary_category_key"]
-                    except Exception as caption_err:
-                        if ANALYZE_REQUIRE_EXTRACTED_PROMPT:
-                            payload = _build_error_payload(
-                                title="Extraction Failed",
-                                description="Could not generate garment description. Please retry.",
-                                reason_codes=["EXTRACTION_FAILED"],
-                                status_code=400,
-                            )
-                            return _multipart_form_response(payload)
-                        logger.warning(f"Prompt generation from extracted cloth failed: {caption_err}")
 
                 if forced_type:
                     selected_item["extract_type_forced"] = forced_type
@@ -8031,12 +9174,25 @@ async def analyze_garment(
             progress_id = None
             progress_sync = None
             if selected_item:
-                prompt_for_product = _product_prompt_description(
-                    str(selected_item.get("promptDescription") or selected_item.get("description") or ""),
-                    garment_type=str(selected_item.get("type") or ""),
-                    style=str(selected_item.get("style") or ""),
-                    category_key=str(selected_item.get("category_key") or ""),
-                )
+                prompt_text_raw = str(selected_item.get("promptDescription") or selected_item.get("description") or "")
+                prompt_source = str(selected_item.get("promptDescriptionSource") or "").strip().lower()
+                if prompt_source == "flux2_extract_descriptor":
+                    # Preserve extracted descriptor verbatim for downstream try-on reuse.
+                    prompt_for_product = " ".join(prompt_text_raw.split()).strip()
+                    if not prompt_for_product:
+                        prompt_for_product = _product_prompt_description(
+                            prompt_text_raw,
+                            garment_type=str(selected_item.get("type") or ""),
+                            style=str(selected_item.get("style") or ""),
+                            category_key=str(selected_item.get("category_key") or ""),
+                        )
+                else:
+                    prompt_for_product = _product_prompt_description(
+                        prompt_text_raw,
+                        garment_type=str(selected_item.get("type") or ""),
+                        style=str(selected_item.get("style") or ""),
+                        category_key=str(selected_item.get("category_key") or ""),
+                    )
                 selected_item["promptDescription"] = prompt_for_product
                 selected_item["description"] = prompt_for_product
 
@@ -8047,7 +9203,7 @@ async def analyze_garment(
                 prompt_description = str(selected_item.get("promptDescription") or "")
                 output_source = str(selected_item.get("output_image_source") or "")
                 extraction_obj = selected_item.get("extraction") if isinstance(selected_item.get("extraction"), dict) else {}
-                has_vton_pipeline = bool(extraction_obj.get("endpoint"))
+                has_extraction_output = bool(output_url)
                 sync_style_guess = str(selected_item.get("style") or "")
                 if not sync_style_guess:
                     sync_style_guess = str(
@@ -8076,24 +9232,42 @@ async def analyze_garment(
                     "bbox": selected_item.get("bbox"),
                     "crop": selected_item.get("crop"),
                 }
-                if has_vton_pipeline and output_url:
-                    progress_sync = _sync_wardrobe_progress(
+                if has_extraction_output:
+                    t_sync = time.time()
+                    progress_sync = _sync_wardrobe_progress_dispatch(
                         authorization=_authorization,
                         progress_id=progress_id,
                         output_url=output_url,
                         prompt_description=prompt_description,
                         metadata=progress_meta,
                     )
+                    analyze_stage_timings["progress_sync_s"] = round(time.time() - t_sync, 4)
                 else:
                     progress_sync = {
                         "enabled": True,
                         "synced": False,
-                        "reason": "skipped_non_vton_output",
+                        "reason": "skipped_missing_output",
                         "id": progress_id,
                     }
                 progress_id = str(progress_sync.get("id") or progress_id)
                 selected_item["wardrobe_progress_id"] = progress_id
                 selected_item["progress_sync"] = progress_sync
+        except asyncio.TimeoutError:
+            wait_s = round(time.time() - t_gpu_wait, 4)
+            payload = _build_error_payload(
+                title="Server Busy",
+                description="The server is processing other requests. Please retry in a few seconds.",
+                reason_codes=["GPU_QUEUE_TIMEOUT"],
+                status_code=503,
+                result="REJECTED",
+            )
+            payload_data = payload.setdefault("data", {})
+            payload_data["latencies"] = {"gpu_queue_wait": wait_s}
+            payload_data["processing_time_ms"] = int(wait_s * 1000)
+            return _multipart_form_response(payload)
+        finally:
+            if gpu_slot_acquired:
+                gpu_semaphore.release()
 
         # ── SUCCESS RESPONSE (200 with multipart: metadata + extracted_cloth) ──
         public_item = _to_public_item(selected_item) if selected_item else None
@@ -8107,11 +9281,21 @@ async def analyze_garment(
         reason_codes = ["SINGLE_ITEM"]
         extraction_path = str(public_item.get("output_image_source", "")) if public_item else ""
         extraction_meta_public = (public_item or {}).get("extraction") or {}
-        if extraction_meta_public.get("endpoint"):
+        analyze_stage_timings["caption_total_s"] = round(float(analyze_stage_timings["caption_total_s"]), 4)
+        analyze_stage_timings["primary_type_total_s"] = round(float(analyze_stage_timings["primary_type_total_s"]), 4)
+        if isinstance(extraction_meta_public, dict):
+            extraction_timings = extraction_meta_public.get("timings")
+            if isinstance(extraction_timings, dict):
+                analyze_stage_timings["extraction_pipeline"] = extraction_timings
+        if str(extraction_meta_public.get("pipeline") or "") == "flux2_extract":
+            reason_codes.append("FLUX2_EXTRACT_PIPELINE")
+        elif extraction_meta_public.get("endpoint"):
             reason_codes.append("VTON_ONLY_PIPELINE")
             reason_codes.append("VTON_USED")
+        if public_item and public_item.get("type_source") == "uncertain_fullbody_dress_fallback":
+            reason_codes.append("UNCERTAIN_FULLBODY_DRESS_FALLBACK")
         if requested_type:
-            reason_codes.append("TYPE_FORCED_VTON")
+            reason_codes.append("TYPE_FORCED_EXTRACT")
 
         output_image_url = public_item.get("output_image_url", public_item.get("url")) if public_item else None
         multipart_data = _build_multipart_parts(items=[], cloth_url=output_image_url)
@@ -8134,7 +9318,11 @@ async def analyze_garment(
             "wardrobe_progress_id": public_item.get("wardrobe_progress_id") if public_item else None,
             "multipart_data": multipart_data,
             "total_garments_found": len(items),
-            "latencies": {"total": total_s},
+            "latencies": {
+                "total": total_s,
+                "gpu_queue_wait": gpu_queue_wait_s,
+                "stages": analyze_stage_timings,
+            },
             "processing_time_ms": int(total_s * 1000),
         }
 
@@ -8192,10 +9380,13 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
     t0 = time.time()
     request_id = str(uuid.uuid4())
     descriptor_backend = _normalize_descriptor_backend(request.description_backend)
+    descriptor_service_url = str(ANALYZE_MINICPM_SERVICE_URL or MINICPM_SERVICE_URL or "").strip().rstrip("/")
     request_disable_neutral_calibration = bool(request.disable_neutral_calibration)
     stage_timings = {
+        "gpu_queue_wait_s": 0.0,
         "download_user_image_s": 0.0,
         "download_products_s": 0.0,
+        "descriptor_wall_s": 0.0,
         "product_prompt_generation_total_s": 0.0,
         "product_prompt_generation_per_item_s": [],
         "user_prompt_generation_s": 0.0,
@@ -8213,6 +9404,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
         "seed": int(request.seed),
         "descriptionBackendRequested": str(request.description_backend or ""),
         "descriptionBackendResolved": descriptor_backend,
+        "descriptionServiceUrl": descriptor_service_url if descriptor_backend == "minicpm_service" else "",
         "descriptionCompareRequested": bool(request.description_compare),
         "hasCustomNegativePrompt": bool(str(request.negative_prompt or "").strip()),
         "disableNeutralCalibrationRequested": request_disable_neutral_calibration,
@@ -8278,6 +9470,25 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
         t_stage = time.time()
         product_imgs = [download_image(url) for url in product_urls]
         stage_timings["download_products_s"] = round(time.time() - t_stage, 4)
+        product_descriptor_color_hexes: List[List[str]] = []
+        product_descriptor_color_hints: List[List[str]] = []
+        for product_img in product_imgs:
+            product_color_ctx = _build_single_image_color_context(
+                image=product_img,
+                description="",
+                mask=None,
+                top_k=7,
+            )
+            product_descriptor_color_hexes.append(
+                [str(v) for v in (product_color_ctx.get("paletteHexes") or []) if str(v).strip()]
+            )
+            product_descriptor_color_hints.append(
+                [
+                    str(v)
+                    for v in (product_color_ctx.get("colorHints") or product_color_ctx.get("hints") or [])
+                    if str(v).strip()
+                ]
+            )
         descriptor_compare_enabled = bool(request.description_compare or FLUX2_DESCRIPTOR_COMPARE)
         compare_candidates = ["florence", "joycaption", "minicpm", "minicpm_service"]
         if FLUX2_ALLOW_QWEN_BACKEND:
@@ -8286,13 +9497,17 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
         compare_backends: tuple[str, ...] = tuple(dict.fromkeys(compare_candidates))
         descriptor_comparisons = {"products": [], "user_image": {}} if descriptor_compare_enabled else None
 
+        t_gpu_wait = time.time()
         async with gpu_semaphore:
+            stage_timings["gpu_queue_wait_s"] = round(time.time() - t_gpu_wait, 4)
             # 2. Resolve product prompt descriptions (request-provided or selected model backend)
             product_descriptions: List[str] = []
             product_target_types: List[str] = []
             product_target_type_sources: List[str] = []
             generated_product_prompt_indices: List[int] = []
-            for idx, (product, product_img) in enumerate(zip(request.products, product_imgs)):
+            provided_product_prompts: List[str] = []
+            requested_target_types: List[Optional[str]] = []
+            for idx, product in enumerate(request.products):
                 provided_prompt = str(product.promptDescription or "").strip()
                 requested_type_raw = str(product.targetType or "").strip()
                 requested_target_type = _normalize_garment_type(requested_type_raw) if requested_type_raw else None
@@ -8301,19 +9516,69 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                         status_code=422,
                         detail=f"products[{idx}].targetType must be one of top, bottom, dress, outer",
                     )
+                provided_product_prompts.append(provided_prompt)
+                requested_target_types.append(requested_target_type)
+                if not provided_prompt:
+                    generated_product_prompt_indices.append(idx)
+
+            user_prompt_raw = str(request.user_image.promptDescription or "").strip()
+            user_prompt_generated = False
+            generated_product_desc_results: Dict[int, Tuple[str, float]] = {}
+            generated_user_desc_result: Optional[Tuple[str, float]] = None
+
+            def _timed_call(fn, *args, **kwargs):
+                t_call = time.time()
+                out = fn(*args, **kwargs)
+                return out, (time.time() - t_call)
+
+            if generated_product_prompt_indices or (not user_prompt_raw):
+                t_desc_wall = time.time()
+                max_workers = max(1, len(generated_product_prompt_indices) + (0 if user_prompt_raw else 1))
+                with ThreadPoolExecutor(max_workers=max_workers) as desc_pool:
+                    future_map = {}
+                    for idx in generated_product_prompt_indices:
+                        future = desc_pool.submit(
+                            _timed_call,
+                            _describe_garment_with_backend,
+                            product_imgs[idx],
+                            descriptor_backend,
+                            image_url=product_urls[idx],
+                            service_url=descriptor_service_url if descriptor_backend == "minicpm_service" else None,
+                            garment_type=str(requested_target_types[idx] or ""),
+                            dominant_color_hexes=product_descriptor_color_hexes[idx],
+                            color_hints=product_descriptor_color_hints[idx],
+                        )
+                        future_map[future] = ("product", idx)
+                    if not user_prompt_raw:
+                        future = desc_pool.submit(
+                            _timed_call,
+                            _describe_user_image_for_flux2,
+                            user_img,
+                            backend=descriptor_backend,
+                            image_url=user_image_url,
+                            service_url=descriptor_service_url if descriptor_backend == "minicpm_service" else None,
+                        )
+                        future_map[future] = ("user", -1)
+
+                    for future in as_completed(future_map):
+                        kind, idx = future_map[future]
+                        text, elapsed = future.result()
+                        if kind == "product":
+                            generated_product_desc_results[int(idx)] = (str(text or ""), float(elapsed))
+                        else:
+                            generated_user_desc_result = (str(text or ""), float(elapsed))
+                stage_timings["descriptor_wall_s"] = round(time.time() - t_desc_wall, 4)
+
+            for idx, (product, product_img) in enumerate(zip(request.products, product_imgs)):
+                provided_prompt = provided_product_prompts[idx]
+                requested_target_type = requested_target_types[idx]
                 resolved_target_type = requested_target_type or "top"
                 item_prompt_gen_s = 0.0
                 if provided_prompt:
                     cleaned_desc = _sanitize_florence_garment_description(provided_prompt)
                 else:
-                    generated_product_prompt_indices.append(idx)
-                    t_desc = time.time()
-                    generated_desc = _describe_garment_with_backend(
-                        product_img,
-                        descriptor_backend,
-                        image_url=product_urls[idx],
-                    )
-                    item_prompt_gen_s += time.time() - t_desc
+                    generated_desc, elapsed = generated_product_desc_results[idx]
+                    item_prompt_gen_s += float(elapsed)
                     cleaned_desc = _sanitize_florence_garment_description(generated_desc)
                 if requested_target_type is None:
                     resolved_target_type = _infer_flux2_target_type(cleaned_desc)
@@ -8348,6 +9613,10 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                                     product_img,
                                     backend_name,
                                     image_url=product_urls[idx],
+                                    service_url=descriptor_service_url if backend_name == "minicpm_service" else None,
+                                    garment_type=str(requested_target_type or ""),
+                                    dominant_color_hexes=product_descriptor_color_hexes[idx],
+                                    color_hints=product_descriptor_color_hints[idx],
                                 )
                                 compare_item[backend_name] = _sanitize_florence_garment_description(alt_desc)
                         except Exception as cmp_err:
@@ -8359,16 +9628,11 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                     })
 
             # 3. Resolve user prompt description for stronger preservation constraints
-            user_prompt_raw = str(request.user_image.promptDescription or "").strip()
-            user_prompt_generated = False
             if not user_prompt_raw:
-                t_desc = time.time()
-                user_prompt_raw = _describe_user_image_for_flux2(
-                    user_img,
-                    backend=descriptor_backend,
-                    image_url=user_image_url,
-                )
-                stage_timings["user_prompt_generation_s"] = round(time.time() - t_desc, 4)
+                if generated_user_desc_result is None:
+                    raise RuntimeError("user prompt generation failed: descriptor result missing")
+                user_prompt_raw, user_desc_elapsed = generated_user_desc_result
+                stage_timings["user_prompt_generation_s"] = round(float(user_desc_elapsed), 4)
                 user_prompt_generated = True
             if descriptor_compare_enabled and user_prompt_generated:
                 compare_user = {}
@@ -8381,6 +9645,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                                 user_img,
                                 backend=backend_name,
                                 image_url=user_image_url,
+                                service_url=descriptor_service_url if backend_name == "minicpm_service" else None,
                             )
                     except Exception as cmp_err:
                         compare_user[backend_name] = f"[error] {cmp_err}"
@@ -8492,6 +9757,10 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                         output_image=candidate_result["image"],
                         target_types=product_target_types,
                     )
+                    identity_score = _score_identity_face_preservation(
+                        reference_image=user_img,
+                        output_image=candidate_result["image"],
+                    )
                     color_fidelity = _score_color_fidelity(
                         output_image=candidate_result["image"],
                         input_palettes=visual_locks.get("color_palettes", []),
@@ -8501,6 +9770,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                 else:
                     fidelity_score, output_desc = 0.0, ""
                     preservation_score = 0.0
+                    identity_score = 0.0
                     color_fidelity = {"status": "skipped_runtime_scoring"}
                 stage_timings["candidate_scoring_sum_s"] += (time.time() - score_t0)
                 
@@ -8539,6 +9809,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                     "latency": float(candidate_result["latency"]),
                     "fidelity_score": float(fidelity_score),
                     "preservation_score": float(preservation_score),
+                    "identity_score": float(identity_score),
                     "color_fidelity_score": float(color_score),
                     "color_drift": raw_drift,
                     "color_details": color_fidelity,
@@ -8560,6 +9831,8 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
             dress_strict_prompt = (
                 prompt
                 + " Source product image may include mannequin/body; transfer only the garment piece, never mannequin skin/body parts."
+                + " Keep exact same face identity and skin-tone continuity across face, neck, arms, and hands from image 1."
+                + " Never alter facial proportions, expression, or hairstyle."
                 + " Match exact neckline, bodice shape, and ruffle distribution from the source garment."
                 + " Lock lower section fidelity: preserve exact hemline shape, flare profile, skirt volume, "
                 + "and bottom-edge asymmetry/high-low geometry from image 2."
@@ -8573,6 +9846,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
             qwen_strict_prompt = (
                 prompt
                 + " Enforce strict garment fidelity from image 2 only."
+                + " Keep exact same face identity and skin-tone continuity across visible skin regions."
                 + " Keep exact print placement, texture, seams, neckline, sleeve shape, and hemline."
                 + " Avoid any mixed-layer artifacts from original clothes in image 1."
             )
@@ -8610,19 +9884,20 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                 run = candidate_runs[idx]
                 fid = float(run.get("fidelity_score", 0.0))
                 preserve = float(run.get("preservation_score", 0.0))
+                identity = float(run.get("identity_score", 0.0))
                 cfid = float(run.get("color_fidelity_score", 0.0))
                 neutral_tone_lock = bool(visual_locks.get("neutral_tone_lock"))
                 
                 # Composite Score: Fidelity (Structure) + Preserve (Background) + Color
                 if is_single_top_or_bottom:
                     if neutral_tone_lock:
-                        base_score = (0.25 * fid) + (0.25 * preserve) + (0.50 * cfid)
+                        base_score = (0.22 * fid) + (0.22 * preserve) + (0.38 * cfid) + (0.18 * identity)
                     else:
-                        base_score = (0.40 * fid) + (0.40 * preserve) + (0.20 * cfid)
+                        base_score = (0.33 * fid) + (0.33 * preserve) + (0.14 * cfid) + (0.20 * identity)
                 elif neutral_tone_lock:
-                    base_score = (0.50 * fid) + (0.50 * cfid)
+                    base_score = (0.40 * fid) + (0.35 * cfid) + (0.25 * identity)
                 else:
-                    base_score = (0.60 * fid) + (0.40 * cfid)
+                    base_score = (0.50 * fid) + (0.25 * cfid) + (0.25 * identity)
 
                 if not FLUX2_COLOR_FIRST_GATE_ENABLED:
                     return base_score
@@ -8649,9 +9924,12 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
             selected_candidate_index = 0
             mode = FLUX2_SINGLE_CANDIDATE_MODE
             runtime_scoring_enabled = bool(FLUX2_RUNTIME_SCORING_ENABLED)
-            if mode != "base":
-                # Auto/strict multi-candidate flows rely on these scores to rank candidates.
+            if mode == "auto":
+                # Auto multi-candidate flows rely on these scores to rank candidates.
                 runtime_scoring_enabled = True
+            elif not FLUX2_FORCE_RUNTIME_SCORING_FOR_SINGLE_CANDIDATE:
+                # For explicit single-candidate modes, scoring does not affect output selection.
+                runtime_scoring_enabled = False
             if request_disable_neutral_calibration:
                 neutral_color_calibration: Dict[str, object] = {"applied": False, "reason": "disabled_by_request"}
             elif not FLUX2_NEUTRAL_POST_COLOR_CALIBRATION_ENABLED:
@@ -8674,6 +9952,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                     candidate_steps=dress_strict_steps,
                     candidate_seed=dress_strict_seed,
                     label="dress_strict",
+                    compute_runtime_scores=runtime_scoring_enabled,
                 )
                 selected_prompt = dress_strict_prompt
             elif (
@@ -8686,6 +9965,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                     candidate_steps=qwen_strict_steps,
                     candidate_seed=qwen_strict_seed,
                     label="qwen_strict",
+                    compute_runtime_scores=runtime_scoring_enabled,
                 )
                 selected_prompt = qwen_strict_prompt
             else:
@@ -8929,6 +10209,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
         logger.info(
             "flux2_tryon_timing "
             f"total={stage_timings['api_total_s']}s "
+            f"desc_wall={stage_timings['descriptor_wall_s']}s "
             f"desc_products={stage_timings['product_prompt_generation_total_s']}s "
             f"desc_user={stage_timings['user_prompt_generation_s']}s "
             f"flux_sum={stage_timings['flux_generation_sum_s']}s "
@@ -9111,6 +10392,14 @@ def health_check():
         "gpu_concurrency": GPU_CONCURRENCY,
         "gpu_available": torch.cuda.is_available(),
         "vram_allocated": torch.cuda.memory_allocated() if torch.cuda.is_available() else 0,
+        "startup_preload": {
+            "mode": _STARTUP_PRELOAD_STATE["mode"],
+            "started": bool(_STARTUP_PRELOAD_STATE["started"]),
+            "running": bool(_STARTUP_PRELOAD_STATE["running"]),
+            "completed": bool(_STARTUP_PRELOAD_STATE["completed"]),
+            "duration_s": _STARTUP_PRELOAD_STATE["duration_s"],
+            "errors": list(_STARTUP_PRELOAD_STATE["errors"]),
+        },
             "feature_flags": {
                 "use_florence_hybrid_verify": USE_FLORENCE_HYBRID_VERIFY,
                 "use_florence_detailed_prompt": USE_FLORENCE_DETAILED_PROMPT,
@@ -9145,6 +10434,9 @@ def health_check():
                 "flux2_single_garment_extract_default_steps": FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS,
                 "flux2_single_garment_extract_default_seed": FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_SEED,
                 "flux2_single_garment_extract_upload_debug": FLUX2_SINGLE_GARMENT_EXTRACT_UPLOAD_DEBUG,
+                "flux2_single_garment_extract_disable_parser": FLUX2_SINGLE_GARMENT_EXTRACT_DISABLE_PARSER,
+                "flux2_single_garment_extract_upload_raw_debug": FLUX2_SINGLE_GARMENT_EXTRACT_UPLOAD_RAW_DEBUG,
+                "flux2_single_garment_extract_expose_intermediate_urls": FLUX2_SINGLE_GARMENT_EXTRACT_EXPOSE_INTERMEDIATE_URLS,
                 "flux2_color_lock_enabled": FLUX2_COLOR_LOCK_ENABLED,
                 "flux2_color_lock_top_k": FLUX2_COLOR_LOCK_TOP_K,
                 "flux2_color_decontamination_enabled": FLUX2_COLOR_DECONTAMINATION_ENABLED,
@@ -9172,7 +10464,10 @@ def health_check():
                 "flux2_negative_prompt_runtime_mode": FLUX2_NEGATIVE_PROMPT_RUNTIME_MODE,
                 "flux2_low_latency_mode": FLUX2_LOW_LATENCY_MODE,
                 "flux2_runtime_scoring_enabled": FLUX2_RUNTIME_SCORING_ENABLED,
+                "flux2_force_runtime_scoring_for_single_candidate": FLUX2_FORCE_RUNTIME_SCORING_FOR_SINGLE_CANDIDATE,
                 "minicpm_service_url": MINICPM_SERVICE_URL,
+                "analyze_minicpm_service_url": ANALYZE_MINICPM_SERVICE_URL or MINICPM_SERVICE_URL,
+                "analyze_minicpm_service_url_override_enabled": bool(ANALYZE_MINICPM_SERVICE_URL),
                 "minicpm_service_timeout_s": MINICPM_SERVICE_TIMEOUT_S,
                 "minicpm_service_connect_timeout_s": MINICPM_SERVICE_CONNECT_TIMEOUT_S,
                 "minicpm_service_cache_enabled": MINICPM_SERVICE_CACHE_ENABLED,
@@ -9180,57 +10475,52 @@ def health_check():
                 "minicpm_service_cache_max_entries": MINICPM_SERVICE_CACHE_MAX_ENTRIES,
                 "minicpm_service_cache_current_entries": len(_MINICPM_DESCRIPTOR_CACHE),
                 "minicpm_service_pool_maxsize": MINICPM_SERVICE_POOL_MAXSIZE,
+                "minicpm_service_local_file_first": MINICPM_SERVICE_LOCAL_FILE_FIRST,
+                "minicpm_service_garment_min_words": MINICPM_SERVICE_GARMENT_MIN_WORDS,
                 "analyze_extract_cloth": ANALYZE_EXTRACT_CLOTH,
-            "analyze_extract_mode": "forced_vton",
-            "analyze_extract_parser_only": ANALYZE_EXTRACT_PARSER_ONLY,
-            "analyze_require_extracted_prompt": ANALYZE_REQUIRE_EXTRACTED_PROMPT,
-            "analyze_require_mirrored_vton_url": ANALYZE_REQUIRE_MIRRORED_VTON_URL,
-            "analyze_vton_fallback_enabled": ANALYZE_VTON_FALLBACK_ENABLED,
-            "analyze_vton_segmentation_free": ANALYZE_VTON_SEGMENTATION_FREE,
-            "analyze_vton_reject_source_passthrough": ANALYZE_VTON_REJECT_SOURCE_PASSTHROUGH,
-            "analyze_vton_strict_safety_checks": ANALYZE_VTON_STRICT_SAFETY_CHECKS,
-            "analyze_vton_mirror_raw_output": ANALYZE_VTON_MIRROR_RAW_OUTPUT,
-            "analyze_vton_use_showroom_person": ANALYZE_VTON_USE_SHOWROOM_PERSON,
-            "analyze_vton_dress_use_full_image": ANALYZE_VTON_DRESS_USE_FULL_IMAGE,
-            "analyze_vton_single_item_use_full_image": ANALYZE_VTON_SINGLE_ITEM_USE_FULL_IMAGE,
-            "analyze_vton_num_timesteps": ANALYZE_VTON_NUM_TIMESTEPS,
-            "analyze_vton_guidance_scale": ANALYZE_VTON_GUIDANCE_SCALE,
-            "analyze_vton_seed": ANALYZE_VTON_SEED,
-            "analyze_vton_crop_top_extra_ratio_bottom": ANALYZE_VTON_CROP_TOP_EXTRA_RATIO_BOTTOM,
-            "analyze_vton_crop_top_extra_ratio_bottom_multi": ANALYZE_VTON_CROP_TOP_EXTRA_RATIO_BOTTOM_MULTI,
-            "analyze_use_parser_for_prerouting": ANALYZE_USE_PARSER_FOR_PREROUTING,
-            "analyze_florence_dress_lock_min_score": ANALYZE_FLORENCE_DRESS_LOCK_MIN_SCORE,
-            "analyze_tighten_bottom_top_max_overlap_px": ANALYZE_TIGHTEN_BOTTOM_TOP_MAX_OVERLAP_PX,
-            "analyze_tighten_bottom_max_down_shift_ratio": ANALYZE_TIGHTEN_BOTTOM_MAX_DOWN_SHIFT_RATIO,
-            "analyze_tighten_bottom_max_gap_from_top_px": ANALYZE_TIGHTEN_BOTTOM_MAX_GAP_FROM_TOP_PX,
-            "analyze_tighten_bottom_min_width_ratio": ANALYZE_TIGHTEN_BOTTOM_MIN_WIDTH_RATIO,
-            "analyze_force_fullbody_split_on_same_type": ANALYZE_FORCE_FULLBODY_SPLIT_ON_SAME_TYPE,
-            "analyze_force_fullbody_split_min_height_ratio": ANALYZE_FORCE_FULLBODY_SPLIT_MIN_HEIGHT_RATIO,
-            "analyze_collapse_same_type": ANALYZE_COLLAPSE_SAME_TYPE,
-            "analyze_collapse_same_type_min_iou": ANALYZE_COLLAPSE_SAME_TYPE_MIN_IOU,
-            "analyze_auto_select_multi_dress": ANALYZE_AUTO_SELECT_MULTI_DRESS,
-            "analyze_extract_max_body_ratio": ANALYZE_EXTRACT_MAX_BODY_RATIO,
-            "analyze_extract_body_strip_dilate": ANALYZE_EXTRACT_BODY_STRIP_DILATE,
-            "analyze_extract_body_strip_max_ratio": ANALYZE_EXTRACT_BODY_STRIP_MAX_RATIO,
-            "analyze_showroom_delta_refinement_enabled": ANALYZE_SHOWROOM_DELTA_REFINEMENT_ENABLED,
-            "analyze_showroom_delta_threshold": ANALYZE_SHOWROOM_DELTA_THRESHOLD,
-            "analyze_showroom_delta_skin_extra": ANALYZE_SHOWROOM_DELTA_SKIN_EXTRA,
-            "analyze_showroom_delta_dilate": ANALYZE_SHOWROOM_DELTA_DILATE,
-            "analyze_showroom_delta_min_retain_ratio": ANALYZE_SHOWROOM_DELTA_MIN_RETAIN_RATIO,
-            "analyze_top_recover_max_skin_ratio": ANALYZE_TOP_RECOVER_MAX_SKIN_RATIO,
-            "analyze_top_recover_near_dilate": ANALYZE_TOP_RECOVER_NEAR_DILATE,
-            "analyze_top_skin_rim_cleanup": ANALYZE_TOP_SKIN_RIM_CLEANUP,
-            "analyze_top_skin_rim_max_ratio": ANALYZE_TOP_SKIN_RIM_MAX_RATIO,
-            "analyze_vton_max_showroom_mae": ANALYZE_VTON_MAX_SHOWROOM_MAE,
-            "analyze_vton_min_showroom_change_ratio": ANALYZE_VTON_MIN_SHOWROOM_CHANGE_RATIO,
-            "analyze_vton_top_zoom_enabled": ANALYZE_VTON_TOP_ZOOM_ENABLED,
-            "analyze_vton_bottom_upscale_enabled": ANALYZE_VTON_BOTTOM_UPSCALE_ENABLED,
-            "analyze_garment_postprocess_enabled": ANALYZE_GARMENT_POSTPROCESS_ENABLED,
-            "analyze_garment_target_aspect": f"{ANALYZE_GARMENT_TARGET_ASPECT_W}:{ANALYZE_GARMENT_TARGET_ASPECT_H}",
-            "analyze_garment_enhance_enabled": ANALYZE_GARMENT_ENHANCE_ENABLED,
-            "analyze_garment_output_background": ANALYZE_GARMENT_OUTPUT_BACKGROUND,
-            "wardrobe_progress_sync_enabled": ENABLE_WARDROBE_PROGRESS_SYNC,
-            "wardrobe_progress_include_input_image": WARDROBE_PROGRESS_INCLUDE_INPUT_IMAGE,
+                "analyze_use_parser_post_extract": ANALYZE_USE_PARSER_POST_EXTRACT,
+                "analyze_flux_disable_lora": ANALYZE_FLUX_DISABLE_LORA,
+                "analyze_preload_flux_runner": ANALYZE_PRELOAD_FLUX_RUNNER,
+                "analyze_extract_mode": "flux2_single_garment_extract",
+                "analyze_primary_type_with_florence": ANALYZE_PRIMARY_TYPE_WITH_FLORENCE,
+                "analyze_preload_florence": ANALYZE_PRELOAD_FLORENCE,
+                "analyze_selection_preview_format": ANALYZE_SELECTION_PREVIEW_FORMAT,
+                "analyze_selection_preview_max_side": ANALYZE_SELECTION_PREVIEW_MAX_SIDE,
+                "analyze_selection_preview_jpeg_quality": ANALYZE_SELECTION_PREVIEW_JPEG_QUALITY,
+                "analyze_gpu_queue_timeout_s": ANALYZE_GPU_QUEUE_TIMEOUT_S,
+                "analyze_extract_parser_only": ANALYZE_EXTRACT_PARSER_ONLY,
+                "analyze_extract_allow_source_fallback": ANALYZE_EXTRACT_ALLOW_SOURCE_FALLBACK,
+                "analyze_require_extracted_prompt": ANALYZE_REQUIRE_EXTRACTED_PROMPT,
+                "analyze_extract_force_bbox_crop": ANALYZE_EXTRACT_FORCE_BBOX_CROP,
+                "analyze_extract_crop_pad_ratio": ANALYZE_EXTRACT_CROP_PAD_RATIO,
+                "analyze_extract_crop_pad_ratio_dress": ANALYZE_EXTRACT_CROP_PAD_RATIO_DRESS,
+                "analyze_extract_crop_bottom_extra_ratio_dress": ANALYZE_EXTRACT_CROP_BOTTOM_EXTRA_RATIO_DRESS,
+                "analyze_extract_crop_top_extra_ratio_bottom": ANALYZE_EXTRACT_CROP_TOP_EXTRA_RATIO_BOTTOM,
+                "analyze_extract_crop_top_extra_ratio_bottom_multi": ANALYZE_EXTRACT_CROP_TOP_EXTRA_RATIO_BOTTOM_MULTI,
+                "analyze_use_parser_for_prerouting": ANALYZE_USE_PARSER_FOR_PREROUTING,
+                "analyze_florence_dress_lock_min_score": ANALYZE_FLORENCE_DRESS_LOCK_MIN_SCORE,
+                "analyze_tighten_bottom_top_max_overlap_px": ANALYZE_TIGHTEN_BOTTOM_TOP_MAX_OVERLAP_PX,
+                "analyze_tighten_bottom_max_down_shift_ratio": ANALYZE_TIGHTEN_BOTTOM_MAX_DOWN_SHIFT_RATIO,
+                "analyze_tighten_bottom_max_gap_from_top_px": ANALYZE_TIGHTEN_BOTTOM_MAX_GAP_FROM_TOP_PX,
+                "analyze_tighten_bottom_min_width_ratio": ANALYZE_TIGHTEN_BOTTOM_MIN_WIDTH_RATIO,
+                "analyze_force_fullbody_split_on_same_type": ANALYZE_FORCE_FULLBODY_SPLIT_ON_SAME_TYPE,
+                "analyze_force_fullbody_split_min_height_ratio": ANALYZE_FORCE_FULLBODY_SPLIT_MIN_HEIGHT_RATIO,
+                "analyze_collapse_same_type": ANALYZE_COLLAPSE_SAME_TYPE,
+                "analyze_collapse_same_type_min_iou": ANALYZE_COLLAPSE_SAME_TYPE_MIN_IOU,
+                "analyze_auto_select_multi_dress": ANALYZE_AUTO_SELECT_MULTI_DRESS,
+                "analyze_extract_max_body_ratio": ANALYZE_EXTRACT_MAX_BODY_RATIO,
+                "analyze_extract_body_strip_dilate": ANALYZE_EXTRACT_BODY_STRIP_DILATE,
+                "analyze_extract_body_strip_max_ratio": ANALYZE_EXTRACT_BODY_STRIP_MAX_RATIO,
+                "analyze_top_skin_rim_cleanup": ANALYZE_TOP_SKIN_RIM_CLEANUP,
+                "analyze_top_skin_rim_max_ratio": ANALYZE_TOP_SKIN_RIM_MAX_RATIO,
+                "analyze_garment_postprocess_enabled": ANALYZE_GARMENT_POSTPROCESS_ENABLED,
+                "analyze_garment_target_aspect": f"{ANALYZE_GARMENT_TARGET_ASPECT_W}:{ANALYZE_GARMENT_TARGET_ASPECT_H}",
+                "analyze_garment_enhance_enabled": ANALYZE_GARMENT_ENHANCE_ENABLED,
+                "analyze_garment_output_background": ANALYZE_GARMENT_OUTPUT_BACKGROUND,
+                "analyze_bg_removal_backend": ANALYZE_BG_REMOVAL_BACKEND,
+                "analyze_birefnet_model_id": ANALYZE_BIREFNET_MODEL_ID,
+                "wardrobe_progress_sync_enabled": ENABLE_WARDROBE_PROGRESS_SYNC,
+                "wardrobe_progress_include_input_image": WARDROBE_PROGRESS_INCLUDE_INPUT_IMAGE,
         },
         "models": engine.model_status(),
     }

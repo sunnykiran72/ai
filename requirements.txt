@@ -4,6 +4,7 @@ python-multipart
 python-dotenv
 azure-storage-blob
 requests
+PyJWT
 torch
 torchvision
 diffusers

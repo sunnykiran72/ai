@@ -124,6 +124,7 @@ class FlorenceRunner:
             "top": {
                 "shirt": 0.30, "t-shirt": 0.30, "tee": 0.25, "top": 0.25,
                 "blouse": 0.30, "sleeve": 0.20, "tank": 0.25, "camisole": 0.25,
+                "bra": 0.40, "bralette": 0.40, "brassiere": 0.40, "bikini top": 0.35, "bustier": 0.35,
             },
         }
 
