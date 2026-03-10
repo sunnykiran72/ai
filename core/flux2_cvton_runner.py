@@ -242,6 +242,13 @@ class Flux2CVTONRunner:
             str(cfg.get("fuse_lora")) if "fuse_lora" in cfg else os.getenv("FLUX2_FUSE_LORA", "1"),
             default=True,
         )
+        self.runtime_lora_toggle = _as_bool(
+            str(cfg.get("runtime_lora_toggle")) if "runtime_lora_toggle" in cfg else os.getenv("FLUX2_RUNTIME_LORA_TOGGLE", "0"),
+            default=False,
+        )
+        if self.runtime_lora_toggle and self.fuse_lora:
+            logger.info("Disabling LoRA fusion because FLUX2_RUNTIME_LORA_TOGGLE=1.")
+            self.fuse_lora = False
         self.compile_mode = str(cfg.get("compile_mode") or os.getenv("FLUX2_COMPILE_MODE", "none")).strip().lower()
         self.compile_vae_decode = _as_bool(
             str(cfg.get("compile_vae_decode")) if "compile_vae_decode" in cfg else os.getenv("FLUX2_COMPILE_VAE_DECODE", "0"),
@@ -263,6 +270,9 @@ class Flux2CVTONRunner:
         self._did_warmup = False
         self._supports_negative_prompt: Optional[bool] = None
         self._warned_negative_prompt_unsupported = False
+        self._lora_loaded = False
+        self._lora_fused = False
+        self._lora_runtime_enabled = False
         self.negative_prompt_fallback_mode = (
             str(os.getenv("FLUX2_NEGATIVE_PROMPT_FALLBACK_MODE", "append_prompt")).strip().lower()
         )
@@ -498,7 +508,10 @@ class Flux2CVTONRunner:
                 pipe.set_adapters([self.adapter_name], adapter_weights=[self.lora_scale])
                 if self.fuse_lora and hasattr(pipe, "fuse_lora"):
                     pipe.fuse_lora()
+                    self._lora_fused = True
                 lora_loaded = True
+                self._lora_loaded = True
+                self._lora_runtime_enabled = True
                 lora_load_seconds = time.time() - lora_t0
             except Exception as err:
                 if self.require_lora:
@@ -528,6 +541,7 @@ class Flux2CVTONRunner:
             "compile_vae_decode": self.compile_vae_decode,
             "channels_last": self.enable_channels_last,
             "fuse_lora": self.fuse_lora,
+            "runtime_lora_toggle": self.runtime_lora_toggle,
             "tf32_enabled": self.enable_tf32,
             "torch_version": torch.__version__,
             "device": self.device,
@@ -535,6 +549,42 @@ class Flux2CVTONRunner:
             "pipeline_class": getattr(Flux2PipelineClass, "__name__", str(Flux2PipelineClass)),
         }
         return pipe
+
+    def _set_runtime_lora_state(self, enabled: bool) -> bool:
+        if self._pipeline is None:
+            raise RuntimeError("Pipeline is not loaded.")
+        if not self._lora_loaded:
+            if enabled and self.require_lora:
+                raise RuntimeError("LoRA is required for this request but is not loaded.")
+            self._lora_runtime_enabled = False
+            return False
+        if self._lora_fused:
+            if not enabled:
+                raise RuntimeError("Cannot disable LoRA at request-time because it was fused into the pipeline.")
+            self._lora_runtime_enabled = True
+            return True
+
+        pipe = self._pipeline
+        if enabled:
+            if hasattr(pipe, "enable_lora"):
+                pipe.enable_lora()
+            if hasattr(pipe, "enable_adapters"):
+                pipe.enable_adapters()
+            if hasattr(pipe, "set_adapters"):
+                pipe.set_adapters([self.adapter_name], adapter_weights=[self.lora_scale])
+            self._lora_runtime_enabled = True
+            return True
+
+        if hasattr(pipe, "disable_lora"):
+            pipe.disable_lora()
+        elif hasattr(pipe, "disable_adapters"):
+            pipe.disable_adapters()
+        elif hasattr(pipe, "set_adapters"):
+            pipe.set_adapters([self.adapter_name], adapter_weights=[0.0])
+        else:
+            raise RuntimeError("Pipeline does not expose a runtime LoRA disable API.")
+        self._lora_runtime_enabled = False
+        return False
 
     def ensure_ready(self):
         if self._pipeline is not None:
@@ -598,6 +648,7 @@ class Flux2CVTONRunner:
         steps: int = 6,
         seed: Optional[int] = None,
         negative_prompt: Optional[str] = None,
+        use_lora: Optional[bool] = None,
     ) -> Dict[str, Any]:
         self.ensure_ready()
 
@@ -609,6 +660,7 @@ class Flux2CVTONRunner:
         person = person_image.convert("RGB")
         board = board_image.convert("RGB")
         resolved_negative_prompt = str(negative_prompt or "").strip()
+        requested_lora = self.enable_lora if use_lora is None else bool(use_lora)
         supports_negative_prompt = self._pipeline_accepts_negative_prompt()
         effective_prompt = prompt
         negative_prompt_mode = "none"
@@ -644,6 +696,7 @@ class Flux2CVTONRunner:
             return self._pipeline(**call_kwargs).images[0]
 
         with self._infer_lock, torch.inference_mode():
+            effective_lora = self._set_runtime_lora_state(requested_lora)
             if (not self._did_warmup) and self.num_warmups > 0:
                 warm_t0 = time.time()
                 for _ in range(max(0, self.num_warmups)):
@@ -669,6 +722,9 @@ class Flux2CVTONRunner:
                 "negative_prompt_mode": negative_prompt_mode,
                 "negative_prompt_requested": bool(resolved_negative_prompt),
                 "negative_prompt_fallback_mode": self.negative_prompt_fallback_mode,
+                "lora_requested": bool(requested_lora),
+                "lora_effective": bool(effective_lora),
+                "runtime_lora_toggle": bool(self.runtime_lora_toggle),
                 "startup_metrics": dict(self._startup_metrics),
             },
         }

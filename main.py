@@ -70,6 +70,12 @@ from ai.core.garment_extractor import (
     GarmentExtractionRequest,
     GarmentExtractor,
 )
+from ai.core.garment_color_masker import GarmentColorMasker
+from ai.core.garment_color_context import (
+    GarmentColorContextSettings,
+    build_single_image_color_context as _shared_build_single_image_color_context,
+    build_visual_lock_clauses as _shared_build_visual_lock_clauses,
+)
 
 # Configuration
 logging.basicConfig(level=logging.INFO)
@@ -377,6 +383,7 @@ ANALYZE_PRELOAD_FLORENCE = os.getenv("ANALYZE_PRELOAD_FLORENCE", "1") == "1"
 ANALYZE_EXTRACT_CLOTH = os.getenv("ANALYZE_EXTRACT_CLOTH", "1") == "1"
 ANALYZE_FLUX_DISABLE_LORA = os.getenv("ANALYZE_FLUX_DISABLE_LORA", "1") == "1"
 ANALYZE_PRELOAD_FLUX_RUNNER = os.getenv("ANALYZE_PRELOAD_FLUX_RUNNER", "0") == "1"
+FLUX2_SHARE_BASE_RUNNER = os.getenv("FLUX2_SHARE_BASE_RUNNER", "1") == "1"
 ANALYZE_USE_PARSER_POST_EXTRACT = os.getenv("ANALYZE_USE_PARSER_POST_EXTRACT", "0") == "1"
 ANALYZE_PASS_DETECTION_PROMPT_TO_EXTRACT = os.getenv("ANALYZE_PASS_DETECTION_PROMPT_TO_EXTRACT", "1") == "1"
 ANALYZE_PROMPT_FROM_EXTRACTED = os.getenv("ANALYZE_PROMPT_FROM_EXTRACTED", "1") == "1"
@@ -521,17 +528,30 @@ class AIEngine:
         self.parser_runner = HumanParserRunner() if ANALYZE_ENABLE_HUMAN_PARSER else None
         self.yolo = YoloCropper(predictor=self.yolo_runner.predict)
         self.parser = HumanParser(parser_fn=self.parser_runner.parse) if self.parser_runner is not None else None
+        self.garment_color_masker = GarmentColorMasker(
+            parser=self.parser,
+            base_mask_fn=lambda image: _get_clean_foreground_mask(image),
+            skin_mask_fn=lambda rgb: _skin_like_mask(rgb),
+        )
         self.florence = FlorenceRunner()
         self.qwen25vl = Qwen25VLRunner()
         self.joycaption = JoyCaptionRunner()
         self.minicpm = MiniCPMVRunner()
         self.openclip = OpenCLIPRunner()
-        self.flux2 = Flux2CVTONRunner()
+        shared_flux2_config: Dict[str, object] = {}
+        self._share_flux2_base_runner = bool(FLUX2_SHARE_BASE_RUNNER and ANALYZE_FLUX_DISABLE_LORA)
+        if self._share_flux2_base_runner:
+            shared_flux2_config["runtime_lora_toggle"] = True
+            shared_flux2_config["fuse_lora"] = False
+        self.flux2 = Flux2CVTONRunner(config=shared_flux2_config)
         self._analyze_flux2: Optional[Flux2CVTONRunner] = None
         self._analyze_flux2_lock = threading.Lock()
         self.board_builder = BoardBuilder()
 
     def get_flux2_for_analyze(self) -> Flux2CVTONRunner:
+        # Shared-base mode keeps one FLUX pipeline in memory and toggles LoRA per request.
+        if self._share_flux2_base_runner:
+            return self.flux2
         # Strict isolation: /analyze can run on a separate no-LoRA runner so try-on remains unchanged.
         if not ANALYZE_FLUX_DISABLE_LORA:
             return self.flux2
@@ -583,12 +603,14 @@ class AIEngine:
             self.get_flux2_for_analyze().ensure_ready()
 
     def model_status(self):
-        analyze_flux2 = self._analyze_flux2
+        analyze_flux2 = self.flux2 if self._share_flux2_base_runner else self._analyze_flux2
         analyze_startup = dict(getattr(analyze_flux2, "_startup_metrics", {}) or {}) if analyze_flux2 else {}
         return {
             "flux2_loaded": self.flux2._pipeline is not None,
             "analyze_flux2_loaded": bool(analyze_flux2 and analyze_flux2._pipeline is not None),
-            "analyze_flux2_isolated": bool(ANALYZE_FLUX_DISABLE_LORA),
+            "analyze_flux2_isolated": bool(ANALYZE_FLUX_DISABLE_LORA and not self._share_flux2_base_runner),
+            "flux2_shared_base_runner": bool(self._share_flux2_base_runner),
+            "flux2_runtime_lora_toggle": bool(getattr(self.flux2, "runtime_lora_toggle", False)),
             "analyze_flux2_lora_enabled": bool(
                 analyze_startup.get("lora_enabled", False)
             ) if analyze_flux2 else False,
@@ -824,6 +846,400 @@ def _normalize_minicpm_descriptor_text(raw_text: str, kind: str) -> str:
         parts.append(f"preserve {preserve}")
     return ", ".join(parts).strip(" ,.") or text
 
+
+def _clean_prompt_section_text(text: str) -> str:
+    cleaned = " ".join(str(text or "").split()).strip()
+    cleaned = re.sub(
+        r"^(?:BASE_GARMENT_PROMPT|EXTRACTION_AVOID_CLAUSE)\s*:\s*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    return cleaned.strip(" -")
+
+
+def _parse_garment_prompt_sections(
+    raw_text: str,
+    *,
+    garment_type: Optional[str] = None,
+) -> Dict[str, str]:
+    text = str(raw_text or "").strip()
+    normalized_text = " ".join(text.split()).strip()
+    base_prompt = ""
+    avoid_clause = ""
+
+    base_match = re.search(
+        r"BASE_GARMENT_PROMPT\s*:\s*(.*?)(?=\bEXTRACTION_AVOID_CLAUSE\s*:|$)",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    avoid_match = re.search(
+        r"EXTRACTION_AVOID_CLAUSE\s*:\s*(.*)$",
+        text,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    if base_match:
+        base_prompt = _clean_prompt_section_text(base_match.group(1))
+    if avoid_match:
+        avoid_clause = _clean_prompt_section_text(avoid_match.group(1))
+
+    if not base_prompt:
+        base_prompt = _normalize_minicpm_descriptor_text(text, kind="garment")
+    base_prompt = _sanitize_florence_garment_description(base_prompt or "")
+    base_prompt = " ".join(str(base_prompt or "").split()).strip(" ,.")
+    if base_prompt and not base_prompt.endswith("."):
+        base_prompt = f"{base_prompt}."
+    base_prompt = _ensure_target_type_in_description(base_prompt, str(garment_type or ""))
+
+    avoid_clause = " ".join(str(avoid_clause or "").split()).strip(" ,.")
+    if avoid_clause and not avoid_clause.endswith("."):
+        avoid_clause = f"{avoid_clause}."
+
+    serialized_sections = f"BASE_GARMENT_PROMPT: {base_prompt or 'Garment.'}"
+    if avoid_clause:
+        serialized_sections += f"\nEXTRACTION_AVOID_CLAUSE: {avoid_clause}"
+
+    return {
+        "raw_text": normalized_text,
+        "base_garment_prompt": base_prompt or "Garment.",
+        "extraction_avoid_clause": avoid_clause,
+        "serialized_sections": serialized_sections,
+    }
+
+
+def _extract_prompt_fact_segments(text: str) -> Dict[str, str]:
+    src = " ".join(str(text or "").split()).strip().strip(" ,.")
+    if not src:
+        return {}
+
+    labels = [
+        "category",
+        "type",
+        "colors",
+        "pattern",
+        "material",
+        "silhouette",
+        "construction",
+        "details",
+        "coverage",
+        "preserve",
+    ]
+    parsed: Dict[str, str] = {}
+    for label in labels:
+        match = re.search(
+            rf"(?:^|,\s*){re.escape(label)}\s+(.+?)(?=(?:,\s*(?:{'|'.join(labels)})\s+)|$)",
+            src,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            value = " ".join(str(match.group(1) or "").split()).strip(" ,.")
+            if value:
+                parsed[label] = value
+    return parsed
+
+
+def _sanitize_prompt_fact_value(value: str) -> str:
+    cleaned = " ".join(str(value or "").split()).strip().strip(" ,.")
+    cleaned = re.sub(
+        r"\bEXTRACTION_AVOID_CLAUSE\s*:\s*.*$",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip(" ,.")
+    return cleaned
+
+
+def _serialize_prompt_fact_segments(fields: Dict[str, str]) -> str:
+    ordered_labels = (
+        "category",
+        "type",
+        "colors",
+        "pattern",
+        "material",
+        "silhouette",
+        "construction",
+        "details",
+        "coverage",
+        "preserve",
+    )
+    parts: List[str] = []
+    for label in ordered_labels:
+        value = _sanitize_prompt_fact_value(str(fields.get(label) or ""))
+        if value:
+            parts.append(f"{label}={value}")
+    return "; ".join(parts).strip(" ;.")
+
+
+def _resolve_garment_color_truth(
+    *,
+    base_garment_prompt: str,
+    dominant_hexes: Optional[List[str]] = None,
+    color_hints: Optional[List[str]] = None,
+) -> Dict[str, object]:
+    prompt_fields = dict(_parse_structured_descriptor(base_garment_prompt))
+    prompt_fields.update(_extract_prompt_fact_segments(base_garment_prompt))
+    prompt_color_text = str(prompt_fields.get("colors") or "").strip()
+    prompt_color_terms: List[str] = []
+    if prompt_color_text:
+        for raw_piece in re.split(r",|/|\band\b|&", prompt_color_text, flags=re.IGNORECASE):
+            clean_piece = _canonical_color_token(raw_piece)
+            if clean_piece and clean_piece in _TEXT_COLOR_TERMS and clean_piece not in prompt_color_terms:
+                prompt_color_terms.append(clean_piece)
+    if not prompt_color_terms:
+        prompt_color_terms = [
+            term for term in _extract_text_color_terms(str(prompt_color_text or base_garment_prompt or ""), max_items=4)
+            if str(term).strip()
+        ]
+    prompt_color_terms = list(dict.fromkeys(prompt_color_terms))
+    prompt_non_neutral = [
+        term for term in prompt_color_terms
+        if _color_family(term) not in {"neutral_dark", "neutral_mid", "neutral_light", "brown"}
+    ]
+
+    pixel_hexes = [
+        str(v).strip().upper()
+        for v in (dominant_hexes or [])
+        if str(v).strip()
+    ]
+    pixel_hints = [
+        str(v).strip().lower()
+        for v in (color_hints or [])
+        if str(v).strip()
+    ]
+    pixel_hints = list(dict.fromkeys(pixel_hints))
+    pixel_non_neutral = [
+        term for term in pixel_hints
+        if _color_family(term) not in {"neutral_dark", "neutral_mid", "neutral_light", "brown"}
+    ]
+
+    resolved_hints = list(pixel_hints)
+    resolved_hexes = list(pixel_hexes)
+    resolved_source = "pixel"
+
+    prompt_families = {_color_family(term) for term in prompt_non_neutral if term}
+    pixel_families = {_color_family(term) for term in pixel_non_neutral if term}
+    strong_semantic_override = bool(
+        prompt_non_neutral
+        and (
+            not pixel_non_neutral
+            or pixel_families.isdisjoint(prompt_families)
+            or all(_is_neutral_color_token(term) for term in pixel_hints[: max(1, len(pixel_hints))])
+        )
+    )
+    if strong_semantic_override:
+        semantic_terms = prompt_color_terms[: max(2, FLUX2_COLOR_LOCK_TOP_K)]
+        semantic_hexes: List[str] = []
+        for term in semantic_terms:
+            rgb = _COLOR_LABEL_RGB_MAP.get(term)
+            if rgb:
+                semantic_hex = "#{:02X}{:02X}{:02X}".format(*rgb)
+                if semantic_hex not in semantic_hexes:
+                    semantic_hexes.append(semantic_hex)
+        if semantic_terms:
+            resolved_hints = list(semantic_terms)
+            resolved_source = "semantic_prompt_override"
+        if semantic_hexes:
+            resolved_hexes = list(semantic_hexes)
+
+    resolved_hints = resolved_hints[: max(2, FLUX2_COLOR_LOCK_TOP_K)]
+    resolved_hexes = resolved_hexes[: max(2, FLUX2_COLOR_LOCK_TOP_K + 1)]
+    resolved_color_text = ", ".join(resolved_hints)
+
+    reconciled_fields = dict(prompt_fields)
+    if resolved_color_text:
+        reconciled_fields["colors"] = resolved_color_text
+    for key in ("details", "preserve", "construction", "coverage", "material", "silhouette", "pattern", "type", "category"):
+        if key in reconciled_fields:
+            reconciled_fields[key] = _sanitize_prompt_fact_value(reconciled_fields.get(key, ""))
+    reconciled_prompt = _serialize_prompt_fact_segments(reconciled_fields)
+    if reconciled_prompt:
+        reconciled_prompt = f"{reconciled_prompt}."
+
+    return {
+        "base_garment_prompt": reconciled_prompt or " ".join(str(base_garment_prompt or "").split()).strip(),
+        "dominant_hexes": resolved_hexes,
+        "color_hints": resolved_hints,
+        "color_source": resolved_source,
+    }
+
+
+def _extract_garment_descriptor_facts(
+    *,
+    base_garment_prompt: str,
+    descriptor_raw_text: str = "",
+) -> Dict[str, str]:
+    raw_fields = _parse_structured_descriptor(descriptor_raw_text)
+    prompt_fields = _extract_prompt_fact_segments(base_garment_prompt)
+    merged: Dict[str, str] = {}
+    for key in (
+        "category",
+        "type",
+        "colors",
+        "pattern",
+        "material",
+        "silhouette",
+        "construction",
+        "details",
+        "coverage",
+        "preserve",
+    ):
+        value = str(raw_fields.get(key) or prompt_fields.get(key) or "").strip()
+        if value:
+            merged[key] = _sanitize_prompt_fact_value(value)
+    return merged
+
+
+def _build_garment_metadata(
+    *,
+    base_garment_prompt: str,
+    extraction_avoid_clause: str = "",
+    prompt_sections_raw: str = "",
+    descriptor_raw_text: str = "",
+    prompt_description: str = "",
+    prompt_source: str = "",
+    target_type: str = "",
+    backend_target_type: str = "",
+    style: str = "",
+    primary_category_key: str = "",
+    category_key: str = "",
+    dominant_hexes: Optional[List[str]] = None,
+    accent_hexes: Optional[List[str]] = None,
+    color_hints: Optional[List[str]] = None,
+    color_profile: Optional[Dict[str, object]] = None,
+    color_mask_source: str = "",
+) -> Dict[str, object]:
+    base_prompt = " ".join(str(base_garment_prompt or "").split()).strip()
+    avoid_clause = " ".join(str(extraction_avoid_clause or "").split()).strip()
+    normalized_prompt = " ".join(str(prompt_description or base_prompt).split()).strip()
+    classification_target = str(target_type or "").strip()
+    classification_backend = str(backend_target_type or classification_target).strip()
+    reconciled_color = _resolve_garment_color_truth(
+        base_garment_prompt=base_prompt,
+        dominant_hexes=dominant_hexes,
+        color_hints=color_hints,
+    )
+    resolved_base_prompt = str(reconciled_color.get("base_garment_prompt") or base_prompt).strip()
+    resolved_prompt_description = " ".join(str(prompt_description or resolved_base_prompt).split()).strip()
+    if resolved_base_prompt and resolved_prompt_description:
+        prompt_fields = _extract_prompt_fact_segments(resolved_prompt_description)
+        base_fields = _extract_prompt_fact_segments(resolved_base_prompt)
+        if base_fields.get("colors"):
+            prompt_fields["colors"] = base_fields["colors"]
+            rebuilt_prompt = _serialize_prompt_fact_segments(prompt_fields)
+            if rebuilt_prompt:
+                resolved_prompt_description = f"{rebuilt_prompt}."
+
+    fact_fields = _extract_garment_descriptor_facts(
+        base_garment_prompt=resolved_base_prompt,
+        descriptor_raw_text=descriptor_raw_text,
+    )
+    return {
+        "schema_version": "garment_metadata.v1",
+        "prompt": {
+            "base_garment_prompt": resolved_base_prompt,
+            "prompt_description": resolved_prompt_description or normalized_prompt,
+            "extraction_avoid_clause": avoid_clause,
+            "prompt_sections_raw": str(prompt_sections_raw or "").strip(),
+            "descriptor_raw_text": str(descriptor_raw_text or "").strip(),
+            "source": str(prompt_source or "").strip(),
+        },
+        "classification": {
+            "target_type": classification_target,
+            "backend_target_type": classification_backend,
+            "style": str(style or "").strip(),
+            "primary_category_key": str(primary_category_key or "").strip(),
+            "category_key": str(category_key or "").strip(),
+        },
+        "color": {
+            "dominant_hexes": [str(v).strip().upper() for v in (reconciled_color.get("dominant_hexes") or []) if str(v).strip()],
+            "accent_hexes": [str(v).strip().upper() for v in (accent_hexes or []) if str(v).strip()],
+            "color_hints": [str(v).strip().lower() for v in (reconciled_color.get("color_hints") or []) if str(v).strip()],
+            "profile": color_profile if isinstance(color_profile, dict) else {},
+            "mask_source": str(color_mask_source or "").strip(),
+            "resolved_source": str(reconciled_color.get("color_source") or "pixel"),
+        },
+        "details": fact_fields,
+    }
+
+
+def _extract_garment_metadata_prompt(garment_metadata: object) -> str:
+    if not isinstance(garment_metadata, dict):
+        return ""
+    prompt_block = garment_metadata.get("prompt")
+    if not isinstance(prompt_block, dict):
+        return ""
+    return " ".join(
+        str(
+            prompt_block.get("base_garment_prompt")
+            or prompt_block.get("prompt_description")
+            or ""
+        ).split()
+    ).strip()
+
+
+def _extract_garment_metadata_target_type(garment_metadata: object) -> Optional[str]:
+    if not isinstance(garment_metadata, dict):
+        return None
+    classification = garment_metadata.get("classification")
+    if not isinstance(classification, dict):
+        return None
+    for key in ("backend_target_type", "target_type"):
+        value = _normalize_garment_type(str(classification.get(key) or ""))
+        if value:
+            return value
+    return None
+
+
+def _extract_garment_metadata_color_payload(garment_metadata: object) -> Tuple[List[str], List[str]]:
+    if not isinstance(garment_metadata, dict):
+        return [], []
+    color_block = garment_metadata.get("color")
+    if not isinstance(color_block, dict):
+        return [], []
+    dominant_hexes = [
+        str(v).strip().upper()
+        for v in (color_block.get("dominant_hexes") or [])
+        if str(v).strip()
+    ]
+    color_hints = [
+        str(v).strip().lower()
+        for v in (color_block.get("color_hints") or [])
+        if str(v).strip()
+    ]
+    return dominant_hexes, color_hints
+
+
+def _extract_garment_metadata_color_block(garment_metadata: object) -> Dict[str, object]:
+    if not isinstance(garment_metadata, dict):
+        return {}
+    color_block = garment_metadata.get("color")
+    if not isinstance(color_block, dict):
+        return {}
+    dominant_hexes = [
+        str(v).strip().upper()
+        for v in (color_block.get("dominant_hexes") or [])
+        if str(v).strip()
+    ]
+    color_hints = [
+        str(v).strip().lower()
+        for v in (color_block.get("color_hints") or [])
+        if str(v).strip()
+    ]
+    accent_hexes = [
+        str(v).strip().upper()
+        for v in (color_block.get("accent_hexes") or [])
+        if str(v).strip()
+    ]
+    profile = color_block.get("profile") if isinstance(color_block.get("profile"), dict) else {}
+    mask_source = str(color_block.get("mask_source") or "").strip()
+    return {
+        "dominant_hexes": dominant_hexes,
+        "color_hints": color_hints,
+        "accent_hexes": accent_hexes,
+        "profile": profile,
+        "mask_source": mask_source,
+    }
+
 def _strip_descriptor_color_clause(description: str) -> str:
     """
     Remove model-predicted color phrase from schema-like descriptors.
@@ -1035,6 +1451,7 @@ _COLOR_LABEL_RGB: List[Tuple[str, Tuple[int, int, int]]] = [
     ("blue", (55, 96, 185)),
     ("navy", (35, 52, 95)),
     ("purple", (120, 72, 155)),
+    ("plum", (98, 56, 102)),
     ("pink", (214, 120, 165)),
 ]
 
@@ -1110,10 +1527,13 @@ _TEXT_COLOR_TERMS: List[str] = [
     "blue",
     "navy",
     "purple",
+    "plum",
     "lavender",
     "pink",
     "peach",
 ]
+
+_COLOR_LABEL_RGB_MAP: Dict[str, Tuple[int, int, int]] = dict(_COLOR_LABEL_RGB)
 
 def _canonical_color_token(color: str) -> str:
     token = str(color or "").strip().lower()
@@ -1142,7 +1562,7 @@ def _color_family(color: str) -> str:
         return "green"
     if c in {"blue", "navy", "teal"}:
         return "blue"
-    if c in {"purple", "lavender"}:
+    if c in {"purple", "lavender", "plum"}:
         return "purple"
     if c in {"pink", "blush pink", "dusty pink", "hot pink", "rose gold"}:
         return "pink"
@@ -1223,6 +1643,8 @@ def _nearest_color_label(rgb_triplet: Tuple[int, int, int]) -> str:
     chroma = float(np.sqrt((a_star * a_star) + (b_star * b_star)))
 
     if chroma < 14.0:
+        if l_star < 45.0 and a_star >= 10.0 and b_star <= -2.0:
+            return "plum" if l_star < 34.0 else "purple"
         # This is a neutral/near-neutral color. Use L* to bucket it.
         if l_star < 10.0:
             return "black"
@@ -1774,175 +2196,38 @@ def _extract_text_color_terms(description: str, max_items: int = 4) -> List[str]
                 break
     return hits
 
+def _garment_color_context_settings() -> GarmentColorContextSettings:
+    return GarmentColorContextSettings(
+        top_k=int(FLUX2_COLOR_LOCK_TOP_K),
+        palette_top_k=7,
+        palette_min_area_percent=float(FLUX2_COLOR_PALETTE_MIN_AREA_PERCENT),
+        decontamination_enabled=bool(FLUX2_COLOR_DECONTAMINATION_ENABLED),
+        decontam_alpha_high=int(FLUX2_COLOR_DECONTAM_ALPHA_HIGH),
+        decontam_alpha_low=int(FLUX2_COLOR_DECONTAM_ALPHA_LOW),
+        decontam_erode_iters=int(FLUX2_COLOR_DECONTAM_ERODE_ITERS),
+        decontam_min_pixels=int(FLUX2_COLOR_DECONTAM_MIN_PIXELS),
+        decontam_min_coverage_ratio=float(FLUX2_COLOR_DECONTAM_MIN_COVERAGE_RATIO),
+        profile_trim_dark_percentile=float(FLUX2_COLOR_PROFILE_TRIM_DARK_PERCENTILE),
+        profile_trim_bright_percentile=float(FLUX2_COLOR_PROFILE_TRIM_BRIGHT_PERCENTILE),
+    )
+
 def _build_flux2_visual_lock_clauses(
     product_images: List[Image.Image],
     garment_descriptions: List[str],
+    garment_metadata_list: Optional[List[Dict[str, object]]] = None,
 ) -> dict:
-    color_palette_metrics: List[List[Dict[str, object]]] = []
-    color_profiles: List[Dict[str, object]] = []
-    for img in product_images:
-        mask = _extract_alpha_mask(img, threshold=72)
-        if not isinstance(mask, np.ndarray):
-            mask = _extract_alpha_mask(img, threshold=24)
-        if not isinstance(mask, np.ndarray):
-            mask = _estimate_foreground_mask_from_border(img)
-        if FLUX2_COLOR_DECONTAMINATION_ENABLED:
-            clean_mask = _get_clean_foreground_mask(img, mask=mask)
-            if isinstance(clean_mask, np.ndarray):
-                mask = clean_mask
-        color_palette_metrics.append(
-            _extract_dominant_hex_colors_with_coverage(img, mask=mask, top_k=7)
-        )
-        color_profiles.append(_extract_lab_color_profile(img, mask=mask))
-    color_palettes: List[List[str]] = []
-    for palette in color_palette_metrics:
-        filtered_palette = _filter_palette_entries_by_area(
-            palette=palette,
-            min_area_percent=float(FLUX2_COLOR_PALETTE_MIN_AREA_PERCENT),
-            min_items=2,
-        )
-        hexes: List[str] = []
-        for entry in filtered_palette:
-            token = str(entry.get("hex", "")).strip()
-            if re.fullmatch(r"#[0-9A-Fa-f]{6}", token):
-                hexes.append(token.upper())
-        color_palettes.append(hexes)
-
-    color_hints: List[List[str]] = []
-    if FLUX2_COLOR_LOCK_ENABLED:
-        for idx, img in enumerate(product_images):
-            desc = garment_descriptions[idx] if idx < len(garment_descriptions) else ""
-            profile = color_profiles[idx] if idx < len(color_profiles) and isinstance(color_profiles[idx], dict) else {}
-            text_colors = [_canonical_color_token(c) for c in _extract_text_color_terms(desc, max_items=FLUX2_COLOR_LOCK_TOP_K)]
-            dominant_hexes = color_palettes[idx] if idx < len(color_palettes) else []
-            image_colors = _color_labels_from_hex_palette(dominant_hexes, top_k=FLUX2_COLOR_LOCK_TOP_K)
-            if not image_colors:
-                masked_colors = _extract_masked_dominant_color_labels(img, top_k=FLUX2_COLOR_LOCK_TOP_K)
-                image_colors = masked_colors or _extract_dominant_color_labels(img, top_k=FLUX2_COLOR_LOCK_TOP_K)
-            if image_colors:
-                norm_colors = [_canonical_color_token(c) for c in image_colors]
-                high_chroma = bool(
-                    isinstance(profile.get("meanChroma"), (int, float))
-                    and float(profile.get("meanChroma")) >= 18.0
-                )
-                if high_chroma:
-                    non_neutral = [c for c in norm_colors if not _is_neutral_color_token(c)]
-                    if non_neutral:
-                        dedup_non_neutral: List[str] = []
-                        for token in non_neutral:
-                            if token not in dedup_non_neutral:
-                                dedup_non_neutral.append(token)
-                        norm_colors = dedup_non_neutral
-                # Pixel-first: descriptor colors can be appended only as weak fallback context.
-                if text_colors:
-                    for token in text_colors:
-                        if high_chroma and _is_neutral_color_token(token):
-                            continue
-                        if token not in norm_colors:
-                            norm_colors.append(token)
-                color_hints.append(norm_colors[: max(2, FLUX2_COLOR_LOCK_TOP_K)])
-                continue
-
-            # Fallback only when pixel extraction fails.
-            if text_colors:
-                color_hints.append(list(text_colors)[: max(2, FLUX2_COLOR_LOCK_TOP_K)])
-            else:
-                color_hints.append([])
-
+    shared = _shared_build_visual_lock_clauses(
+        product_images=product_images,
+        garment_descriptions=garment_descriptions,
+        settings=_garment_color_context_settings(),
+        transparency_signal_fn=_has_transparency_signal,
+    )
     detail_terms: List[str] = []
     if FLUX2_DETAIL_LOCK_ENABLED:
         for desc in garment_descriptions:
             for term in _extract_detail_lock_terms(desc):
                 if term not in detail_terms:
                     detail_terms.append(term)
-
-    color_clause = ""
-    non_empty_color_hints = [h for h in color_hints if h]
-    if non_empty_color_hints:
-        if len(non_empty_color_hints) == 1:
-            palette = ", ".join(non_empty_color_hints[0])
-            color_clause = (
-                f"Color lock from image 2: keep the garment in {palette} tones only. "
-                "Do not recolor, hue-shift, or replace with a different color family. "
-            )
-        else:
-            per_item = []
-            for idx, colors in enumerate(color_hints, start=1):
-                if colors:
-                    per_item.append(f"item {idx}: {', '.join(colors)}")
-            if per_item:
-                color_clause = (
-                    "Color lock from image 2 for each product: "
-                    + "; ".join(per_item)
-                    + ". Do not recolor any item. "
-                )
-    # Extra guard for neutral-tone garments where model may over-brighten toward white/silver.
-    neutral_lock_items: List[str] = []
-    max_items = max(len(color_hints), len(color_palette_metrics), len(color_profiles))
-    for idx in range(max_items):
-        colors = color_hints[idx] if idx < len(color_hints) else []
-        profile = color_profiles[idx] if idx < len(color_profiles) else {}
-        profile_is_neutral = bool(profile.get("isNeutral"))
-        head = colors[:3]
-        neutral_count = sum(1 for c in head if _is_neutral_color_token(c))
-        colors_look_neutral = bool(head) and (neutral_count >= max(1, (len(head) + 1) // 2))
-        if not (colors_look_neutral or profile_is_neutral):
-            continue
-        palette = color_palette_metrics[idx] if idx < len(color_palette_metrics) else []
-        dominant_hexes: List[str] = []
-        for entry in palette[:3]:
-            hx = str(entry.get("hex", "")).strip().upper()
-            if re.fullmatch(r"#[0-9A-F]{6}", hx):
-                dominant_hexes.append(hx)
-        target_l = profile.get("medianL")
-        target_c = profile.get("meanChroma")
-        target_b = profile.get("meanB")
-        profile_tag = ""
-        if isinstance(target_l, (int, float)) and isinstance(target_c, (int, float)):
-            profile_tag = f", L*~{float(target_l):.1f}, C*~{float(target_c):.1f}"
-            if isinstance(target_b, (int, float)):
-                profile_tag += f", b*~{float(target_b):.1f}"
-        if dominant_hexes:
-            neutral_lock_items.append(f"item {idx + 1}: {'/'.join(dominant_hexes)}{profile_tag}")
-        else:
-            neutral_lock_items.append(f"item {idx + 1}: neutral tones{profile_tag}")
-    if neutral_lock_items:
-        color_clause += (
-            "Neutral tone lock: preserve exact lightness depth and undertone from image 2 ("
-            + "; ".join(neutral_lock_items)
-            + "). Avoid over-brightening to white/cream, avoid darkening to charcoal, "
-            + "and avoid metallic/glossy silver sheen unless explicitly present in source fabric. "
-            + "Keep neutral luminance close to source (roughly +/-4 L*). "
-        )
-
-    # Profile-aware anti-exaggeration guidance for saturated and near-white items.
-    profile_lock_items: List[str] = []
-    for idx in range(max_items):
-        profile = color_profiles[idx] if idx < len(color_profiles) else {}
-        if not isinstance(profile, dict):
-            continue
-        median_l = profile.get("medianL")
-        mean_c = profile.get("meanChroma")
-        if not (isinstance(median_l, (int, float)) and isinstance(mean_c, (int, float))):
-            continue
-        palette = color_palette_metrics[idx] if idx < len(color_palette_metrics) else []
-        hue_deg = _palette_weighted_hue_deg(palette, max_colors=4)
-        if _profile_is_near_white(profile):
-            profile_lock_items.append(
-                f"item {idx + 1}: near-white base (L*~{float(median_l):.1f}, C*~{float(mean_c):.1f})"
-            )
-            continue
-        if float(mean_c) >= 18.0 and isinstance(hue_deg, (int, float)):
-            profile_lock_items.append(
-                f"item {idx + 1}: hue~{float(hue_deg):.0f} deg, L*~{float(median_l):.1f}, C*~{float(mean_c):.1f}"
-            )
-    if profile_lock_items:
-        color_clause += (
-            "Tone and saturation lock from image 2: preserve hue/lightness/saturation profile ("
-            + "; ".join(profile_lock_items)
-            + "). Avoid over-saturating, neon amplification, or warm/cool hue drift. "
-            + "Do not shift yellow toward orange/red, and do not shift white/off-white toward gray/silver. "
-        )
 
     detail_clause = ""
     if detail_terms:
@@ -1951,27 +2236,162 @@ def _build_flux2_visual_lock_clauses(
             + ", ".join(detail_terms[:6])
             + ". Do not simplify or replace these details. "
         )
-    transparency_lock = any(_has_transparency_signal(desc) for desc in garment_descriptions)
-    transparency_clause = ""
-    if transparency_lock:
-        transparency_clause = (
-            "Transparency lock from image 2: preserve sheer/mesh panel transparency and translucency. "
-            "Keep subtle skin visibility only where the source garment is transparent. "
-            "Do not make sheer panels opaque or overexpose skin beyond those panel regions. "
-        )
 
-    return {
-        "color_clause": color_clause,
-        "detail_clause": detail_clause,
-        "transparency_clause": transparency_clause,
-        "transparency_lock": transparency_lock,
-        "neutral_tone_lock": bool(neutral_lock_items),
-        "color_profiles": color_profiles,
-        "color_hints": color_hints,
-        "color_palettes": color_palettes,
-        "color_palette_metrics": color_palette_metrics,
-        "detail_terms": detail_terms[:6],
-    }
+    out = dict(shared or {})
+    metadata_colors = [
+        _extract_garment_metadata_color_block(
+            garment_metadata_list[idx] if garment_metadata_list and idx < len(garment_metadata_list) else {}
+        )
+        for idx in range(len(product_images))
+    ]
+    if any(block.get("dominant_hexes") or block.get("color_hints") for block in metadata_colors):
+        color_palettes = [list(v) for v in (out.get("color_palettes") or [])]
+        color_hints = [list(v) for v in (out.get("color_hints") or [])]
+        color_profiles = list(out.get("color_profiles") or [])
+        color_palette_metrics = [list(v) for v in (out.get("color_palette_metrics") or [])]
+        accent_hints = [list(v) for v in (out.get("accent_hints") or [])]
+        contexts = list(out.get("contexts") or [])
+        max_len = len(product_images)
+        while len(color_palettes) < max_len:
+            color_palettes.append([])
+        while len(color_hints) < max_len:
+            color_hints.append([])
+        while len(color_profiles) < max_len:
+            color_profiles.append({})
+        while len(color_palette_metrics) < max_len:
+            color_palette_metrics.append([])
+        while len(accent_hints) < max_len:
+            accent_hints.append([])
+        while len(contexts) < max_len:
+            contexts.append({})
+
+        for idx, block in enumerate(metadata_colors):
+            meta_hexes = [str(v).strip().upper() for v in (block.get("dominant_hexes") or []) if str(v).strip()]
+            meta_hints = [str(v).strip().lower() for v in (block.get("color_hints") or []) if str(v).strip()]
+            meta_accents = [str(v).strip().upper() for v in (block.get("accent_hexes") or []) if str(v).strip()]
+            meta_profile = block.get("profile") if isinstance(block.get("profile"), dict) else {}
+            if meta_hexes:
+                color_palettes[idx] = meta_hexes
+                color_palette_metrics[idx] = [{"hex": hx, "areaPercent": 0.0, "pixelCount": 0} for hx in meta_hexes]
+            if meta_hints:
+                color_hints[idx] = meta_hints
+            if meta_profile:
+                color_profiles[idx] = meta_profile
+            if meta_accents:
+                accent_hints[idx] = []
+            ctx = contexts[idx] if isinstance(contexts[idx], dict) else {}
+            if meta_hexes:
+                ctx["dominantHexes"] = meta_hexes
+                ctx["paletteHexes"] = meta_hexes
+            if meta_hints:
+                ctx["colorHints"] = meta_hints
+                ctx["hints"] = meta_hints
+            if meta_accents:
+                ctx["accentHexes"] = meta_accents
+            if meta_profile:
+                ctx["profile"] = meta_profile
+            if block.get("mask_source"):
+                ctx["maskSource"] = block.get("mask_source")
+            contexts[idx] = ctx
+
+        out["color_palettes"] = color_palettes
+        out["color_hints"] = color_hints
+        out["color_profiles"] = color_profiles
+        out["color_palette_metrics"] = color_palette_metrics
+        out["accent_hints"] = accent_hints
+        out["contexts"] = contexts
+
+        non_empty_color_hints = [colors for colors in color_hints if colors]
+        color_clause = ""
+        if non_empty_color_hints:
+            if len(non_empty_color_hints) == 1:
+                palette = ", ".join(non_empty_color_hints[0])
+                color_clause = (
+                    f"Color lock from image 2: keep the garment in {palette} tones only. "
+                    "Do not recolor, hue-shift, or replace with a different color family. "
+                )
+            else:
+                per_item = []
+                for idx, colors in enumerate(color_hints, start=1):
+                    if colors:
+                        per_item.append(f"item {idx}: {', '.join(colors)}")
+                if per_item:
+                    color_clause = (
+                        "Color lock from image 2 for each product: "
+                        + "; ".join(per_item)
+                        + ". Do not recolor any item. "
+                    )
+
+        neutral_lock_items: List[str] = []
+        max_items = max(len(color_hints), len(color_palette_metrics), len(color_profiles))
+        for idx in range(max_items):
+            colors = color_hints[idx] if idx < len(color_hints) else []
+            profile = color_profiles[idx] if idx < len(color_profiles) else {}
+            profile_is_neutral = bool(profile.get("isNeutral"))
+            head = colors[:3]
+            neutral_count = sum(1 for color in head if _is_neutral_color_token(color))
+            colors_look_neutral = bool(head) and (neutral_count >= max(1, (len(head) + 1) // 2))
+            if not (colors_look_neutral or profile_is_neutral):
+                continue
+            palette = color_palette_metrics[idx] if idx < len(color_palette_metrics) else []
+            dominant_hexes: List[str] = []
+            for entry in palette[:3]:
+                hx = str(entry.get("hex", "")).strip().upper()
+                if re.fullmatch(r"#[0-9A-F]{6}", hx):
+                    dominant_hexes.append(hx)
+            target_l = profile.get("medianL")
+            target_c = profile.get("meanChroma")
+            target_b = profile.get("meanB")
+            profile_tag = ""
+            if isinstance(target_l, (int, float)) and isinstance(target_c, (int, float)):
+                profile_tag = f", L*~{float(target_l):.1f}, C*~{float(target_c):.1f}"
+                if isinstance(target_b, (int, float)):
+                    profile_tag += f", b*~{float(target_b):.1f}"
+            if dominant_hexes:
+                neutral_lock_items.append(f"item {idx + 1}: {'/'.join(dominant_hexes)}{profile_tag}")
+            else:
+                neutral_lock_items.append(f"item {idx + 1}: neutral tones{profile_tag}")
+        if neutral_lock_items:
+            color_clause += (
+                "Neutral tone lock: preserve exact lightness depth and undertone from image 2 ("
+                + "; ".join(neutral_lock_items)
+                + "). Avoid over-brightening to white/cream, avoid darkening to charcoal, "
+                + "and avoid metallic/glossy silver sheen unless explicitly present in source fabric. "
+                + "Keep neutral luminance close to source (roughly +/-4 L*). "
+            )
+
+        profile_lock_items: List[str] = []
+        for idx in range(max_items):
+            profile = color_profiles[idx] if idx < len(color_profiles) else {}
+            if not isinstance(profile, dict):
+                continue
+            median_l = profile.get("medianL")
+            mean_c = profile.get("meanChroma")
+            if not (isinstance(median_l, (int, float)) and isinstance(mean_c, (int, float))):
+                continue
+            palette = color_palette_metrics[idx] if idx < len(color_palette_metrics) else []
+            hue_deg = _palette_weighted_hue_deg(palette, max_colors=4)
+            if _profile_is_near_white(profile):
+                profile_lock_items.append(
+                    f"item {idx + 1}: near-white base (L*~{float(median_l):.1f}, C*~{float(mean_c):.1f})"
+                )
+                continue
+            if float(mean_c) >= 18.0 and isinstance(hue_deg, (int, float)):
+                profile_lock_items.append(
+                    f"item {idx + 1}: hue~{float(hue_deg):.0f} deg, L*~{float(median_l):.1f}, C*~{float(mean_c):.1f}"
+                )
+        if profile_lock_items:
+            color_clause += (
+                "Tone and saturation lock from image 2: preserve hue/lightness/saturation profile ("
+                + "; ".join(profile_lock_items)
+                + "). Avoid over-saturating, neon amplification, or warm/cool hue drift. "
+                + "Do not shift yellow toward orange/red, and do not shift white/off-white toward gray/silver. "
+            )
+        out["color_clause"] = color_clause
+
+    out["detail_clause"] = detail_clause
+    out["detail_terms"] = detail_terms[:6]
+    return out
 
 def _build_flux2_hex_color_guard_clause(
     color_palette_metrics: List[List[Dict[str, object]]],
@@ -2020,91 +2440,13 @@ def _build_single_image_color_context(
     mask: Optional[np.ndarray] = None,
     top_k: int = 7,
 ) -> Dict[str, object]:
-    """
-    Common single-image color context used by extraction/try-on style flows.
-    """
-    use_mask = _get_clean_foreground_mask(image, mask=mask)
-    mask_source = "clean_foreground"
-    if not isinstance(use_mask, np.ndarray):
-        use_mask = _extract_alpha_mask(image, threshold=72)
-        mask_source = "alpha72"
-    if not isinstance(use_mask, np.ndarray):
-        use_mask = _extract_alpha_mask(image, threshold=24)
-        mask_source = "alpha24"
-    if not isinstance(use_mask, np.ndarray):
-        use_mask = _estimate_foreground_mask_from_border(image)
-        mask_source = "border_estimate"
-    if not isinstance(use_mask, np.ndarray):
-        mask_source = "none"
-
-    palette_metrics_full = _extract_dominant_hex_colors_with_coverage(
+    return _shared_build_single_image_color_context(
         image=image,
-        mask=use_mask if isinstance(use_mask, np.ndarray) else None,
-        top_k=max(3, int(top_k)),
+        description=description,
+        mask=mask,
+        settings=_garment_color_context_settings(),
+        top_k=top_k,
     )
-    palette_metrics = _filter_palette_entries_by_area(
-        palette=palette_metrics_full,
-        min_area_percent=float(FLUX2_COLOR_PALETTE_MIN_AREA_PERCENT),
-        min_items=2,
-    )
-
-    palette_hexes: List[str] = []
-    for entry in palette_metrics:
-        hx = str(entry.get("hex", "")).strip().upper()
-        if re.fullmatch(r"#[0-9A-F]{6}", hx):
-            palette_hexes.append(hx)
-
-    profile = _extract_lab_color_profile(
-        image=image,
-        mask=use_mask if isinstance(use_mask, np.ndarray) else None,
-    )
-
-    image_colors: List[str] = []
-    for hx in palette_hexes[: max(2, int(FLUX2_COLOR_LOCK_TOP_K) + 1)]:
-        rgb = _hex_to_rgb_triplet(hx)
-        if rgb is None:
-            continue
-        token = _canonical_color_token(_nearest_color_label(rgb))
-        if token not in image_colors:
-            image_colors.append(token)
-        if len(image_colors) >= max(2, int(FLUX2_COLOR_LOCK_TOP_K)):
-            break
-    if not image_colors:
-        image_colors = _extract_masked_dominant_color_labels(image, top_k=FLUX2_COLOR_LOCK_TOP_K)
-
-    text_colors = [
-        _canonical_color_token(c)
-        for c in _extract_text_color_terms(description, max_items=FLUX2_COLOR_LOCK_TOP_K)
-    ]
-
-    hints = list(image_colors or [])
-    high_chroma = bool(
-        isinstance(profile.get("meanChroma"), (int, float))
-        and float(profile.get("meanChroma")) >= 18.0
-    )
-    if high_chroma:
-        non_neutral = [c for c in hints if not _is_neutral_color_token(c)]
-        if non_neutral:
-            dedup_non_neutral: List[str] = []
-            for token in non_neutral:
-                if token not in dedup_non_neutral:
-                    dedup_non_neutral.append(token)
-            hints = dedup_non_neutral
-    for token in text_colors:
-        if high_chroma and _is_neutral_color_token(token):
-            continue
-        if token not in hints:
-            hints.append(token)
-    hints = hints[: max(2, int(FLUX2_COLOR_LOCK_TOP_K))]
-
-    return {
-        "maskSource": mask_source,
-        "maskPixels": int(np.sum(use_mask)) if isinstance(use_mask, np.ndarray) else 0,
-        "paletteMetrics": palette_metrics,
-        "paletteHexes": palette_hexes,
-        "profile": profile if isinstance(profile, dict) else {},
-        "hints": hints,
-    }
 
 def _build_flux2_targeted_prompt(
     garment_descriptions: List[str],
@@ -2503,6 +2845,7 @@ def _describe_with_minicpm_service(
     image_signature: str = "",
     service_url: Optional[str] = None,
     prompt_override: Optional[str] = None,
+    return_raw: bool = False,
 ) -> str:
     """
     Fetch descriptor text from standalone MiniCPM service using source image URL.
@@ -2538,6 +2881,8 @@ def _describe_with_minicpm_service(
         image_signature=str(image_signature or "").strip(),
         service_url=base_url,
     )
+    if return_raw:
+        cache_key = f"{cache_key}::raw"
     cached = _minicpm_service_cache_get(cache_key)
     if cached:
         return cached
@@ -2556,9 +2901,9 @@ def _describe_with_minicpm_service(
     text = str(data.get("text", "")).strip()
     if not text:
         raise RuntimeError(f"minicpm_service {kind} returned empty text")
-    normalized = _normalize_minicpm_descriptor_text(text, kind=kind)
-    _minicpm_service_cache_put(cache_key, normalized)
-    return normalized
+    result_text = text if return_raw else _normalize_minicpm_descriptor_text(text, kind=kind)
+    _minicpm_service_cache_put(cache_key, result_text)
+    return result_text
 
 def _resize_for_qwen_caption(image: Image.Image, max_side: int, min_side: int) -> Image.Image:
     """
@@ -2605,7 +2950,7 @@ def _describe_garment_with_backend(
                 min_side=FLUX2_MINICPM_PRODUCT_CAPTION_MIN_SIDE,
             )
             image_signature = _image_signature_for_cache(cache_img)
-            return _describe_with_minicpm_service(
+            raw_text = _describe_with_minicpm_service(
                 image_url=image_url,
                 kind="garment",
                 image_signature=image_signature,
@@ -2615,6 +2960,10 @@ def _describe_garment_with_backend(
                     dominant_color_hexes=dominant_color_hexes,
                     color_hints=color_hints,
                 ),
+                return_raw=True,
+            )
+            return _parse_garment_prompt_sections(raw_text, garment_type=garment_type).get(
+                "base_garment_prompt", ""
             )
         except Exception as err:
             raise RuntimeError(f"MiniCPM service garment description failed: {err}") from err
@@ -2644,6 +2993,54 @@ def _describe_garment_with_backend(
         except Exception as err:
             logger.warning(f"Qwen2.5-VL garment description failed; fallback to Florence. error={err}")
     return str(engine.florence.describe_garment(image)).strip()
+
+
+def _describe_garment_prompt_bundle_with_backend(
+    image: Image.Image,
+    backend: str,
+    image_url: Optional[str] = None,
+    service_url: Optional[str] = None,
+    garment_type: Optional[str] = None,
+    dominant_color_hexes: Optional[List[str]] = None,
+    color_hints: Optional[List[str]] = None,
+) -> Dict[str, str]:
+    resolved = _normalize_descriptor_backend(backend)
+    if resolved == "minicpm_service":
+        try:
+            if not image_url:
+                raise RuntimeError("minicpm_service requires a valid image URL for garment description")
+            cache_img = _resize_for_qwen_caption(
+                image=image,
+                max_side=FLUX2_MINICPM_PRODUCT_CAPTION_MAX_SIDE,
+                min_side=FLUX2_MINICPM_PRODUCT_CAPTION_MIN_SIDE,
+            )
+            image_signature = _image_signature_for_cache(cache_img)
+            raw_text = _describe_with_minicpm_service(
+                image_url=image_url,
+                kind="garment",
+                image_signature=image_signature,
+                service_url=service_url,
+                prompt_override=_build_minicpm_garment_prompt(
+                    garment_type=str(garment_type or ""),
+                    dominant_color_hexes=dominant_color_hexes,
+                    color_hints=color_hints,
+                ),
+                return_raw=True,
+            )
+            return _parse_garment_prompt_sections(raw_text, garment_type=garment_type)
+        except Exception as err:
+            raise RuntimeError(f"MiniCPM service garment description failed: {err}") from err
+
+    desc = _describe_garment_with_backend(
+        image=image,
+        backend=resolved,
+        image_url=image_url,
+        service_url=service_url,
+        garment_type=garment_type,
+        dominant_color_hexes=dominant_color_hexes,
+        color_hints=color_hints,
+    )
+    return _parse_garment_prompt_sections(desc, garment_type=garment_type)
 
 def _describe_user_image_for_flux2(
     user_img: Image.Image,
@@ -5388,14 +5785,85 @@ def _build_minicpm_garment_prompt(
         "If body parts, face, hair, hands, legs, room, bed, mirror, phone, bag, or props are visible, ignore them completely. "
         "Do not mention a person wearing the garment. "
         "Do not describe pose, scene, background, or accessories. "
+        "Return exactly these two labeled sections and no extra text: "
+        "BASE_GARMENT_PROMPT: one concise garment-only prompt containing only the requested garment's characteristics. "
+        "EXTRACTION_AVOID_CLAUSE: only extraction-specific exclusions or contamination to avoid. "
+        "If multiple garments are visible, mention the non-target garments only inside EXTRACTION_AVOID_CLAUSE as exclusions, never inside BASE_GARMENT_PROMPT. "
+        "Do not put avoid words, negatives, or exclusion phrases inside BASE_GARMENT_PROMPT. "
+        "Report garment colors using plain color words only; never output hex codes. "
+        "Do not use skin tone, gloves, jewelry, mannequin color, or background color as garment color. "
+        "Do not invent metallic, gold, silver, or hardware colors unless they are clearly visible on the garment itself. "
         "If visible, explicitly preserve and report front placket shape, button or snap count, button spacing, button size, and button placement. "
         "Return category and type for the requested garment only."
         f"{color_clause}"
     ).strip()
 
+
+def _build_minicpm_garment_color_prompt(garment_type: str) -> str:
+    gtype = _normalize_garment_type(garment_type) or "garment"
+    type_label = {
+        "top": "top",
+        "bottom": "bottom",
+        "dress": "dress",
+        "outer": "outerwear",
+    }.get(gtype, "garment")
+    return (
+        f"Look only at the requested {type_label}. "
+        "Ignore skin, body, face, hair, gloves, jewelry, mannequin, room, background, and lighting. "
+        "Return only 1 to 3 short garment fabric color words in plain English, comma-separated. "
+        "Focus on the main fabric color first, then any true trim or accent color. "
+        "Never output hex codes. Never mention skin tone or background color."
+    ).strip()
+
+
+def _describe_garment_color_terms_with_backend(
+    image: Image.Image,
+    backend: str,
+    image_url: Optional[str] = None,
+    service_url: Optional[str] = None,
+    garment_type: Optional[str] = None,
+) -> List[str]:
+    resolved = _normalize_descriptor_backend(backend)
+    prompt = _build_minicpm_garment_color_prompt(str(garment_type or ""))
+    if resolved == "minicpm_service":
+        try:
+            if not image_url:
+                return []
+            cache_img = _resize_for_qwen_caption(
+                image=image,
+                max_side=FLUX2_MINICPM_PRODUCT_CAPTION_MAX_SIDE,
+                min_side=FLUX2_MINICPM_PRODUCT_CAPTION_MIN_SIDE,
+            )
+            image_signature = _image_signature_for_cache(cache_img)
+            text = _describe_with_minicpm_service(
+                image_url=image_url,
+                kind="garment",
+                image_signature=image_signature,
+                service_url=service_url,
+                prompt_override=prompt,
+            )
+            return _extract_text_color_terms(text, max_items=max(2, FLUX2_COLOR_LOCK_TOP_K))
+        except Exception as err:
+            logger.warning(f"MiniCPM semantic garment color description failed: {err}")
+            return []
+    if resolved == "minicpm":
+        try:
+            minicpm_img = _resize_for_qwen_caption(
+                image=image,
+                max_side=FLUX2_MINICPM_PRODUCT_CAPTION_MAX_SIDE,
+                min_side=FLUX2_MINICPM_PRODUCT_CAPTION_MIN_SIDE,
+            )
+            text = str(engine.minicpm.describe_garment(minicpm_img)).strip()
+            return _extract_text_color_terms(text, max_items=max(2, FLUX2_COLOR_LOCK_TOP_K))
+        except Exception as err:
+            logger.warning(f"MiniCPM semantic garment color fallback failed: {err}")
+            return []
+    return []
+
 def _build_flux2_single_garment_extract_prompt(
     garment_type: str,
     prompt_description: str,
+    extraction_avoid_clause: str = "",
     category_text: Optional[str] = None,
     dominant_color_hexes: Optional[List[str]] = None,
     color_hints: Optional[List[str]] = None,
@@ -5491,6 +5959,10 @@ def _build_flux2_single_garment_extract_prompt(
         subtype_lock_clause = (
             f" This garment is a {inferred_subtype}. Preserve exact cup shape, neckline, strap geometry, closure placement, and bust contour from the source."
         )
+    clean_avoid_clause = " ".join(str(extraction_avoid_clause or "").split()).strip()
+    avoid_clause = ""
+    if clean_avoid_clause:
+        avoid_clause = f" Extraction-only avoid requirements: {clean_avoid_clause}"
 
     return (
         "Extract and regenerate a standalone ecommerce product image from the provided garment crop. "
@@ -5507,7 +5979,7 @@ def _build_flux2_single_garment_extract_prompt(
         "Keep every visible button, snap, stud, or dot-button exactly where it appears in the source, with the same count and vertical spacing. "
         "Preserve the exact source color and material appearance; do not brighten black garments into gray, silver, or white. "
         "Do not include visible limbs, face, torso, neck, shoulders, hands, fingers, legs, feet, or any human remnants in the output garment region. "
-        f"Garment descriptor: {clean_desc}"
+        f"Garment descriptor: {clean_desc}{avoid_clause}"
     )
 
 def _build_flux2_single_garment_extract_negative_prompt(
@@ -6518,6 +6990,83 @@ def _skin_like_mask(rgb_image: np.ndarray) -> np.ndarray:
         h, w = rgb_image.shape[:2]
         return np.zeros((h, w), dtype=bool)
 
+
+def _estimate_type_focused_color_mask(
+    image: Image.Image,
+    garment_type: str,
+    description: str = "",
+) -> Optional[np.ndarray]:
+    try:
+        mask, meta = engine.garment_color_masker.estimate_mask(
+            image=image,
+            garment_type=_normalize_garment_type(str(garment_type or "")) or "top",
+            description=description,
+        )
+        if isinstance(meta, dict) and meta.get("used") is False:
+            logger.info("Garment color mask provider skipped: %s", meta)
+        return np.asarray(mask).astype(bool) if isinstance(mask, np.ndarray) else None
+    except Exception as mask_err:
+        logger.warning(f"Type-focused color mask fallback triggered: {mask_err}")
+        return None
+
+
+def _restore_outer_lower_body_from_reference(
+    reference_image: Image.Image,
+    output_image: Image.Image,
+    target_types: List[str],
+    product_descriptions: Optional[List[str]] = None,
+) -> Tuple[Image.Image, Dict[str, object]]:
+    """
+    Restore the lower-body region from the reference image for short outerwear cases.
+    This guards against pants/shoes changing when only outerwear should change.
+    """
+    try:
+        types = {str(t or "").strip().lower() for t in (target_types or []) if str(t or "").strip()}
+        if types != {"outer"}:
+            return output_image, {"applied": False, "reason": "not_outer_only"}
+
+        desc_low = " ".join(str(v or "") for v in (product_descriptions or [])).lower()
+        if any(token in desc_low for token in ("trench", "overcoat", "long coat", "full-length coat", "duster", "parka")):
+            return output_image, {"applied": False, "reason": "long_outerwear"}
+        if not any(token in desc_low for token in ("blazer", "jacket", "cardigan", "hoodie", "bomber", "shrug", "bolero", "outerwear")):
+            return output_image, {"applied": False, "reason": "unsupported_outer_shape"}
+
+        ref = reference_image.convert("RGB").resize(output_image.size, Image.BICUBIC)
+        out = output_image.convert("RGB")
+        ref_arr = np.asarray(ref, dtype=np.float32)
+        out_arr = np.asarray(out, dtype=np.float32)
+        if ref_arr.shape != out_arr.shape or ref_arr.ndim != 3:
+            return output_image, {"applied": False, "reason": "shape_mismatch"}
+
+        h, w = ref_arr.shape[:2]
+        lower_start = int(round(h * 0.58))
+        lower_full = int(round(h * 0.66))
+        if lower_full <= lower_start:
+            return output_image, {"applied": False, "reason": "invalid_blend_band"}
+
+        lower_delta = np.mean(np.abs(out_arr[lower_start:, :, :] - ref_arr[lower_start:, :, :]), axis=2)
+        changed_ratio = float(np.mean(lower_delta > 12.0))
+        if changed_ratio < 0.015:
+            return output_image, {"applied": False, "reason": "lower_body_unchanged", "changedRatio": round(changed_ratio, 4)}
+
+        weights = np.ones((h,), dtype=np.float32)
+        weights[lower_full:] = 0.0
+        blend_band = max(1, lower_full - lower_start)
+        for yy in range(lower_start, lower_full):
+            frac = float(yy - lower_start) / float(blend_band)
+            weights[yy] = max(0.0, min(1.0, 1.0 - frac))
+        alpha = np.repeat(weights[:, None], w, axis=1)[:, :, None]
+        blended = ((out_arr * alpha) + (ref_arr * (1.0 - alpha))).clip(0, 255).astype(np.uint8)
+        return Image.fromarray(blended), {
+            "applied": True,
+            "reason": "outer_lower_body_restore",
+            "lowerStartY": int(lower_start),
+            "lowerFullY": int(lower_full),
+            "changedRatio": round(changed_ratio, 4),
+        }
+    except Exception as restore_err:
+        return output_image, {"applied": False, "reason": f"error:{restore_err}"}
+
 def _extract_cloth_from_crop(
     crop: Image.Image,
     garment_type: str,
@@ -6920,7 +7469,9 @@ def _run_flux2_cloth_only_extract(
         top_k=7,
     )
     descriptor_dominant_hexes = [
-        str(v) for v in (descriptor_color_ctx.get("paletteHexes") or []) if str(v).strip()
+        str(v)
+        for v in (descriptor_color_ctx.get("dominantHexes") or descriptor_color_ctx.get("paletteHexes") or [])
+        if str(v).strip()
     ]
     descriptor_color_hints = [
         str(v) for v in (descriptor_color_ctx.get("colorHints") or []) if str(v).strip()
@@ -6933,6 +7484,12 @@ def _run_flux2_cloth_only_extract(
         "flux_extract_s": 0.0,
         "upload_s": 0.0,
         "total_s": 0.0,
+    }
+    prompt_bundle: Dict[str, str] = {
+        "raw_text": "",
+        "base_garment_prompt": "",
+        "extraction_avoid_clause": "",
+        "serialized_sections": "",
     }
 
     t_stage = time.time()
@@ -6975,13 +7532,14 @@ def _run_flux2_cloth_only_extract(
     fallback_prompt = " ".join(str(fallback_prompt_description or "").split()).strip()
     if clean_prompt:
         garment_desc = clean_prompt
+        prompt_bundle = _parse_garment_prompt_sections(clean_prompt, garment_type=resolved_type)
         prompt_source = "request"
     else:
         garment_desc = ""
         prompt_source = resolved_backend
         desc_err: Optional[Exception] = None
         try:
-            garment_desc = _describe_garment_with_backend(
+            prompt_bundle = _describe_garment_prompt_bundle_with_backend(
                 image=descriptor_image,
                 backend=resolved_backend,
                 image_url=selected_crop_url,
@@ -6990,6 +7548,7 @@ def _run_flux2_cloth_only_extract(
                 dominant_color_hexes=descriptor_dominant_hexes,
                 color_hints=descriptor_color_hints,
             )
+            garment_desc = str(prompt_bundle.get("base_garment_prompt") or "").strip()
         except Exception as err:
             desc_err = err
 
@@ -6999,7 +7558,7 @@ def _run_flux2_cloth_only_extract(
                 selected_crop_url = _upload_or_raise(selected_crop_bytes, container=VTO_OUTPUT_CONTAINER)
                 if selected_crop_url:
                     selected_crop_url_source = "azure_upload_url_retry"
-                    garment_desc = _describe_garment_with_backend(
+                    prompt_bundle = _describe_garment_prompt_bundle_with_backend(
                         image=descriptor_image,
                         backend=resolved_backend,
                         image_url=selected_crop_url,
@@ -7008,6 +7567,7 @@ def _run_flux2_cloth_only_extract(
                         dominant_color_hexes=descriptor_dominant_hexes,
                         color_hints=descriptor_color_hints,
                     )
+                    garment_desc = str(prompt_bundle.get("base_garment_prompt") or "").strip()
                     desc_err = None
                 else:
                     helper_warnings.append("selected_crop_retry_upload_empty_url")
@@ -7017,6 +7577,7 @@ def _run_flux2_cloth_only_extract(
         garment_desc = " ".join(str(garment_desc or "").split()).strip()
         if desc_err and not garment_desc and fallback_prompt:
             garment_desc = fallback_prompt
+            prompt_bundle = _parse_garment_prompt_sections(fallback_prompt, garment_type=resolved_type)
             prompt_source = "selection_fallback_on_descriptor_error"
             helper_warnings.append(f"descriptor_failed_fallback_used:{desc_err}")
         elif desc_err and not garment_desc:
@@ -7031,6 +7592,15 @@ def _run_flux2_cloth_only_extract(
             enriched = " ".join(str(enriched or "").split()).strip()
             if enriched and enriched != garment_desc:
                 garment_desc = enriched
+                prompt_bundle["base_garment_prompt"] = garment_desc
+                prompt_bundle["serialized_sections"] = (
+                    f"BASE_GARMENT_PROMPT: {garment_desc}"
+                    + (
+                        f"\nEXTRACTION_AVOID_CLAUSE: {prompt_bundle.get('extraction_avoid_clause')}"
+                        if str(prompt_bundle.get("extraction_avoid_clause") or "").strip()
+                        else ""
+                    )
+                )
                 prompt_source = f"{prompt_source}+selection_fallback_enrich"
                 helper_warnings.append("descriptor_enriched_from_selection_fallback")
     stage["descriptor_s"] = round(time.time() - t_stage, 4)
@@ -7049,7 +7619,11 @@ def _run_flux2_cloth_only_extract(
         mask=color_reference_mask if isinstance(color_reference_mask, np.ndarray) else None,
         top_k=7,
     )
-    dominant_hexes = [str(v) for v in (input_color_ctx.get("paletteHexes") or []) if str(v).strip()]
+    dominant_hexes = [
+        str(v)
+        for v in (input_color_ctx.get("dominantHexes") or input_color_ctx.get("paletteHexes") or [])
+        if str(v).strip()
+    ]
     if not dominant_hexes:
         dominant_hexes = _extract_dominant_hex_colors(
             image=color_ctx_image,
@@ -7063,6 +7637,7 @@ def _run_flux2_cloth_only_extract(
     flux_prompt = _build_flux2_single_garment_extract_prompt(
         garment_type=resolved_type,
         prompt_description=garment_desc,
+        extraction_avoid_clause=str(prompt_bundle.get("extraction_avoid_clause") or ""),
         category_text=resolved_type,
         dominant_color_hexes=dominant_hexes,
         color_hints=color_hints,
@@ -7083,6 +7658,7 @@ def _run_flux2_cloth_only_extract(
         steps=run_steps,
         seed=run_seed,
         negative_prompt=built_negative_prompt,
+        use_lora=not ANALYZE_FLUX_DISABLE_LORA,
     )
     stage["flux_generation_s"] = round(time.time() - t_stage, 4)
 
@@ -7191,7 +7767,9 @@ def _run_flux2_cloth_only_extract(
                     top_k=7,
                 )
                 output_hexes = [
-                    str(v) for v in (output_color_ctx.get("paletteHexes") or []) if str(v).strip()
+                    str(v)
+                    for v in (output_color_ctx.get("dominantHexes") or output_color_ctx.get("paletteHexes") or [])
+                    if str(v).strip()
                 ]
                 color_compare = _compute_palette_delta_e(
                     input_hexes=[str(v) for v in dominant_hexes if str(v).strip()],
@@ -7252,6 +7830,15 @@ def _run_flux2_cloth_only_extract(
             "descriptor_transport_source": selected_crop_url_source,
             "prompt_source": prompt_source,
             "prompt_description": garment_desc,
+            "base_garment_prompt": str(prompt_bundle.get("base_garment_prompt") or garment_desc),
+            "extraction_avoid_clause": str(prompt_bundle.get("extraction_avoid_clause") or ""),
+            "prompt_sections_raw": str(prompt_bundle.get("serialized_sections") or ""),
+            "descriptor_raw_text": str(prompt_bundle.get("raw_text") or ""),
+            "dominant_hexes": dominant_hexes,
+            "accent_hexes": [str(v) for v in (input_color_ctx.get("accentHexes") or []) if str(v).strip()],
+            "color_hints": color_hints,
+            "color_profile": color_profile,
+            "color_mask_source": "reference_mask" if isinstance(color_reference_mask, np.ndarray) else "single_image_context",
             "flux_prompt": flux_prompt,
             "negative_prompt": built_negative_prompt,
             "warnings": helper_warnings,
@@ -7265,8 +7852,10 @@ def _run_flux2_cloth_only_extract(
                 "metadata": flux_result.get("metadata", {}),
             },
             "runner": {
-                "analyze_flux_isolated": bool(ANALYZE_FLUX_DISABLE_LORA),
-                "analyze_flux_lora_disabled": bool(getattr(analyze_flux_runner, "enable_lora", True) is False),
+                "analyze_flux_isolated": bool(ANALYZE_FLUX_DISABLE_LORA and not engine._share_flux2_base_runner),
+                "analyze_flux_shared_base_runner": bool(engine._share_flux2_base_runner),
+                "analyze_flux_lora_disabled": bool(ANALYZE_FLUX_DISABLE_LORA),
+                "analyze_flux_runtime_lora_toggle": bool(getattr(analyze_flux_runner, "runtime_lora_toggle", False)),
             },
         },
     }
@@ -7278,6 +7867,7 @@ def _sync_wardrobe_progress(
     progress_id: str,
     output_url: Optional[str],
     prompt_description: str,
+    garment_metadata: Optional[dict],
     metadata: dict,
 ) -> dict:
     if not ENABLE_WARDROBE_PROGRESS_SYNC:
@@ -7299,6 +7889,7 @@ def _sync_wardrobe_progress(
         "isAcceptable": True,
         "isProcessed": False,
         "promptDescription": str(prompt_description or ""),
+        "garmentMetadata": garment_metadata if isinstance(garment_metadata, dict) else {},
         "metadata": metadata,
     }
     headers = {"Content-Type": "application/json"}
@@ -7351,6 +7942,7 @@ def _sync_wardrobe_progress_dispatch(
     progress_id: str,
     output_url: Optional[str],
     prompt_description: str,
+    garment_metadata: Optional[dict],
     metadata: dict,
 ) -> dict:
     if not ANALYZE_PROGRESS_SYNC_ASYNC:
@@ -7359,6 +7951,7 @@ def _sync_wardrobe_progress_dispatch(
             progress_id=progress_id,
             output_url=output_url,
             prompt_description=prompt_description,
+            garment_metadata=garment_metadata,
             metadata=metadata,
         )
     try:
@@ -7368,6 +7961,7 @@ def _sync_wardrobe_progress_dispatch(
             progress_id=progress_id,
             output_url=output_url,
             prompt_description=prompt_description,
+            garment_metadata=garment_metadata,
             metadata=metadata,
         )
         return {
@@ -7384,6 +7978,7 @@ def _sync_wardrobe_progress_dispatch(
             progress_id=progress_id,
             output_url=output_url,
             prompt_description=prompt_description,
+            garment_metadata=garment_metadata,
             metadata=metadata,
         )
 
@@ -7401,6 +7996,7 @@ class Flux2TryonProduct(BaseModel):
     image: str
     promptDescription: Optional[str] = None
     targetType: Optional[str] = None
+    garmentMetadata: Optional[Dict[str, object]] = None
 
 class Flux2TryonUserImage(BaseModel):
     tryonImage: str
@@ -7730,6 +8326,7 @@ async def analyze_parser_joycaption(request: ParserJoyCaptionAnalyzeRequest):
                     prompt=flux_prompt,
                     steps=int(request.flux_steps),
                     seed=int(request.flux_seed),
+                    use_lora=False,
                 )
                 stage_timings["flux_garment_gen_s"] = round(time.time() - t_flux, 4)
 
@@ -8110,24 +8707,128 @@ async def flux2_extract_single_garment(
                 if isinstance(selected_candidate, dict)
                 else []
             )
+            focused_color_mask = _estimate_type_focused_color_mask(
+                descriptor_image,
+                resolved_type,
+                description=garment_desc,
+            )
+            focused_mask_arr = focused_color_mask if isinstance(focused_color_mask, np.ndarray) else None
             input_color_ctx = _build_single_image_color_context(
                 image=descriptor_image,
                 description=garment_desc,
-                mask=None,
+                mask=focused_mask_arr,
                 top_k=7,
             )
-            dominant_hexes = [str(v) for v in (input_color_ctx.get("paletteHexes") or []) if str(v).strip()]
+            dominant_hexes = [
+                str(v)
+                for v in (input_color_ctx.get("dominantHexes") or input_color_ctx.get("paletteHexes") or [])
+                if str(v).strip()
+            ]
             if not dominant_hexes:
                 dominant_hexes = [str(v) for v in parser_hexes if str(v).strip()]
             if not dominant_hexes:
                 dominant_hexes = _extract_dominant_hex_colors(
                     image=descriptor_image,
-                    mask=None,
+                    mask=focused_mask_arr,
                     top_k=4,
                 )
             color_hints = [str(v) for v in (input_color_ctx.get("hints") or []) if str(v).strip()]
             color_profile = input_color_ctx.get("profile") if isinstance(input_color_ctx.get("profile"), dict) else {}
             category_text = str((selected_candidate or {}).get("category_text") or resolved_type).strip()
+            semantic_color_terms: List[str] = []
+            semantic_color_override_applied = False
+            try:
+                descriptor_rgb = np.asarray(descriptor_image.convert("RGB"), dtype=np.uint8)
+                skin_mask = _skin_like_mask(descriptor_rgb)
+                skin_ratio = float(np.mean(skin_mask)) if skin_mask.size else 0.0
+                descriptor_text_color_terms = _extract_text_color_terms(
+                    garment_desc,
+                    max_items=max(2, FLUX2_COLOR_LOCK_TOP_K + 1),
+                )
+                focus_touches_edge = False
+                focus_area_ratio = 0.0
+                if isinstance(focused_mask_arr, np.ndarray) and focused_mask_arr.size:
+                    ys, xs = np.where(focused_mask_arr)
+                    focus_area_ratio = float(np.mean(focused_mask_arr))
+                    if ys.size and xs.size:
+                        focus_touches_edge = bool(
+                            xs.min() <= max(2, int(descriptor_rgb.shape[1] * 0.08))
+                            or xs.max() >= min(descriptor_rgb.shape[1] - 3, int(descriptor_rgb.shape[1] * 0.92))
+                        )
+                if (
+                    resolved_type in {"top", "dress", "outer"}
+                    and selected_crop_url
+                    and (skin_ratio >= 0.24 or focus_touches_edge or focus_area_ratio <= 0.10)
+                ):
+                    semantic_color_terms = _describe_garment_color_terms_with_backend(
+                        image=descriptor_image,
+                        backend=resolved_backend,
+                        image_url=selected_crop_url,
+                        service_url=ANALYZE_MINICPM_SERVICE_URL or MINICPM_SERVICE_URL,
+                        garment_type=resolved_type,
+                    )
+                preferred_descriptor_terms = [
+                    term for term in descriptor_text_color_terms
+                    if _color_family(term) not in {"neutral_dark", "neutral_mid", "neutral_light", "brown"}
+                ]
+                if (
+                    resolved_type == "top"
+                    and preferred_descriptor_terms
+                    and (skin_ratio >= 0.18 or focus_touches_edge or focus_area_ratio <= 0.12)
+                ):
+                    forced_desc_hexes: List[str] = []
+                    for term in preferred_descriptor_terms[: max(1, FLUX2_COLOR_LOCK_TOP_K)]:
+                        rgb = _COLOR_LABEL_RGB_MAP.get(term)
+                        if rgb:
+                            forced_desc_hexes.append("#{:02X}{:02X}{:02X}".format(*rgb))
+                    if forced_desc_hexes:
+                        dominant_hexes = forced_desc_hexes
+                        color_hints = preferred_descriptor_terms[: max(1, FLUX2_COLOR_LOCK_TOP_K)]
+                        semantic_color_override_applied = True
+                if skin_ratio >= 0.24 and preferred_descriptor_terms:
+                    semantic_color_terms = [
+                        term for term in preferred_descriptor_terms + semantic_color_terms
+                        if str(term or "").strip()
+                    ]
+                if semantic_color_terms:
+                    merged_hints: List[str] = []
+                    for term in semantic_color_terms + color_hints:
+                        clean_term = str(term or "").strip().lower()
+                        if clean_term and clean_term not in merged_hints:
+                            merged_hints.append(clean_term)
+                    color_hints = merged_hints[: max(3, FLUX2_COLOR_LOCK_TOP_K + 1)]
+
+                    current_labels = [
+                        _nearest_color_label(rgb)
+                        for rgb in (_hex_to_rgb_tuple(v) for v in dominant_hexes)
+                        if rgb
+                    ]
+                    current_families = {_color_family(label) for label in current_labels if label}
+                    semantic_families = {_color_family(term) for term in semantic_color_terms if term}
+                    non_neutral_semantic = [
+                        term for term in semantic_color_terms
+                        if _color_family(term) not in {"neutral_dark", "neutral_mid", "neutral_light"}
+                    ]
+                    if non_neutral_semantic and (
+                        not current_families
+                        or current_families.issubset({"neutral_dark", "neutral_mid", "neutral_light", "brown"})
+                        or current_families.isdisjoint(semantic_families)
+                    ):
+                        semantic_hexes: List[str] = []
+                        seen_semantic_hexes: Set[str] = set()
+                        for term in non_neutral_semantic:
+                            rgb = _COLOR_LABEL_RGB_MAP.get(term)
+                            if not rgb:
+                                continue
+                            semantic_hex = "#{:02X}{:02X}{:02X}".format(*rgb)
+                            if semantic_hex not in seen_semantic_hexes:
+                                semantic_hexes.append(semantic_hex)
+                                seen_semantic_hexes.add(semantic_hex)
+                        if semantic_hexes:
+                            dominant_hexes = semantic_hexes[: max(2, FLUX2_COLOR_LOCK_TOP_K)]
+                            semantic_color_override_applied = True
+            except Exception as semantic_color_err:
+                logger.warning(f"Semantic garment color fallback skipped: {semantic_color_err}")
 
             t_stage = time.time()
             flux_prompt = _build_flux2_single_garment_extract_prompt(
@@ -8152,6 +8853,7 @@ async def flux2_extract_single_garment(
                 steps=int(steps),
                 seed=int(seed),
                 negative_prompt=built_negative_prompt,
+                use_lora=False,
             )
             stage_timings["flux_generation_s"] = round(time.time() - t_stage, 4)
 
@@ -8203,6 +8905,8 @@ async def flux2_extract_single_garment(
             extraction_meta["parser_input_sha256"] = parser_input_sha256
             extraction_meta["parser_used_flux_raw"] = parser_input_source == "flux_raw"
             extraction_meta["parser_input_matches_flux_raw"] = parser_input_sha256 == raw_sha256
+            extraction_meta["semanticColorTerms"] = semantic_color_terms
+            extraction_meta["semanticColorOverrideApplied"] = bool(semantic_color_override_applied)
 
             try:
                 final_img = Image.open(io.BytesIO(final_bytes))
@@ -8223,8 +8927,16 @@ async def flux2_extract_single_garment(
                 top_k=7,
             )
             color_compare = _compute_palette_delta_e(
-                input_hexes=[str(v) for v in (input_color_ctx.get("paletteHexes") or []) if str(v).strip()],
-                output_hexes=[str(v) for v in (output_color_ctx.get("paletteHexes") or []) if str(v).strip()],
+                input_hexes=[
+                    str(v)
+                    for v in (input_color_ctx.get("dominantHexes") or input_color_ctx.get("paletteHexes") or [])
+                    if str(v).strip()
+                ],
+                output_hexes=[
+                    str(v)
+                    for v in (output_color_ctx.get("dominantHexes") or output_color_ctx.get("paletteHexes") or [])
+                    if str(v).strip()
+                ],
                 max_colors=5,
             )
             stage_timings["flux_extract_s"] = round(time.time() - t_stage, 4)
@@ -9122,6 +9834,9 @@ async def analyze_garment(
                 selected_item["_extracted_image_bytes"] = extracted_image_bytes
                 selected_item["cloth_verified"] = bool(extracted_url)
                 selected_item["cloth_verification_source"] = "flux2_extraction"
+                selected_item["baseGarmentPrompt"] = str(extraction_meta.get("base_garment_prompt") or "").strip()
+                selected_item["extractionAvoidClause"] = str(extraction_meta.get("extraction_avoid_clause") or "").strip()
+                selected_item["promptSectionsRaw"] = str(extraction_meta.get("prompt_sections_raw") or "").strip()
                 extracted_prompt_desc = " ".join(
                     str(extraction_meta.get("prompt_description") or "").split()
                 ).strip()
@@ -9178,7 +9893,12 @@ async def analyze_garment(
                 prompt_source = str(selected_item.get("promptDescriptionSource") or "").strip().lower()
                 if prompt_source == "flux2_extract_descriptor":
                     # Preserve extracted descriptor verbatim for downstream try-on reuse.
-                    prompt_for_product = " ".join(prompt_text_raw.split()).strip()
+                    prompt_for_product = " ".join(
+                        str(
+                            selected_item.get("baseGarmentPrompt")
+                            or prompt_text_raw
+                        ).split()
+                    ).strip()
                     if not prompt_for_product:
                         prompt_for_product = _product_prompt_description(
                             prompt_text_raw,
@@ -9216,6 +9936,45 @@ async def analyze_garment(
                 selected_item["primary_category_key"] = sync_category["primary_category_key"]
                 selected_item["category_key"] = sync_category["category_key"]
                 selected_item["style"] = sync_category["style"]
+                garment_metadata = _build_garment_metadata(
+                    base_garment_prompt=str(selected_item.get("baseGarmentPrompt") or prompt_description),
+                    extraction_avoid_clause=str(selected_item.get("extractionAvoidClause") or ""),
+                    prompt_sections_raw=str(selected_item.get("promptSectionsRaw") or ""),
+                    descriptor_raw_text=str(extraction_obj.get("descriptor_raw_text") or ""),
+                    prompt_description=prompt_description,
+                    prompt_source=str(selected_item.get("promptDescriptionSource") or ""),
+                    target_type=selected_type,
+                    backend_target_type=selected_type,
+                    style=sync_category["style"],
+                    primary_category_key=sync_category["primary_category_key"],
+                    category_key=sync_category["category_key"],
+                    dominant_hexes=[
+                        str(v)
+                        for v in (
+                            extraction_obj.get("dominant_hexes")
+                            or selected_item.get("dominant_color_hexes")
+                            or []
+                        )
+                        if str(v).strip()
+                    ],
+                    accent_hexes=[
+                        str(v)
+                        for v in (extraction_obj.get("accent_hexes") or [])
+                        if str(v).strip()
+                    ],
+                    color_hints=[
+                        str(v)
+                        for v in (extraction_obj.get("color_hints") or [])
+                        if str(v).strip()
+                    ],
+                    color_profile=(
+                        extraction_obj.get("color_profile")
+                        if isinstance(extraction_obj.get("color_profile"), dict)
+                        else {}
+                    ),
+                    color_mask_source=str(extraction_obj.get("color_mask_source") or ""),
+                )
+                selected_item["garmentMetadata"] = garment_metadata
                 progress_meta = {
                     "selected_type": selected_type,
                     "requested_type": requested_type,
@@ -9239,6 +9998,7 @@ async def analyze_garment(
                         progress_id=progress_id,
                         output_url=output_url,
                         prompt_description=prompt_description,
+                        garment_metadata=garment_metadata,
                         metadata=progress_meta,
                     )
                     analyze_stage_timings["progress_sync_s"] = round(time.time() - t_sync, 4)
@@ -9311,6 +10071,7 @@ async def analyze_garment(
             "style": category_meta["style"],
             "selected_type": final_type,
             "selected_item": public_item,
+            "garmentMetadata": public_item.get("garmentMetadata") if public_item else None,
             "cloth_url": public_item.get("url") if public_item else None,
             "output_image_url": output_image_url,
             "extraction_path": extraction_path,
@@ -9446,18 +10207,30 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
         input_summary["userImage"] = user_image_url
 
         product_urls: List[str] = []
+        product_garment_metadata: List[Dict[str, object]] = []
         for idx, product in enumerate(request.products):
             product_url = str(product.image or "").strip()
             if not product_url:
                 raise HTTPException(status_code=422, detail=f"products[{idx}].image is required")
             product_urls.append(product_url)
+            garment_metadata_obj = product.garmentMetadata if isinstance(product.garmentMetadata, dict) else {}
+            product_garment_metadata.append(dict(garment_metadata_obj or {}))
+            metadata_prompt = _extract_garment_metadata_prompt(garment_metadata_obj)
+            metadata_target_type = _extract_garment_metadata_target_type(garment_metadata_obj)
             input_summary["products"].append(
                 {
                     "index": idx,
                     "image": product_url,
-                    "promptProvided": bool(str(product.promptDescription or "").strip()),
+                    "promptProvided": bool(
+                        " ".join(str(product.promptDescription or "").split()).strip() or metadata_prompt
+                    ),
+                    "garmentMetadataProvided": bool(garment_metadata_obj),
                     "targetTypeProvided": bool(str(product.targetType or "").strip()),
-                    "targetTypeValue": (str(product.targetType or "").strip() or None),
+                    "targetTypeValue": (
+                        str(product.targetType or "").strip()
+                        or metadata_target_type
+                        or None
+                    ),
                 }
             )
         input_summary["productCount"] = len(product_urls)
@@ -9472,18 +10245,29 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
         stage_timings["download_products_s"] = round(time.time() - t_stage, 4)
         product_descriptor_color_hexes: List[List[str]] = []
         product_descriptor_color_hints: List[List[str]] = []
-        for product_img in product_imgs:
-            product_color_ctx = _build_single_image_color_context(
-                image=product_img,
-                description="",
-                mask=None,
-                top_k=7,
+        for idx, product_img in enumerate(product_imgs):
+            metadata_hexes, metadata_hints = _extract_garment_metadata_color_payload(
+                product_garment_metadata[idx] if idx < len(product_garment_metadata) else {}
             )
+            product_color_ctx = None
+            if not metadata_hexes and not metadata_hints:
+                product_color_ctx = _build_single_image_color_context(
+                    image=product_img,
+                    description="",
+                    mask=None,
+                    top_k=7,
+                )
             product_descriptor_color_hexes.append(
-                [str(v) for v in (product_color_ctx.get("paletteHexes") or []) if str(v).strip()]
+                metadata_hexes
+                or [
+                    str(v)
+                    for v in (product_color_ctx.get("dominantHexes") or product_color_ctx.get("paletteHexes") or [])
+                    if str(v).strip()
+                ]
             )
             product_descriptor_color_hints.append(
-                [
+                metadata_hints
+                or [
                     str(v)
                     for v in (product_color_ctx.get("colorHints") or product_color_ctx.get("hints") or [])
                     if str(v).strip()
@@ -9508,8 +10292,11 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
             provided_product_prompts: List[str] = []
             requested_target_types: List[Optional[str]] = []
             for idx, product in enumerate(request.products):
-                provided_prompt = str(product.promptDescription or "").strip()
-                requested_type_raw = str(product.targetType or "").strip()
+                garment_metadata_obj = product_garment_metadata[idx] if idx < len(product_garment_metadata) else {}
+                metadata_prompt = _extract_garment_metadata_prompt(garment_metadata_obj)
+                metadata_target_type = _extract_garment_metadata_target_type(garment_metadata_obj)
+                provided_prompt = " ".join(str(product.promptDescription or metadata_prompt or "").split()).strip()
+                requested_type_raw = str(product.targetType or metadata_target_type or "").strip()
                 requested_target_type = _normalize_garment_type(requested_type_raw) if requested_type_raw else None
                 if requested_type_raw and requested_target_type is None:
                     raise HTTPException(
@@ -9523,7 +10310,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
 
             user_prompt_raw = str(request.user_image.promptDescription or "").strip()
             user_prompt_generated = False
-            generated_product_desc_results: Dict[int, Tuple[str, float]] = {}
+            generated_product_desc_results: Dict[int, Tuple[Dict[str, str], float]] = {}
             generated_user_desc_result: Optional[Tuple[str, float]] = None
 
             def _timed_call(fn, *args, **kwargs):
@@ -9539,7 +10326,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                     for idx in generated_product_prompt_indices:
                         future = desc_pool.submit(
                             _timed_call,
-                            _describe_garment_with_backend,
+                            _describe_garment_prompt_bundle_with_backend,
                             product_imgs[idx],
                             descriptor_backend,
                             image_url=product_urls[idx],
@@ -9564,7 +10351,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                         kind, idx = future_map[future]
                         text, elapsed = future.result()
                         if kind == "product":
-                            generated_product_desc_results[int(idx)] = (str(text or ""), float(elapsed))
+                            generated_product_desc_results[int(idx)] = (dict(text or {}), float(elapsed))
                         else:
                             generated_user_desc_result = (str(text or ""), float(elapsed))
                 stage_timings["descriptor_wall_s"] = round(time.time() - t_desc_wall, 4)
@@ -9577,8 +10364,9 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                 if provided_prompt:
                     cleaned_desc = _sanitize_florence_garment_description(provided_prompt)
                 else:
-                    generated_desc, elapsed = generated_product_desc_results[idx]
+                    generated_bundle, elapsed = generated_product_desc_results[idx]
                     item_prompt_gen_s += float(elapsed)
+                    generated_desc = str(generated_bundle.get("base_garment_prompt") or "")
                     cleaned_desc = _sanitize_florence_garment_description(generated_desc)
                 if requested_target_type is None:
                     resolved_target_type = _infer_flux2_target_type(cleaned_desc)
@@ -9678,6 +10466,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
             visual_locks = _build_flux2_visual_lock_clauses(
                 product_images=product_imgs,
                 garment_descriptions=product_descriptions,
+                garment_metadata_list=product_garment_metadata,
             )
             prompt_product_descriptions = list(product_descriptions)
             if descriptor_backend in {"minicpm", "minicpm_service"}:
@@ -9936,6 +10725,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                 neutral_color_calibration = {"applied": False, "reason": "disabled_by_env"}
             else:
                 neutral_color_calibration = {"applied": False, "reason": "not_run"}
+            outer_region_restore: Dict[str, object] = {"applied": False, "reason": "not_run"}
 
             # 6. Inference (Flux 2.0): either single selected candidate or auto multi-candidate
             if mode == "base":
@@ -10191,6 +10981,16 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                                 else "no_drift_improvement"
                             )
 
+                t_outer_restore = time.time()
+                restored_image, outer_region_restore = _restore_outer_lower_body_from_reference(
+                    reference_image=user_img,
+                    output_image=result["image"],
+                    target_types=product_target_types,
+                    product_descriptions=product_descriptions,
+                )
+                result["image"] = restored_image
+                stage_timings["outer_restore_s"] = round(time.time() - t_outer_restore, 4)
+
             # 7. Upload selected result
             stage_timings["flux_generation_sum_s"] = round(
                 sum(float(run.get("latency", 0.0)) for run in candidate_runs), 4
@@ -10226,6 +11026,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
             "result_url": result_url,
             "promptDescription": " | ".join(product_descriptions),
             "productPromptDescriptions": product_descriptions,
+            "productGarmentMetadata": product_garment_metadata,
             "userPromptDescription": user_prompt_description,
             "productColorHints": visual_locks.get("color_hints", []),
             "productColorPalettes": visual_locks.get("color_palettes", []),
@@ -10233,6 +11034,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
             "productColorProfiles": visual_locks.get("color_profiles", []),
             "productDetailHints": visual_locks.get("detail_terms", []),
             "neutralColorCalibration": neutral_color_calibration,
+            "outerLowerBodyRestore": outer_region_restore,
             "neutralColorCalibrationEnabled": bool(
                 FLUX2_NEUTRAL_POST_COLOR_CALIBRATION_ENABLED and (not request_disable_neutral_calibration)
             ),
@@ -10273,6 +11075,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                 "boardMode": board_mode,
                 "productTargetTypes": product_target_types,
                 "productTargetTypeSources": product_target_type_sources,
+                "productGarmentMetadata": product_garment_metadata,
                 "generatedProductPromptIndices": generated_product_prompt_indices,
                 "userPromptGenerated": user_prompt_generated,
                 "singleCandidateMode": FLUX2_SINGLE_CANDIDATE_MODE,
@@ -10286,6 +11089,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                 "productColorPaletteMetrics": visual_locks.get("color_palette_metrics", []),
                 "productColorProfiles": visual_locks.get("color_profiles", []),
                 "neutralColorCalibration": neutral_color_calibration,
+                "outerLowerBodyRestore": outer_region_restore,
                 "neutralColorCalibrationEnabled": bool(
                     FLUX2_NEUTRAL_POST_COLOR_CALIBRATION_ENABLED and (not request_disable_neutral_calibration)
                 ),
@@ -10480,6 +11284,7 @@ def health_check():
                 "analyze_extract_cloth": ANALYZE_EXTRACT_CLOTH,
                 "analyze_use_parser_post_extract": ANALYZE_USE_PARSER_POST_EXTRACT,
                 "analyze_flux_disable_lora": ANALYZE_FLUX_DISABLE_LORA,
+                "flux2_share_base_runner": FLUX2_SHARE_BASE_RUNNER,
                 "analyze_preload_flux_runner": ANALYZE_PRELOAD_FLUX_RUNNER,
                 "analyze_extract_mode": "flux2_single_garment_extract",
                 "analyze_primary_type_with_florence": ANALYZE_PRIMARY_TYPE_WITH_FLORENCE,
