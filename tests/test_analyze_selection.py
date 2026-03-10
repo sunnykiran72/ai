@@ -70,16 +70,18 @@ class _AnalyzePatchContext:
         self.orig_get_crops = api_main.engine.yolo.get_crops
         self.orig_desc_short = api_main.engine.florence.describe_garment_short
         self.orig_desc_detailed = api_main.engine.florence.describe_garment
-        self.orig_run_vton = api_main._run_vton_cloth_only_fallback
+        self.orig_run_vton = getattr(api_main, "_run_vton_cloth_only_fallback", None)
         self.orig_hybrid = api_main.USE_FLORENCE_HYBRID_VERIFY
         self.orig_require_selection = api_main.ANALYZE_REQUIRE_SELECTION
         self.orig_caption_mode = api_main.ANALYZE_CAPTION_MODE
         self.orig_parser_split = api_main.ANALYZE_ENABLE_PARSER_SPLIT
+        self.orig_parser_prerouting = api_main.ANALYZE_USE_PARSER_FOR_PREROUTING
         self.orig_heuristic_split = api_main.ANALYZE_ENABLE_HEURISTIC_SPLIT
         self.orig_extract_cloth = api_main.ANALYZE_EXTRACT_CLOTH
+        self.orig_parser_post_extract = api_main.ANALYZE_USE_PARSER_POST_EXTRACT
         self.orig_prompt_from_extracted = api_main.ANALYZE_PROMPT_FROM_EXTRACTED
-        self.orig_vton_fallback = api_main.ANALYZE_VTON_FALLBACK_ENABLED
-        self.orig_vton_endpoint = api_main.ANALYZE_VTON_CLOTH_ONLY_ENDPOINT
+        self.orig_vton_fallback = getattr(api_main, "ANALYZE_VTON_FALLBACK_ENABLED", None)
+        self.orig_vton_endpoint = getattr(api_main, "ANALYZE_VTON_CLOTH_ONLY_ENDPOINT", None)
         self.orig_blur_enabled = api_main.ANALYZE_BLUR_CHECK_ENABLED
         self.orig_min_accept_conf = api_main.ANALYZE_MIN_ACCEPT_CONFIDENCE
         self.orig_max_file = api_main.ANALYZE_MAX_FILE_BYTES
@@ -130,16 +132,21 @@ class _AnalyzePatchContext:
         api_main.engine.yolo.get_crops = fake_get_crops
         api_main.engine.florence.describe_garment_short = lambda _img: "short floral cotton top"
         api_main.engine.florence.describe_garment = lambda _img: "detailed floral cotton top with long sleeves"
-        api_main._run_vton_cloth_only_fallback = fake_vton
+        if hasattr(api_main, "_run_vton_cloth_only_fallback"):
+            api_main._run_vton_cloth_only_fallback = fake_vton
         api_main.USE_FLORENCE_HYBRID_VERIFY = False
         api_main.ANALYZE_REQUIRE_SELECTION = True
         api_main.ANALYZE_CAPTION_MODE = "short"
         api_main.ANALYZE_ENABLE_PARSER_SPLIT = False
+        api_main.ANALYZE_USE_PARSER_FOR_PREROUTING = False
         api_main.ANALYZE_ENABLE_HEURISTIC_SPLIT = False
         api_main.ANALYZE_EXTRACT_CLOTH = True
+        api_main.ANALYZE_USE_PARSER_POST_EXTRACT = False
         api_main.ANALYZE_PROMPT_FROM_EXTRACTED = False
-        api_main.ANALYZE_VTON_FALLBACK_ENABLED = True
-        api_main.ANALYZE_VTON_CLOTH_ONLY_ENDPOINT = "http://fake-vton.local/v1/cloth-only"
+        if hasattr(api_main, "ANALYZE_VTON_FALLBACK_ENABLED"):
+            api_main.ANALYZE_VTON_FALLBACK_ENABLED = True
+        if hasattr(api_main, "ANALYZE_VTON_CLOTH_ONLY_ENDPOINT"):
+            api_main.ANALYZE_VTON_CLOTH_ONLY_ENDPOINT = "http://fake-vton.local/v1/cloth-only"
         api_main.ANALYZE_BLUR_CHECK_ENABLED = False
         api_main.ANALYZE_MIN_ACCEPT_CONFIDENCE = 0.0
         api_main.ANALYZE_MAX_FILE_BYTES = 3 * 1024 * 1024
@@ -152,16 +159,21 @@ class _AnalyzePatchContext:
         api_main.engine.yolo.get_crops = self.orig_get_crops
         api_main.engine.florence.describe_garment_short = self.orig_desc_short
         api_main.engine.florence.describe_garment = self.orig_desc_detailed
-        api_main._run_vton_cloth_only_fallback = self.orig_run_vton
+        if self.orig_run_vton is not None and hasattr(api_main, "_run_vton_cloth_only_fallback"):
+            api_main._run_vton_cloth_only_fallback = self.orig_run_vton
         api_main.USE_FLORENCE_HYBRID_VERIFY = self.orig_hybrid
         api_main.ANALYZE_REQUIRE_SELECTION = self.orig_require_selection
         api_main.ANALYZE_CAPTION_MODE = self.orig_caption_mode
         api_main.ANALYZE_ENABLE_PARSER_SPLIT = self.orig_parser_split
+        api_main.ANALYZE_USE_PARSER_FOR_PREROUTING = self.orig_parser_prerouting
         api_main.ANALYZE_ENABLE_HEURISTIC_SPLIT = self.orig_heuristic_split
         api_main.ANALYZE_EXTRACT_CLOTH = self.orig_extract_cloth
+        api_main.ANALYZE_USE_PARSER_POST_EXTRACT = self.orig_parser_post_extract
         api_main.ANALYZE_PROMPT_FROM_EXTRACTED = self.orig_prompt_from_extracted
-        api_main.ANALYZE_VTON_FALLBACK_ENABLED = self.orig_vton_fallback
-        api_main.ANALYZE_VTON_CLOTH_ONLY_ENDPOINT = self.orig_vton_endpoint
+        if self.orig_vton_fallback is not None and hasattr(api_main, "ANALYZE_VTON_FALLBACK_ENABLED"):
+            api_main.ANALYZE_VTON_FALLBACK_ENABLED = self.orig_vton_fallback
+        if self.orig_vton_endpoint is not None and hasattr(api_main, "ANALYZE_VTON_CLOTH_ONLY_ENDPOINT"):
+            api_main.ANALYZE_VTON_CLOTH_ONLY_ENDPOINT = self.orig_vton_endpoint
         api_main.ANALYZE_BLUR_CHECK_ENABLED = self.orig_blur_enabled
         api_main.ANALYZE_MIN_ACCEPT_CONFIDENCE = self.orig_min_accept_conf
         api_main.ANALYZE_MAX_FILE_BYTES = self.orig_max_file

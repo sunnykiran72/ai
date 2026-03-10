@@ -1694,6 +1694,8 @@ def _nearest_color_label(rgb_triplet: Tuple[int, int, int]) -> str:
     if chroma < 14.0:
         if l_star < 45.0 and a_star >= 10.0 and b_star <= -2.0:
             return "plum" if l_star < 34.0 else "purple"
+        if l_star < 72.0 and a_star <= -2.5 and b_star >= 3.0:
+            return "olive" if b_star >= 6.0 else "green"
         # This is a neutral/near-neutral color. Use L* to bucket it.
         if l_star < 10.0:
             return "black"
@@ -4036,18 +4038,20 @@ def _parser_split_candidates(image: Image.Image) -> list[dict]:
     if engine.parser is None:
         return []
     parsing = engine.parser.parse(image)
-    category_masks = engine.parser.build_category_masks(parsing)
     total_pixels = float(max(1, image.width * image.height))
 
     candidates = []
     for garment_type in ("outer", "top", "bottom", "dress"):
-        mask = category_masks.get(garment_type)
-        if mask is None:
+        keep_ids = _parser_extraction_keep_ids(garment_type)
+        if not keep_ids:
             continue
+        mask = np.isin(parsing, keep_ids)
         area_ratio = float(mask.sum()) / total_pixels
         if area_ratio < ANALYZE_PARSER_MIN_AREA_RATIO:
             continue
 
+        mask = binary_open(mask, 3)
+        mask = binary_close(mask, 3)
         bbox = _bbox_from_mask(mask)
         if bbox is None:
             continue
@@ -4070,6 +4074,54 @@ def _parser_split_candidates(image: Image.Image) -> list[dict]:
             }
         )
     return candidates
+
+
+def _parser_preroute_instances(
+    image: Image.Image,
+    requested_type: Optional[str],
+    square_padding_ratio: float = 0.12,
+) -> list[dict]:
+    try:
+        parser_candidates = _build_parser_unified_square_split_candidates(
+            image=image,
+            requested_type=requested_type,
+            min_component_area_ratio=ANALYZE_PARSER_MIN_AREA_RATIO,
+            square_padding_ratio=float(square_padding_ratio),
+        )
+    except Exception:
+        parser_candidates = []
+    if not parser_candidates:
+        parser_candidates = _parser_split_candidates(image)
+        return parser_candidates
+
+    instances: list[dict] = []
+    for idx, candidate in enumerate(parser_candidates):
+        bbox = (
+            candidate.get("section_bbox")
+            or candidate.get("bbox")
+            or [0, 0, image.width, image.height]
+        )
+        crop = candidate.get("_crop_image")
+        if not isinstance(crop, Image.Image):
+            x0, y0, x1, y1 = [int(v) for v in bbox]
+            crop = image.crop((x0, y0, x1, y1)).convert("RGB")
+        instances.append(
+            {
+                "id": idx,
+                "label": str(candidate.get("type") or "top"),
+                "confidence": float(
+                    candidate.get("fusion_score")
+                    or candidate.get("parser_component_area_ratio")
+                    or 0.35
+                ),
+                "image": crop,
+                "bbox": [int(v) for v in bbox],
+                "mask": None,
+                "source": "human_parser",
+                "parser_area_ratio": float(candidate.get("parser_component_area_ratio", 0.0) or 0.0),
+            }
+        )
+    return instances
 
 def _parser_split_is_plausible(candidates: list[dict], image_height: int) -> tuple[bool, str]:
     if len(candidates) < 2:
@@ -7124,6 +7176,193 @@ def _parser_extraction_keep_ids(garment_type: str) -> list[int]:
     }
     return _parser_category_ids(g, fallback_map.get(g, [4, 17]))
 
+
+def _parser_strict_mask(parsing: np.ndarray, garment_type: str) -> np.ndarray:
+    ids = _parser_extraction_keep_ids(garment_type)
+    if not ids:
+        return np.zeros_like(parsing, dtype=bool)
+    mask = np.isin(parsing, ids)
+    mask = binary_open(mask, 3)
+    mask = binary_close(mask, 3)
+    return np.asarray(mask).astype(bool)
+
+
+def _split_outfit_signature_from_parsing(parsing: np.ndarray) -> dict[str, object]:
+    if not isinstance(parsing, np.ndarray) or parsing.ndim != 2 or parsing.size == 0:
+        return {"detected": False, "reason": "bad_parsing"}
+
+    image_height, image_width = parsing.shape[:2]
+    total_pixels = float(max(1, image_height * image_width))
+    top_mask = _parser_strict_mask(parsing, "top")
+    bottom_mask = _parser_strict_mask(parsing, "bottom")
+    dress_mask = _parser_strict_mask(parsing, "dress")
+
+    top_area_ratio = float(np.sum(top_mask)) / total_pixels
+    bottom_area_ratio = float(np.sum(bottom_mask)) / total_pixels
+    dress_area_ratio = float(np.sum(dress_mask)) / total_pixels
+    if top_area_ratio < 0.01 or bottom_area_ratio < 0.01:
+        return {
+            "detected": False,
+            "reason": "missing_top_or_bottom",
+            "top_area_ratio": round(top_area_ratio, 6),
+            "bottom_area_ratio": round(bottom_area_ratio, 6),
+            "dress_area_ratio": round(dress_area_ratio, 6),
+        }
+
+    top_bbox = _bbox_from_mask(top_mask)
+    bottom_bbox = _bbox_from_mask(bottom_mask)
+    dress_bbox = _bbox_from_mask(dress_mask)
+    if top_bbox is None or bottom_bbox is None:
+        return {
+            "detected": False,
+            "reason": "bbox_missing",
+            "top_area_ratio": round(top_area_ratio, 6),
+            "bottom_area_ratio": round(bottom_area_ratio, 6),
+            "dress_area_ratio": round(dress_area_ratio, 6),
+        }
+
+    tx0, ty0, tx1, ty1 = [int(v) for v in top_bbox]
+    bx0, by0, bx1, by1 = [int(v) for v in bottom_bbox]
+    if ty0 > int(image_height * 0.55) or by1 < int(image_height * 0.45):
+        return {
+            "detected": False,
+            "reason": "regions_not_upper_lower",
+            "top_bbox": top_bbox,
+            "bottom_bbox": bottom_bbox,
+            "dress_bbox": dress_bbox,
+        }
+
+    gap_px = max(0, by0 - ty1)
+    gap_ratio = float(gap_px) / float(max(1, image_height))
+    x_overlap = _bbox_x_overlap_ratio(top_bbox, bottom_bbox)
+    center_x0 = min(tx0, bx0)
+    center_x1 = max(tx1, bx1)
+    center_width = max(1, center_x1 - center_x0)
+    centered_cover = (
+        tx0 <= int(center_x0 + center_width * 0.18)
+        and tx1 >= int(center_x1 - center_width * 0.18)
+        and bx0 <= int(center_x0 + center_width * 0.18)
+        and bx1 >= int(center_x1 - center_width * 0.18)
+    )
+    if x_overlap < 0.32 or not centered_cover:
+        return {
+            "detected": False,
+            "reason": "alignment_low",
+            "top_bbox": top_bbox,
+            "bottom_bbox": bottom_bbox,
+            "dress_bbox": dress_bbox,
+            "gap_px": int(gap_px),
+            "x_overlap": round(float(x_overlap), 4),
+        }
+
+    gap_fill_ratio = 0.0
+    dress_bridge_ratio = 0.0
+    if gap_px > 0:
+        x0 = max(0, min(tx0, bx0))
+        x1 = min(image_width, max(tx1, bx1))
+        gap_union = top_mask | bottom_mask | dress_mask
+        gap_slice = gap_union[ty1:by0, x0:x1]
+        dress_slice = dress_mask[ty1:by0, x0:x1]
+        if gap_slice.size > 0:
+            gap_fill_ratio = float(np.mean(gap_slice))
+        if dress_slice.size > 0:
+            dress_bridge_ratio = float(np.mean(dress_slice))
+
+    detected = bool(
+        gap_px >= max(8, int(round(image_height * 0.015)))
+        and gap_ratio >= 0.015
+        and gap_fill_ratio <= 0.08
+        and dress_bridge_ratio <= 0.05
+        and dress_area_ratio <= max(0.03, (top_area_ratio + bottom_area_ratio) * 0.55)
+    )
+    return {
+        "detected": detected,
+        "reason": "split_gap_detected" if detected else "bridge_present_or_gap_small",
+        "top_bbox": top_bbox,
+        "bottom_bbox": bottom_bbox,
+        "dress_bbox": dress_bbox,
+        "gap_px": int(gap_px),
+        "gap_ratio": round(gap_ratio, 4),
+        "gap_fill_ratio": round(gap_fill_ratio, 4),
+        "dress_bridge_ratio": round(dress_bridge_ratio, 4),
+        "top_area_ratio": round(top_area_ratio, 6),
+        "bottom_area_ratio": round(bottom_area_ratio, 6),
+        "dress_area_ratio": round(dress_area_ratio, 6),
+        "x_overlap": round(float(x_overlap), 4),
+    }
+
+
+def _dress_item_split_outfit_signature(
+    item: dict,
+    full_image: Optional[Image.Image] = None,
+    total_items: Optional[int] = None,
+) -> dict[str, object]:
+    if engine.parser is None:
+        return {"detected": False, "reason": "parser_unavailable"}
+    try:
+        crop = None
+        if isinstance(full_image, Image.Image):
+            try:
+                extract_plan = _prepare_extract_source_image(
+                    full_image=full_image,
+                    bbox=item.get("bbox"),
+                    garment_type="dress",
+                    total_items=int(total_items or 1),
+                    detector_mask=item.get("_mask_obj"),
+                )
+                crop = extract_plan.image
+            except Exception:
+                crop = None
+        if not isinstance(crop, Image.Image):
+            crop = item.get("_image_obj")
+        if not isinstance(crop, Image.Image):
+            crop = item.get("_preview_image") or item.get("_crop_image")
+        if not isinstance(crop, Image.Image):
+            return {"detected": False, "reason": "crop_unavailable"}
+        parsing = engine.parser.parse(crop.convert("RGB"))
+        return _split_outfit_signature_from_parsing(parsing)
+    except Exception as split_err:
+        return {"detected": False, "reason": f"error:{split_err}"}
+
+
+def _suppress_split_outfit_dress_items(
+    items: list[dict],
+    full_image: Optional[Image.Image] = None,
+) -> list[dict]:
+    if len(items) <= 1 or engine.parser is None:
+        return items
+
+    top_exists = any(_normalize_garment_type(str(item.get("type") or "")) == "top" for item in items)
+    bottom_exists = any(_normalize_garment_type(str(item.get("type") or "")) == "bottom" for item in items)
+    if not (top_exists or bottom_exists):
+        return items
+
+    filtered: list[dict] = []
+    removed = 0
+    for item in items:
+        item_type = _normalize_garment_type(str(item.get("type") or ""))
+        if item_type != "dress":
+            filtered.append(item)
+            continue
+        signature = _dress_item_split_outfit_signature(
+            item,
+            full_image=full_image,
+            total_items=len(items),
+        )
+        item["split_outfit_signature"] = signature
+        if bool(signature.get("detected")) and (top_exists or bottom_exists):
+            item.setdefault("reason_codes", [])
+            item["reason_codes"].append("dress_split_outfit_suppressed")
+            removed += 1
+            continue
+        filtered.append(item)
+
+    if filtered and removed > 0:
+        for idx, item in enumerate(filtered):
+            item["garment_id"] = idx
+        return filtered
+    return items
+
 def _parser_alias_ids(aliases: list[str], fallback: Optional[list[int]] = None) -> list[int]:
     out: list[int] = []
     runtime = _parser_runtime_label2id()
@@ -7787,14 +8026,16 @@ def _run_flux2_cloth_only_extract(
     fallback_prompt_description: str = "",
     negative_prompt: str = "",
     description_backend: Optional[str] = None,
-    use_parser_post_extract: Optional[bool] = None,
     steps: Optional[int] = None,
     seed: Optional[int] = None,
     color_reference_image: Optional[Image.Image] = None,
+    apply_type_color_mask: bool = False,
 ) -> dict:
     """
     Internal analyze-path garment extraction using Flux2 single-garment prompt logic.
-    Uses parser-guided post-extraction to suppress person/object leakage and preserve cloth-only output.
+    Analyze-path garment extraction:
+    - optional type-guided color masking on the reference image
+    - raw Flux output postprocessed only with background removal / crop-fit
     """
     t_all_start = time.time()
     resolved_type = _normalize_garment_type(garment_type)
@@ -7815,15 +8056,7 @@ def _run_flux2_cloth_only_extract(
     analyze_service_url = str(ANALYZE_MINICPM_SERVICE_URL or MINICPM_SERVICE_URL or "").strip().rstrip("/")
     run_steps = int(steps if isinstance(steps, int) and steps >= 4 else FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS)
     run_seed = int(seed if isinstance(seed, int) and seed >= 0 else FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_SEED)
-    if use_parser_post_extract is None:
-        effective_use_parser_post_extract = bool(ANALYZE_USE_PARSER_POST_EXTRACT)
-    else:
-        effective_use_parser_post_extract = bool(use_parser_post_extract)
-    if FLUX2_SINGLE_GARMENT_EXTRACT_DISABLE_PARSER and effective_use_parser_post_extract:
-        helper_warnings = ["parser_disabled_by_config"]
-        effective_use_parser_post_extract = False
-    else:
-        helper_warnings = []
+    helper_warnings = []
 
     src = source_image.convert("RGB")
     descriptor_image = src
@@ -7840,18 +8073,21 @@ def _run_flux2_cloth_only_extract(
         for v in (prompt_description, fallback_prompt_description)
         if str(v).strip()
     ).strip()
-    descriptor_color_mask, descriptor_color_mask_meta = _estimate_type_focused_color_mask(
-        descriptor_color_ctx_image,
-        resolved_type,
-        color_mask_description,
-        return_meta=True,
-    )
+    descriptor_color_mask = None
+    descriptor_color_mask_meta = {"source": "disabled", "used": False, "reason": "type_mask_not_requested"}
+    if apply_type_color_mask:
+        descriptor_color_mask, descriptor_color_mask_meta = _estimate_type_focused_color_mask(
+            descriptor_color_ctx_image,
+            resolved_type,
+            color_mask_description,
+            return_meta=True,
+        )
     descriptor_color_ctx = _build_single_image_color_context(
         image=descriptor_color_ctx_image,
         description="",
         mask=descriptor_color_mask,
         top_k=7,
-        force_masking=bool(isinstance(descriptor_color_mask, np.ndarray)),
+        force_masking=bool(apply_type_color_mask and isinstance(descriptor_color_mask, np.ndarray)),
     )
     descriptor_dominant_hexes = [
         str(v)
@@ -8003,7 +8239,7 @@ def _run_flux2_cloth_only_extract(
         description=garment_desc,
         mask=descriptor_color_mask,
         top_k=7,
-        force_masking=bool(isinstance(descriptor_color_mask, np.ndarray)),
+        force_masking=bool(apply_type_color_mask and isinstance(descriptor_color_mask, np.ndarray)),
     )
     dominant_hexes = [
         str(v)
@@ -8090,63 +8326,21 @@ def _run_flux2_cloth_only_extract(
     raw_img.save(raw_buf, format="PNG")
     raw_bytes = raw_buf.getvalue()
     raw_sha256 = hashlib.sha256(raw_bytes).hexdigest()
-    parser_input_source = "flux_raw"
-    parser_input_sha256 = raw_sha256
-
     t_stage = time.time()
     final_bytes = raw_bytes
-    extraction_meta: Dict[str, object] = {}
+    extraction_meta: Dict[str, object] = {
+        "path": "background_removal_only",
+        "parserSkipped": True,
+    }
     postprocess_meta: Dict[str, object] = {}
-    extraction_path = "raw_flux_output"
-    extracted_rgba = None
+    extraction_path = "background_removal_only"
     try:
-        if effective_use_parser_post_extract:
-            try:
-                extracted_rgba, extraction_meta = _extract_cloth_from_crop(
-                    raw_img.convert("RGB"),
-                    resolved_type,
-                    enforce_safety_guards=True,
-                    allow_top_dress_backfill=True,
-                    parser_only_override=False,
-                )
-            except Exception as strict_extract_err:
-                helper_warnings.append(f"strict_extract_failed:{strict_extract_err}")
-                parser_input_source = "flux_raw"
-                parser_input_sha256 = raw_sha256
-                extracted_rgba, extraction_meta = _extract_cloth_from_crop(
-                    raw_img.convert("RGB"),
-                    resolved_type,
-                    enforce_safety_guards=False,
-                    allow_top_dress_backfill=True,
-                    parser_only_override=False,
-                )
-                extraction_meta = dict(extraction_meta or {})
-                extraction_meta["strict_retry_mode"] = "non_strict_flux_raw"
-        else:
-            extraction_path = "crop_then_aspect_only_no_parser"
-            final_bytes, postprocess_meta = _postprocess_extracted_garment_bytes(
-                raw_bytes,
-                garment_type=resolved_type,
-                force_transparent=True,
-                transparent_only=True,
-            )
-            extraction_meta = {
-                "path": extraction_path,
-                "parserSkipped": True,
-            }
-            parser_input_source = "none"
-            parser_input_sha256 = ""
-
-        if extracted_rgba is not None:
-            ext_buf = io.BytesIO()
-            extracted_rgba.save(ext_buf, format="PNG")
-            extracted_bytes = ext_buf.getvalue()
-            final_bytes, postprocess_meta = _postprocess_extracted_garment_bytes(
-                extracted_bytes,
-                garment_type=resolved_type,
-                force_transparent=True,
-            )
-            extraction_path = "parser_extract_then_postprocess"
+        final_bytes, postprocess_meta = _postprocess_extracted_garment_bytes(
+            raw_bytes,
+            garment_type=resolved_type,
+            force_transparent=True,
+            transparent_only=True,
+        )
     except Exception as extract_err:
         helper_warnings.append(f"extract_postprocess_failed:{extract_err}")
         final_bytes, postprocess_meta = _crop_and_fit_garment_bytes(raw_bytes)
@@ -8155,12 +8349,12 @@ def _run_flux2_cloth_only_extract(
 
     extraction_meta = dict(extraction_meta or {})
     extraction_meta["raw_flux_sha256"] = raw_sha256
-    extraction_meta["parser_input_source"] = parser_input_source
-    extraction_meta["parser_input_sha256"] = parser_input_sha256
-    extraction_meta["use_parser_post_extract"] = bool(effective_use_parser_post_extract)
-    extraction_meta["parser_skipped"] = not bool(effective_use_parser_post_extract)
-    extraction_meta["parser_used_flux_raw"] = parser_input_source == "flux_raw"
-    extraction_meta["parser_input_matches_flux_raw"] = parser_input_sha256 == raw_sha256
+    extraction_meta["parser_input_source"] = "none"
+    extraction_meta["parser_input_sha256"] = ""
+    extraction_meta["use_parser_post_extract"] = False
+    extraction_meta["parser_skipped"] = True
+    extraction_meta["parser_used_flux_raw"] = False
+    extraction_meta["parser_input_matches_flux_raw"] = False
 
     stage["flux_extract_s"] = round(time.time() - t_stage, 4)
 
@@ -8925,18 +9119,17 @@ async def flux2_extract_single_garment(
         provided_negative = " ".join(str(negative_prompt or negativePrompt or "").split()).strip()
         requested_use_full_image_context = bool(use_full_image_context)
         requested_use_parser_board_reference = bool(use_parser_board_reference)
-        requested_use_parser_post_extract = bool(use_parser_post_extract)
+        requested_use_parser_post_extract = False
 
         effective_use_full_image_context = requested_use_full_image_context
         effective_use_parser_board_reference = requested_use_parser_board_reference
-        effective_use_parser_post_extract = requested_use_parser_post_extract
+        effective_use_parser_post_extract = False
         if FLUX2_SINGLE_GARMENT_EXTRACT_DISABLE_PARSER:
             effective_use_full_image_context = True
             effective_use_parser_board_reference = False
             effective_use_parser_post_extract = False
             if (
                 requested_use_parser_board_reference
-                or requested_use_parser_post_extract
                 or (not requested_use_full_image_context)
             ):
                 warnings.append("parser_disabled_for_extract_endpoint")
@@ -9128,45 +9321,32 @@ async def flux2_extract_single_garment(
             parser_input_sha256 = raw_sha256
 
             t_stage = time.time()
-            extraction_warning = ""
-            extraction_mode = "parser_extract_then_postprocess"
-            if effective_use_parser_post_extract:
-                try:
-                    extracted_rgba, extraction_meta = _extract_cloth_from_crop(
-                        flux_raw_img,
-                        resolved_type,
-                        enforce_safety_guards=True,
-                        allow_top_dress_backfill=not bool(strict_section_enforcement),
-                    )
-                    ext_buf = io.BytesIO()
-                    extracted_rgba.save(ext_buf, format="PNG")
-                    extracted_bytes = ext_buf.getvalue()
-                    final_bytes, postprocess_meta = _postprocess_extracted_garment_bytes(
-                        extracted_bytes,
-                        garment_type=resolved_type,
-                    )
-                except Exception as extract_err:
-                    extraction_warning = str(extract_err)
-                    extraction_mode = "crop_then_aspect_only_fallback"
-                    extraction_meta = {
-                        "path": extraction_mode,
-                        "warning": extraction_warning,
-                    }
-                    final_bytes, postprocess_meta = _crop_and_fit_garment_bytes(raw_bytes)
-            else:
-                extraction_mode = "crop_then_aspect_only_no_parser"
+            extraction_mode = "background_removal_only"
+            extraction_meta = {
+                "path": extraction_mode,
+                "parserSkipped": True,
+            }
+            try:
+                final_bytes, postprocess_meta = _postprocess_extracted_garment_bytes(
+                    raw_bytes,
+                    garment_type=resolved_type,
+                    force_transparent=True,
+                    transparent_only=True,
+                )
+            except Exception as extract_err:
+                extraction_mode = "crop_then_aspect_only_fallback"
                 extraction_meta = {
                     "path": extraction_mode,
-                    "parserSkipped": True,
+                    "warning": str(extract_err),
                 }
                 final_bytes, postprocess_meta = _crop_and_fit_garment_bytes(raw_bytes)
 
             extraction_meta = dict(extraction_meta or {})
             extraction_meta["raw_flux_sha256"] = raw_sha256
-            extraction_meta["parser_input_source"] = parser_input_source
-            extraction_meta["parser_input_sha256"] = parser_input_sha256
-            extraction_meta["parser_used_flux_raw"] = parser_input_source == "flux_raw"
-            extraction_meta["parser_input_matches_flux_raw"] = parser_input_sha256 == raw_sha256
+            extraction_meta["parser_input_source"] = "none"
+            extraction_meta["parser_input_sha256"] = ""
+            extraction_meta["parser_used_flux_raw"] = False
+            extraction_meta["parser_input_matches_flux_raw"] = False
 
             try:
                 final_img = Image.open(io.BytesIO(final_bytes))
@@ -9664,10 +9844,13 @@ async def analyze_garment(
                     and ANALYZE_USE_PARSER_FOR_PREROUTING
                     and ANALYZE_ENABLE_PARSER_SPLIT
                     and engine.parser is not None
-                    and len(instances) <= 1
                 ):
                     try:
-                        parser_candidates = _parser_split_candidates(img)
+                        parser_candidates = _parser_preroute_instances(
+                            image=img,
+                            requested_type=requested_type,
+                            square_padding_ratio=0.12,
+                        )
                         parser_candidates_count = len(parser_candidates)
                         if len(parser_candidates) >= 2:
                             plausible, reason = _parser_split_is_plausible(parser_candidates, img.height)
@@ -10004,6 +10187,7 @@ async def analyze_garment(
                     items = typed_deduped_items
                     for new_idx, item in enumerate(items):
                         item["garment_id"] = new_idx
+                # Parser masking is reserved for typed color measurement, not routing.
 
             if not direct_requested_type_mode:
                 items, forced_dress_fallback = _maybe_force_uncertain_fullbody_to_dress(
@@ -10146,7 +10330,6 @@ async def analyze_garment(
                     "total_garments_found": len(items),
                     "selection_hint": {
                         "expected_field": "type",
-                        "alternate_field": "selected_index",
                         "allowed_types": ["top", "bottom", "dress", "outer"],
                     },
                     "item_breakdown": item_breakdown,
@@ -10261,10 +10444,10 @@ async def analyze_garment(
                         prompt_description="",
                         fallback_prompt_description=selected_prompt_hint,
                         description_backend=FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND,
-                        use_parser_post_extract=False,
                         steps=FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS,
                         seed=FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_SEED,
                         color_reference_image=selected_item.get("_image_obj"),
+                        apply_type_color_mask=bool(forced_type),
                     )
                     fallback = flux_fallback
                     extracted_url = str(flux_fallback.get("url") or "")
