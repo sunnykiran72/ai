@@ -1,9 +1,10 @@
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 from PIL import Image, ImageDraw
 
-from ai.main import _estimate_type_focused_color_mask, _restore_outer_lower_body_from_reference
+from ai.main import _build_single_image_color_context, _estimate_type_focused_color_mask, _restore_outer_lower_body_from_reference
 
 
 class ColorFocusAndOuterRestoreTests(unittest.TestCase):
@@ -57,6 +58,33 @@ class ColorFocusAndOuterRestoreTests(unittest.TestCase):
         self.assertTrue(np.allclose(restored_arr[180, 40], np.asarray(ref)[180, 40], atol=2))
         # Upper body/jacket remains from output.
         self.assertTrue(np.allclose(restored_arr[40, 40], np.asarray(out)[40, 40], atol=2))
+
+    def test_force_masking_overrides_global_disable_for_color_context(self):
+        img = Image.new("RGB", (120, 120), color=(194, 143, 108))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle((30, 20, 90, 100), fill=(124, 131, 124))
+        mask = np.zeros((120, 120), dtype=bool)
+        mask[20:101, 30:91] = True
+
+        with patch("ai.main.COLOR_CONTEXT_DISABLE_MASKING", True):
+            unmasked = _build_single_image_color_context(
+                image=img,
+                description="",
+                mask=mask,
+                top_k=5,
+                force_masking=False,
+            )
+            masked = _build_single_image_color_context(
+                image=img,
+                description="",
+                mask=mask,
+                top_k=5,
+                force_masking=True,
+            )
+
+        self.assertEqual(unmasked.get("maskSource"), "disabled")
+        self.assertNotEqual(masked.get("maskSource"), "disabled")
+        self.assertIn("gray", [str(v) for v in (masked.get("colorHints") or [])])
 
 
 if __name__ == "__main__":

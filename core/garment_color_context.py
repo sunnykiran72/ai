@@ -95,6 +95,7 @@ class GarmentColorContextSettings:
     profile_trim_bright_percentile: float = 98.0
     accent_min_area_percent: float = 0.35
     accent_top_k: int = 2
+    disable_masking: bool = False
 
 
 def _canonical_color_token(color: str) -> str:
@@ -413,7 +414,7 @@ def _extract_dominant_hex_colors_with_coverage(
 
         pixels = arr.reshape(-1, 3)
         use_mask = mask
-        if settings.decontamination_enabled:
+        if settings.decontamination_enabled and not settings.disable_masking:
             clean_mask = _get_clean_foreground_mask(image, settings=settings, mask=mask)
             if isinstance(clean_mask, np.ndarray):
                 use_mask = clean_mask
@@ -534,15 +535,15 @@ def _extract_lab_color_profile(
             return {}
 
         use_mask = None
-        if settings.decontamination_enabled:
+        if settings.decontamination_enabled and not settings.disable_masking:
             clean_mask = _get_clean_foreground_mask(image, settings=settings, mask=mask)
             if isinstance(clean_mask, np.ndarray):
                 use_mask = clean_mask
         if not isinstance(use_mask, np.ndarray):
             use_mask = mask
-        if not isinstance(use_mask, np.ndarray):
+        if not settings.disable_masking and not isinstance(use_mask, np.ndarray):
             use_mask = _extract_alpha_mask(image)
-        if not isinstance(use_mask, np.ndarray):
+        if not settings.disable_masking and not isinstance(use_mask, np.ndarray):
             use_mask = _estimate_foreground_mask_from_border(image)
 
         pixels = arr.reshape(-1, 3)
@@ -619,19 +620,21 @@ def build_single_image_color_context(
     config = settings or GarmentColorContextSettings()
     palette_top_k = max(3, int(top_k if isinstance(top_k, int) and top_k > 0 else config.palette_top_k))
 
-    use_mask = _get_clean_foreground_mask(image, settings=config, mask=mask)
-    mask_source = "clean_foreground"
-    if not isinstance(use_mask, np.ndarray):
-        use_mask = _extract_alpha_mask(image, threshold=72)
-        mask_source = "alpha72"
-    if not isinstance(use_mask, np.ndarray):
-        use_mask = _extract_alpha_mask(image, threshold=24)
-        mask_source = "alpha24"
-    if not isinstance(use_mask, np.ndarray):
-        use_mask = _estimate_foreground_mask_from_border(image)
-        mask_source = "border_estimate"
-    if not isinstance(use_mask, np.ndarray):
-        mask_source = "none"
+    use_mask: Optional[np.ndarray] = None
+    mask_source = "disabled" if config.disable_masking else "clean_foreground"
+    if not config.disable_masking:
+        use_mask = _get_clean_foreground_mask(image, settings=config, mask=mask)
+        if not isinstance(use_mask, np.ndarray):
+            use_mask = _extract_alpha_mask(image, threshold=72)
+            mask_source = "alpha72"
+        if not isinstance(use_mask, np.ndarray):
+            use_mask = _extract_alpha_mask(image, threshold=24)
+            mask_source = "alpha24"
+        if not isinstance(use_mask, np.ndarray):
+            use_mask = _estimate_foreground_mask_from_border(image)
+            mask_source = "border_estimate"
+        if not isinstance(use_mask, np.ndarray):
+            mask_source = "none"
 
     palette_metrics_full = _extract_dominant_hex_colors_with_coverage(
         image=image,
@@ -704,6 +707,8 @@ def build_single_image_color_context(
             hints = dedup_non_neutral
     for token in text_colors:
         if high_chroma and _is_neutral_color_token(token):
+            continue
+        if profile_is_neutral and not _is_neutral_color_token(token):
             continue
         if token not in hints:
             hints.append(token)

@@ -10,6 +10,7 @@ import hashlib
 import colorsys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import replace
 from typing import Optional, List, Tuple, Dict
 
 import numpy as np
@@ -398,7 +399,6 @@ ANALYZE_EXTRACT_DRESS_TOP_RECOVERY_RATIO = _env_float("ANALYZE_EXTRACT_DRESS_TOP
 ANALYZE_EXTRACT_TOP_TOP_RECOVERY_RATIO = _env_float("ANALYZE_EXTRACT_TOP_TOP_RECOVERY_RATIO", 0.08)
 ANALYZE_EXTRACT_MIN_MASK_RATIO = _env_float("ANALYZE_EXTRACT_MIN_MASK_RATIO", 0.01)
 ANALYZE_EXTRACT_RELAXED_RESCUE = os.getenv("ANALYZE_EXTRACT_RELAXED_RESCUE", "1") == "1"
-ANALYZE_EXTRACT_ALLOW_SOURCE_FALLBACK = os.getenv("ANALYZE_EXTRACT_ALLOW_SOURCE_FALLBACK", "0") == "1"
 ANALYZE_EXTRACT_EDGE_FEATHER_PX = max(0, _env_int("ANALYZE_EXTRACT_EDGE_FEATHER_PX", 1))
 ANALYZE_EXTRACT_COMPONENT_MIN_RATIO = _env_float("ANALYZE_EXTRACT_COMPONENT_MIN_RATIO", 0.0007)
 ANALYZE_EXTRACT_KEEP_DILATE = max(0, _env_int("ANALYZE_EXTRACT_KEEP_DILATE", 3))
@@ -447,6 +447,46 @@ PARSER_FUSION_WEIGHT_YOLO = _env_float("PARSER_FUSION_WEIGHT_YOLO", 0.20)
 PARSER_FUSION_WEIGHT_OPENCLIP = _env_float("PARSER_FUSION_WEIGHT_OPENCLIP", 0.40)
 PARSER_FUSION_MIN_SCORE_KEEP = _env_float("PARSER_FUSION_MIN_SCORE_KEEP", 0.24)
 PARSER_FUSION_AMBIGUITY_GAP = _env_float("PARSER_FUSION_AMBIGUITY_GAP", 0.08)
+COLOR_CONTEXT_DISABLE_MASKING = os.getenv("COLOR_CONTEXT_DISABLE_MASKING", "0") == "1"
+GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED = os.getenv("GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED", "0") == "1"
+USER_PREP_MAX_FILE_BYTES = max(1, _env_int("USER_PREP_MAX_FILE_BYTES", 8 * 1024 * 1024))
+USER_PREP_BLUR_CHECK_ENABLED = os.getenv("USER_PREP_BLUR_CHECK_ENABLED", "1") == "1"
+USER_PREP_MIN_FOCUS_SCORE = _env_float("USER_PREP_MIN_FOCUS_SCORE", 18.0)
+USER_PREP_COMPONENT_MIN_AREA_RATIO = min(
+    0.8,
+    max(0.0005, _env_float("USER_PREP_COMPONENT_MIN_AREA_RATIO", 0.008)),
+)
+USER_PREP_MAIN_PERSON_MIN_AREA_RATIO = min(
+    0.95,
+    max(0.001, _env_float("USER_PREP_MAIN_PERSON_MIN_AREA_RATIO", 0.08)),
+)
+USER_PREP_MAIN_PERSON_PAD_RATIO = min(0.5, max(0.0, _env_float("USER_PREP_MAIN_PERSON_PAD_RATIO", 0.08)))
+USER_PREP_MIN_CROP_SIDE_PX = max(64, _env_int("USER_PREP_MIN_CROP_SIDE_PX", 192))
+USER_PREP_REQUIRE_FACE = os.getenv("USER_PREP_REQUIRE_FACE", "1") == "1"
+USER_PREP_FACE_MIN_PIXELS = max(64, _env_int("USER_PREP_FACE_MIN_PIXELS", 520))
+USER_PREP_FACE_MIN_AREA_RATIO = min(
+    0.2,
+    max(0.0002, _env_float("USER_PREP_FACE_MIN_AREA_RATIO", 0.0016)),
+)
+USER_PREP_FACE_MIN_SIDE_PX = max(16, _env_int("USER_PREP_FACE_MIN_SIDE_PX", 28))
+USER_PREP_FACE_MIN_FOCUS_SCORE = _env_float("USER_PREP_FACE_MIN_FOCUS_SCORE", 16.0)
+USER_PREP_REQUIRE_BG_REMOVAL = os.getenv("USER_PREP_REQUIRE_BG_REMOVAL", "1") == "1"
+USER_PREP_BG_BACKEND = os.getenv("USER_PREP_BG_BACKEND", "birefnet").strip().lower()
+if USER_PREP_BG_BACKEND not in {"birefnet", "rembg", "auto"}:
+    USER_PREP_BG_BACKEND = "birefnet"
+USER_PREP_ALPHA_MIN_FOREGROUND_RATIO = min(
+    0.99,
+    max(0.01, _env_float("USER_PREP_ALPHA_MIN_FOREGROUND_RATIO", 0.05)),
+)
+USER_PREP_ALPHA_MIN_TRANSPARENT_RATIO = min(
+    0.99,
+    max(0.0, _env_float("USER_PREP_ALPHA_MIN_TRANSPARENT_RATIO", 0.02)),
+)
+USER_PREP_DESCRIPTION_BACKEND = os.getenv("USER_PREP_DESCRIPTION_BACKEND", "minicpm_service").strip().lower()
+if USER_PREP_DESCRIPTION_BACKEND not in {"florence", "qwen2_5_vl", "joycaption", "minicpm", "minicpm_service"}:
+    USER_PREP_DESCRIPTION_BACKEND = "minicpm_service"
+USER_PREP_MIN_PROMPT_WORDS = max(4, _env_int("USER_PREP_MIN_PROMPT_WORDS", 10))
+USER_PREP_UPLOAD_CONTAINER = os.getenv("USER_PREP_UPLOAD_CONTAINER", VTO_OUTPUT_CONTAINER).strip() or VTO_OUTPUT_CONTAINER
 gpu_semaphore = asyncio.Semaphore(GPU_CONCURRENCY)
 _WARDROBE_PROGRESS_EXECUTOR = ThreadPoolExecutor(max_workers=ANALYZE_PROGRESS_SYNC_MAX_WORKERS)
 _REMBG_SESSION = None
@@ -925,7 +965,15 @@ def _extract_prompt_fact_segments(text: str) -> Dict[str, str]:
         "preserve",
     ]
     parsed: Dict[str, str] = {}
+    structured = _parse_structured_descriptor(src)
     for label in labels:
+        value = " ".join(str(structured.get(label) or "").split()).strip(" ,.")
+        if value:
+            parsed[label] = value
+
+    for label in labels:
+        if parsed.get(label):
+            continue
         match = re.search(
             rf"(?:^|,\s*){re.escape(label)}\s+(.+?)(?=(?:,\s*(?:{'|'.join(labels)})\s+)|$)",
             src,
@@ -1019,7 +1067,8 @@ def _resolve_garment_color_truth(
     prompt_families = {_color_family(term) for term in prompt_non_neutral if term}
     pixel_families = {_color_family(term) for term in pixel_non_neutral if term}
     strong_semantic_override = bool(
-        prompt_non_neutral
+        GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED
+        and prompt_non_neutral
         and (
             not pixel_non_neutral
             or pixel_families.isdisjoint(prompt_families)
@@ -2209,6 +2258,7 @@ def _garment_color_context_settings() -> GarmentColorContextSettings:
         decontam_min_coverage_ratio=float(FLUX2_COLOR_DECONTAM_MIN_COVERAGE_RATIO),
         profile_trim_dark_percentile=float(FLUX2_COLOR_PROFILE_TRIM_DARK_PERCENTILE),
         profile_trim_bright_percentile=float(FLUX2_COLOR_PROFILE_TRIM_BRIGHT_PERCENTILE),
+        disable_masking=bool(COLOR_CONTEXT_DISABLE_MASKING),
     )
 
 def _build_flux2_visual_lock_clauses(
@@ -2439,12 +2489,18 @@ def _build_single_image_color_context(
     description: str = "",
     mask: Optional[np.ndarray] = None,
     top_k: int = 7,
+    force_masking: bool = False,
 ) -> Dict[str, object]:
+    settings = _garment_color_context_settings()
+    effective_mask = None if COLOR_CONTEXT_DISABLE_MASKING else mask
+    if force_masking:
+        settings = replace(settings, disable_masking=False)
+        effective_mask = mask
     return _shared_build_single_image_color_context(
         image=image,
         description=description,
-        mask=mask,
-        settings=_garment_color_context_settings(),
+        mask=effective_mask,
+        settings=settings,
         top_k=top_k,
     )
 
@@ -3261,7 +3317,6 @@ def _compute_palette_delta_e(
         "perColor": per_color,
     }
 
-
 def _score_color_fidelity(
     output_image: Image.Image,
     input_palettes: List[List[str]],
@@ -3627,6 +3682,319 @@ def _focus_score(image: Image.Image) -> float:
     gy, gx = np.gradient(arr)
     mag = np.sqrt((gx * gx) + (gy * gy))
     return float(np.var(mag))
+
+def _build_user_prepare_payload(
+    *,
+    status_code: int,
+    message: str,
+    url: Optional[str] = None,
+    prompt_description: Optional[str] = None,
+) -> dict:
+    payload: dict = {
+        "status": int(status_code),
+        "message": str(message or ""),
+    }
+    if int(status_code) == 200:
+        payload["data"] = {
+            "url": str(url or ""),
+            "promptDescription": str(prompt_description or ""),
+        }
+    return payload
+
+def _user_prep_person_components(image: Image.Image) -> tuple[np.ndarray, np.ndarray, list[dict], dict]:
+    if engine.parser is None:
+        raise RuntimeError("Human parser is not available")
+
+    parsing = engine.parser.parse(image)
+    h, w = parsing.shape[:2]
+    total_pixels = max(1, int(h * w))
+    min_pixels = max(64, int(total_pixels * USER_PREP_COMPONENT_MIN_AREA_RATIO))
+
+    body_ids = _parser_category_ids("body", fallback=[2, 11, 12, 13, 14, 15, 16])
+    garment_ids = _parser_category_ids("garment_fallback", fallback=[4, 5, 6, 7, 8, 17])
+    person_ids = sorted(set(int(v) for v in (body_ids + garment_ids)))
+    if not person_ids:
+        person_ids = [2, 4, 5, 6, 7, 8, 11, 12, 13, 14, 15, 16, 17]
+
+    person_mask = np.isin(parsing, person_ids)
+    components = _mask_connected_components(person_mask, min_pixels=min_pixels)
+    meta = {
+        "person_ids": person_ids,
+        "components": int(len(components)),
+        "min_pixels": int(min_pixels),
+    }
+    return parsing, person_mask, components, meta
+
+def _user_prep_select_main_component(components: list[dict], width: int, height: int) -> Optional[dict]:
+    if not components:
+        return None
+
+    total_pixels = max(1.0, float(width * height))
+    ranked: List[Tuple[float, dict]] = []
+    for comp in components:
+        bbox = comp.get("bbox") or [0, 0, 0, 0]
+        area = int(comp.get("area", 0))
+        area_ratio = float(area) / total_pixels
+        center_prior = _bbox_prior([int(v) for v in bbox], width, height)
+        score = (0.78 * area_ratio) + (0.22 * center_prior)
+        rank_item = dict(comp)
+        rank_item["area_ratio"] = float(area_ratio)
+        rank_item["center_prior"] = float(center_prior)
+        rank_item["main_person_score"] = float(score)
+        ranked.append((score, rank_item))
+
+    ranked.sort(key=lambda x: float(x[0]), reverse=True)
+    return ranked[0][1] if ranked else None
+
+def _parser_ids_for_aliases(aliases: List[str], fallback: Optional[List[int]] = None) -> list[int]:
+    label2id = _parser_runtime_label2id()
+    ids: list[int] = []
+    for alias in aliases:
+        key = str(alias).strip().lower().replace("-", "_").replace(" ", "_")
+        if key in label2id:
+            try:
+                ids.append(int(label2id[key]))
+            except Exception:
+                continue
+    if ids:
+        return sorted(set(ids))
+    return [int(v) for v in (fallback or [])]
+
+def _user_prep_face_component_from_parsing(
+    parsing: np.ndarray,
+    person_component_mask: Optional[np.ndarray] = None,
+) -> Optional[dict]:
+    face_ids = _parser_ids_for_aliases(
+        ["face", "human_face", "head", "heads", "facial"],
+        fallback=[11],
+    )
+    if not face_ids:
+        return None
+    face_mask = np.isin(parsing, face_ids)
+    if isinstance(person_component_mask, np.ndarray) and person_component_mask.shape == face_mask.shape:
+        face_mask = face_mask & person_component_mask.astype(bool)
+
+    min_pixels = max(16, int(USER_PREP_FACE_MIN_PIXELS))
+    comps = _mask_connected_components(face_mask, min_pixels=min_pixels)
+    if not comps:
+        return None
+    best = comps[0]
+    bbox = [int(v) for v in (best.get("bbox") or [0, 0, 0, 0])]
+    area = int(best.get("area", 0))
+    total = max(1.0, float(face_mask.size))
+    return {
+        "source": "parser_face",
+        "bbox": bbox,
+        "area": area,
+        "area_ratio": float(area / total),
+    }
+
+def _user_prep_face_component_from_haar(image: Image.Image) -> Optional[dict]:
+    try:
+        import cv2
+    except Exception:
+        return None
+
+    gray = np.asarray(image.convert("L"))
+    if gray.size == 0:
+        return None
+
+    cascade_names = [
+        "haarcascade_frontalface_default.xml",
+        "haarcascade_profileface.xml",
+    ]
+    boxes: list[list[int]] = []
+    for name in cascade_names:
+        try:
+            path = os.path.join(cv2.data.haarcascades, name)
+            if not os.path.exists(path):
+                continue
+            detector = cv2.CascadeClassifier(path)
+            if detector.empty():
+                continue
+            found = detector.detectMultiScale(
+                gray,
+                scaleFactor=1.1,
+                minNeighbors=4,
+                minSize=(USER_PREP_FACE_MIN_SIDE_PX, USER_PREP_FACE_MIN_SIDE_PX),
+            )
+            for (x, y, w, h) in found:
+                boxes.append([int(x), int(y), int(x + w), int(y + h)])
+        except Exception:
+            continue
+    if not boxes:
+        return None
+
+    def _area(b: list[int]) -> int:
+        return max(1, int((b[2] - b[0]) * (b[3] - b[1])))
+
+    best = sorted(boxes, key=_area, reverse=True)[0]
+    area = _area(best)
+    total = max(1.0, float(image.width * image.height))
+    return {
+        "source": "haar_face",
+        "bbox": [int(v) for v in best],
+        "area": int(area),
+        "area_ratio": float(area / total),
+    }
+
+def _user_prep_validate_face(
+    image: Image.Image,
+    parsing: Optional[np.ndarray] = None,
+    person_component_mask: Optional[np.ndarray] = None,
+) -> tuple[bool, dict]:
+    candidates: list[dict] = []
+    if isinstance(parsing, np.ndarray):
+        parser_face = _user_prep_face_component_from_parsing(parsing, person_component_mask=person_component_mask)
+        if parser_face:
+            candidates.append(parser_face)
+    haar_face = _user_prep_face_component_from_haar(image)
+    if haar_face:
+        candidates.append(haar_face)
+
+    if not candidates:
+        return False, {"reason": "face_not_detected"}
+
+    best = sorted(candidates, key=lambda c: float(c.get("area", 0)), reverse=True)[0]
+    x0, y0, x1, y1 = [int(v) for v in (best.get("bbox") or [0, 0, 0, 0])]
+    fw = max(1, x1 - x0)
+    fh = max(1, y1 - y0)
+    area = int(best.get("area", fw * fh))
+    area_ratio = float(best.get("area_ratio", 0.0))
+
+    if fw < USER_PREP_FACE_MIN_SIDE_PX or fh < USER_PREP_FACE_MIN_SIDE_PX:
+        return False, {
+            "reason": "face_too_small",
+            "source": best.get("source"),
+            "bbox": [x0, y0, x1, y1],
+            "face_w": fw,
+            "face_h": fh,
+            "face_area_ratio": area_ratio,
+        }
+    if area < USER_PREP_FACE_MIN_PIXELS or area_ratio < USER_PREP_FACE_MIN_AREA_RATIO:
+        return False, {
+            "reason": "face_area_below_threshold",
+            "source": best.get("source"),
+            "bbox": [x0, y0, x1, y1],
+            "face_area": int(area),
+            "face_area_ratio": area_ratio,
+        }
+
+    face_patch = image.crop((x0, y0, x1, y1)).convert("RGB")
+    focus = _focus_score(face_patch)
+    if focus < USER_PREP_FACE_MIN_FOCUS_SCORE:
+        return False, {
+            "reason": "face_blurry",
+            "source": best.get("source"),
+            "bbox": [x0, y0, x1, y1],
+            "face_focus": float(focus),
+        }
+
+    return True, {
+        "source": best.get("source"),
+        "bbox": [x0, y0, x1, y1],
+        "face_area": int(area),
+        "face_area_ratio": float(area_ratio),
+        "face_focus": float(focus),
+    }
+
+def _user_prep_crop_main_person(image: Image.Image, bbox: list[int]) -> tuple[Image.Image, list[int]]:
+    x0, y0, x1, y1 = [int(v) for v in bbox]
+    bw = max(1, x1 - x0)
+    bh = max(1, y1 - y0)
+    pad = int(round(max(bw, bh) * USER_PREP_MAIN_PERSON_PAD_RATIO))
+    expanded = _expand_bbox([x0, y0, x1, y1], image.width, image.height, pad)
+    ex0, ey0, ex1, ey1 = [int(v) for v in expanded]
+    crop = image.crop((ex0, ey0, ex1, ey1)).convert("RGB")
+    return crop, [ex0, ey0, ex1, ey1]
+
+def _user_prep_alpha_stats(image_bytes: bytes) -> dict:
+    img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+    arr = np.asarray(img)
+    if arr.ndim != 3 or arr.shape[2] < 4:
+        total = max(1, int(img.width * img.height))
+        return {
+            "has_alpha": False,
+            "foreground_ratio": 1.0,
+            "transparent_ratio": 0.0,
+            "total_pixels": int(total),
+        }
+    alpha = arr[:, :, 3]
+    total = max(1, int(alpha.size))
+    fg_ratio = float(np.mean(alpha >= 12))
+    transparent_ratio = float(np.mean(alpha <= 4))
+    return {
+        "has_alpha": True,
+        "foreground_ratio": float(fg_ratio),
+        "transparent_ratio": float(transparent_ratio),
+        "total_pixels": int(total),
+    }
+
+def _user_prep_is_valid_alpha(alpha_stats: dict) -> bool:
+    fg_ratio = float(alpha_stats.get("foreground_ratio", 0.0))
+    transparent_ratio = float(alpha_stats.get("transparent_ratio", 0.0))
+    return (
+        fg_ratio >= USER_PREP_ALPHA_MIN_FOREGROUND_RATIO
+        and transparent_ratio >= USER_PREP_ALPHA_MIN_TRANSPARENT_RATIO
+    )
+
+def _remove_user_background(image_bytes: bytes) -> tuple[Optional[bytes], dict]:
+    mode = USER_PREP_BG_BACKEND
+    ordered = ["birefnet", "rembg"] if mode == "auto" else [mode]
+    if mode == "birefnet":
+        ordered.append("rembg")
+    elif mode == "rembg":
+        ordered.append("birefnet")
+
+    errors: List[dict] = []
+    for backend in ordered:
+        if backend == "birefnet":
+            out_bytes, meta = _remove_background_with_birefnet(image_bytes)
+        else:
+            out_bytes, meta = _remove_background_with_rembg(image_bytes)
+        if not out_bytes:
+            errors.append({"backend": backend, "meta": meta})
+            continue
+
+        alpha_stats = _user_prep_alpha_stats(out_bytes)
+        if _user_prep_is_valid_alpha(alpha_stats):
+            return out_bytes, {
+                "backend": backend,
+                "removal": meta,
+                "alpha_stats": alpha_stats,
+            }
+        errors.append(
+            {
+                "backend": backend,
+                "meta": meta,
+                "alpha_stats": alpha_stats,
+                "reason": "invalid_alpha_coverage",
+            }
+        )
+    return None, {"errors": errors}
+
+def _describe_user_image_for_prepare(user_img: Image.Image, image_url: str) -> str:
+    candidates: List[str] = []
+    requested = _normalize_descriptor_backend(USER_PREP_DESCRIPTION_BACKEND)
+    for item in [requested, "minicpm_service", "minicpm", "florence"]:
+        if item and item not in candidates:
+            candidates.append(item)
+
+    service_url = ANALYZE_MINICPM_SERVICE_URL or MINICPM_SERVICE_URL
+    for backend in candidates:
+        try:
+            desc = _describe_user_image_for_flux2(
+                user_img=user_img,
+                backend=backend,
+                image_url=image_url,
+                service_url=service_url,
+            )
+            desc = " ".join(str(desc or "").split()).strip()
+            if len(desc.split()) >= USER_PREP_MIN_PROMPT_WORDS:
+                return desc
+        except Exception as desc_err:
+            logger.warning(f"User prep description failed backend={backend}: {desc_err}")
+    return ""
 
 def _bbox_prior(bbox: list[int], width: int, height: int) -> float:
     x0, y0, x1, y1 = bbox
@@ -6995,6 +7363,7 @@ def _estimate_type_focused_color_mask(
     image: Image.Image,
     garment_type: str,
     description: str = "",
+    return_meta: bool = False,
 ) -> Optional[np.ndarray]:
     try:
         mask, meta = engine.garment_color_masker.estimate_mask(
@@ -7004,9 +7373,14 @@ def _estimate_type_focused_color_mask(
         )
         if isinstance(meta, dict) and meta.get("used") is False:
             logger.info("Garment color mask provider skipped: %s", meta)
-        return np.asarray(mask).astype(bool) if isinstance(mask, np.ndarray) else None
+        resolved_mask = np.asarray(mask).astype(bool) if isinstance(mask, np.ndarray) else None
+        if return_meta:
+            return resolved_mask, meta
+        return resolved_mask
     except Exception as mask_err:
         logger.warning(f"Type-focused color mask fallback triggered: {mask_err}")
+        if return_meta:
+            return None, {"source": "color_mask_error", "used": False, "reason": str(mask_err)}
         return None
 
 
@@ -7417,7 +7791,6 @@ def _run_flux2_cloth_only_extract(
     steps: Optional[int] = None,
     seed: Optional[int] = None,
     color_reference_image: Optional[Image.Image] = None,
-    color_reference_mask: Optional[np.ndarray] = None,
 ) -> dict:
     """
     Internal analyze-path garment extraction using Flux2 single-garment prompt logic.
@@ -7462,11 +7835,23 @@ def _run_flux2_cloth_only_extract(
         if isinstance(color_reference_image, Image.Image)
         else descriptor_image
     )
+    color_mask_description = " ".join(
+        str(v).strip()
+        for v in (prompt_description, fallback_prompt_description)
+        if str(v).strip()
+    ).strip()
+    descriptor_color_mask, descriptor_color_mask_meta = _estimate_type_focused_color_mask(
+        descriptor_color_ctx_image,
+        resolved_type,
+        color_mask_description,
+        return_meta=True,
+    )
     descriptor_color_ctx = _build_single_image_color_context(
         image=descriptor_color_ctx_image,
         description="",
-        mask=color_reference_mask if isinstance(color_reference_mask, np.ndarray) else None,
+        mask=descriptor_color_mask,
         top_k=7,
+        force_masking=bool(isinstance(descriptor_color_mask, np.ndarray)),
     )
     descriptor_dominant_hexes = [
         str(v)
@@ -7616,8 +8001,9 @@ def _run_flux2_cloth_only_extract(
     input_color_ctx = _build_single_image_color_context(
         image=color_ctx_image,
         description=garment_desc,
-        mask=color_reference_mask if isinstance(color_reference_mask, np.ndarray) else None,
+        mask=descriptor_color_mask,
         top_k=7,
+        force_masking=bool(isinstance(descriptor_color_mask, np.ndarray)),
     )
     dominant_hexes = [
         str(v)
@@ -7627,11 +8013,48 @@ def _run_flux2_cloth_only_extract(
     if not dominant_hexes:
         dominant_hexes = _extract_dominant_hex_colors(
             image=color_ctx_image,
-            mask=color_reference_mask if isinstance(color_reference_mask, np.ndarray) else None,
             top_k=4,
         )
     color_hints = [str(v) for v in (input_color_ctx.get("hints") or []) if str(v).strip()]
     color_profile = input_color_ctx.get("profile") if isinstance(input_color_ctx.get("profile"), dict) else {}
+    color_mask_source = str(
+        (descriptor_color_mask_meta or {}).get("source")
+        or input_color_ctx.get("maskSource")
+        or descriptor_color_ctx.get("maskSource")
+        or "none"
+    ).strip()
+    reconciled_color = _resolve_garment_color_truth(
+        base_garment_prompt=garment_desc,
+        dominant_hexes=dominant_hexes,
+        color_hints=color_hints,
+    )
+    resolved_garment_desc = " ".join(
+        str(reconciled_color.get("base_garment_prompt") or garment_desc).split()
+    ).strip()
+    reconciled_hexes = [
+        str(v).strip().upper()
+        for v in (reconciled_color.get("dominant_hexes") or [])
+        if str(v).strip()
+    ]
+    reconciled_hints = [
+        str(v).strip().lower()
+        for v in (reconciled_color.get("color_hints") or [])
+        if str(v).strip()
+    ]
+    if reconciled_hexes:
+        dominant_hexes = reconciled_hexes
+    if reconciled_hints:
+        color_hints = reconciled_hints
+    garment_desc = resolved_garment_desc or garment_desc
+    prompt_bundle["base_garment_prompt"] = garment_desc
+    prompt_bundle["serialized_sections"] = (
+        f"BASE_GARMENT_PROMPT: {garment_desc}"
+        + (
+            f"\nEXTRACTION_AVOID_CLAUSE: {prompt_bundle.get('extraction_avoid_clause')}"
+            if str(prompt_bundle.get("extraction_avoid_clause") or "").strip()
+            else ""
+        )
+    )
 
     t_stage = time.time()
     flux_prompt = _build_flux2_single_garment_extract_prompt(
@@ -7669,7 +8092,6 @@ def _run_flux2_cloth_only_extract(
     raw_sha256 = hashlib.sha256(raw_bytes).hexdigest()
     parser_input_source = "flux_raw"
     parser_input_sha256 = raw_sha256
-    source_bytes_cache: Optional[bytes] = None
 
     t_stage = time.time()
     final_bytes = raw_bytes
@@ -7689,48 +8111,17 @@ def _run_flux2_cloth_only_extract(
                 )
             except Exception as strict_extract_err:
                 helper_warnings.append(f"strict_extract_failed:{strict_extract_err}")
-                if ANALYZE_EXTRACT_ALLOW_SOURCE_FALLBACK:
-                    try:
-                        if source_bytes_cache is None:
-                            src_buf = io.BytesIO()
-                            src.save(src_buf, format="PNG")
-                            source_bytes_cache = src_buf.getvalue()
-                        parser_input_source = "source_input"
-                        parser_input_sha256 = hashlib.sha256(source_bytes_cache).hexdigest()
-                        extracted_rgba, extraction_meta = _extract_cloth_from_crop(
-                            src,
-                            resolved_type,
-                            enforce_safety_guards=False,
-                            allow_top_dress_backfill=True,
-                            parser_only_override=False,
-                        )
-                        extraction_meta = dict(extraction_meta or {})
-                        extraction_meta["fallback"] = "source_parser_after_strict_flux_fail"
-                    except Exception as source_extract_err:
-                        helper_warnings.append(f"source_extract_failed:{source_extract_err}")
-                        parser_input_source = "flux_raw"
-                        parser_input_sha256 = raw_sha256
-                        extracted_rgba, extraction_meta = _extract_cloth_from_crop(
-                            raw_img.convert("RGB"),
-                            resolved_type,
-                            enforce_safety_guards=False,
-                            allow_top_dress_backfill=True,
-                            parser_only_override=False,
-                        )
-                        extraction_meta = dict(extraction_meta or {})
-                        extraction_meta["fallback"] = "non_strict_guard"
-                else:
-                    parser_input_source = "flux_raw"
-                    parser_input_sha256 = raw_sha256
-                    extracted_rgba, extraction_meta = _extract_cloth_from_crop(
-                        raw_img.convert("RGB"),
-                        resolved_type,
-                        enforce_safety_guards=False,
-                        allow_top_dress_backfill=True,
-                        parser_only_override=False,
-                    )
-                    extraction_meta = dict(extraction_meta or {})
-                    extraction_meta["fallback"] = "non_strict_guard_flux_only"
+                parser_input_source = "flux_raw"
+                parser_input_sha256 = raw_sha256
+                extracted_rgba, extraction_meta = _extract_cloth_from_crop(
+                    raw_img.convert("RGB"),
+                    resolved_type,
+                    enforce_safety_guards=False,
+                    allow_top_dress_backfill=True,
+                    parser_only_override=False,
+                )
+                extraction_meta = dict(extraction_meta or {})
+                extraction_meta["strict_retry_mode"] = "non_strict_flux_raw"
         else:
             extraction_path = "crop_then_aspect_only_no_parser"
             final_bytes, postprocess_meta = _postprocess_extracted_garment_bytes(
@@ -7756,41 +8147,6 @@ def _run_flux2_cloth_only_extract(
                 force_transparent=True,
             )
             extraction_path = "parser_extract_then_postprocess"
-
-            # Guard against postprocess color drift: fallback to non-enhanced fit when drift is high.
-            try:
-                final_img = Image.open(io.BytesIO(final_bytes)).convert("RGBA")
-                output_color_ctx = _build_single_image_color_context(
-                    image=final_img.convert("RGB"),
-                    description="",
-                    mask=_extract_alpha_mask(final_img, threshold=24),
-                    top_k=7,
-                )
-                output_hexes = [
-                    str(v)
-                    for v in (output_color_ctx.get("dominantHexes") or output_color_ctx.get("paletteHexes") or [])
-                    if str(v).strip()
-                ]
-                color_compare = _compute_palette_delta_e(
-                    input_hexes=[str(v) for v in dominant_hexes if str(v).strip()],
-                    output_hexes=output_hexes,
-                    max_colors=5,
-                )
-                drift_limit = max(8.0, float(FLUX2_COLOR_FIRST_GATE_MAX_DRIFT_DELTA))
-                drift_now = float((color_compare or {}).get("avgDrift", 0.0) or 0.0)
-                if color_compare and drift_now > drift_limit:
-                    color_safe_bytes, color_safe_meta = _crop_and_fit_garment_bytes(extracted_bytes)
-                    final_bytes = color_safe_bytes
-                    extraction_path = "parser_extract_then_color_safe_fit"
-                    postprocess_meta = dict(postprocess_meta or {})
-                    postprocess_meta["color_guard_fallback"] = {
-                        "applied": True,
-                        "avgDrift": round(drift_now, 4),
-                        "driftLimit": round(drift_limit, 4),
-                        "fallback_mode": str(color_safe_meta.get("mode", "crop_then_aspect_only")),
-                    }
-            except Exception as color_guard_err:
-                helper_warnings.append(f"color_guard_check_failed:{color_guard_err}")
     except Exception as extract_err:
         helper_warnings.append(f"extract_postprocess_failed:{extract_err}")
         final_bytes, postprocess_meta = _crop_and_fit_garment_bytes(raw_bytes)
@@ -7830,7 +8186,7 @@ def _run_flux2_cloth_only_extract(
             "descriptor_transport_source": selected_crop_url_source,
             "prompt_source": prompt_source,
             "prompt_description": garment_desc,
-            "base_garment_prompt": str(prompt_bundle.get("base_garment_prompt") or garment_desc),
+            "base_garment_prompt": garment_desc,
             "extraction_avoid_clause": str(prompt_bundle.get("extraction_avoid_clause") or ""),
             "prompt_sections_raw": str(prompt_bundle.get("serialized_sections") or ""),
             "descriptor_raw_text": str(prompt_bundle.get("raw_text") or ""),
@@ -7838,7 +8194,8 @@ def _run_flux2_cloth_only_extract(
             "accent_hexes": [str(v) for v in (input_color_ctx.get("accentHexes") or []) if str(v).strip()],
             "color_hints": color_hints,
             "color_profile": color_profile,
-            "color_mask_source": "reference_mask" if isinstance(color_reference_mask, np.ndarray) else "single_image_context",
+            "color_mask_source": color_mask_source or str(input_color_ctx.get("maskSource") or "none"),
+            "color_resolved_source": str(reconciled_color.get("color_source") or "pixel"),
             "flux_prompt": flux_prompt,
             "negative_prompt": built_negative_prompt,
             "warnings": helper_warnings,
@@ -8707,17 +9064,17 @@ async def flux2_extract_single_garment(
                 if isinstance(selected_candidate, dict)
                 else []
             )
-            focused_color_mask = _estimate_type_focused_color_mask(
+            descriptor_color_mask = _estimate_type_focused_color_mask(
                 descriptor_image,
                 resolved_type,
-                description=garment_desc,
+                garment_desc,
             )
-            focused_mask_arr = focused_color_mask if isinstance(focused_color_mask, np.ndarray) else None
             input_color_ctx = _build_single_image_color_context(
                 image=descriptor_image,
                 description=garment_desc,
-                mask=focused_mask_arr,
+                mask=descriptor_color_mask,
                 top_k=7,
+                force_masking=bool(isinstance(descriptor_color_mask, np.ndarray)),
             )
             dominant_hexes = [
                 str(v)
@@ -8729,106 +9086,11 @@ async def flux2_extract_single_garment(
             if not dominant_hexes:
                 dominant_hexes = _extract_dominant_hex_colors(
                     image=descriptor_image,
-                    mask=focused_mask_arr,
                     top_k=4,
                 )
             color_hints = [str(v) for v in (input_color_ctx.get("hints") or []) if str(v).strip()]
             color_profile = input_color_ctx.get("profile") if isinstance(input_color_ctx.get("profile"), dict) else {}
             category_text = str((selected_candidate or {}).get("category_text") or resolved_type).strip()
-            semantic_color_terms: List[str] = []
-            semantic_color_override_applied = False
-            try:
-                descriptor_rgb = np.asarray(descriptor_image.convert("RGB"), dtype=np.uint8)
-                skin_mask = _skin_like_mask(descriptor_rgb)
-                skin_ratio = float(np.mean(skin_mask)) if skin_mask.size else 0.0
-                descriptor_text_color_terms = _extract_text_color_terms(
-                    garment_desc,
-                    max_items=max(2, FLUX2_COLOR_LOCK_TOP_K + 1),
-                )
-                focus_touches_edge = False
-                focus_area_ratio = 0.0
-                if isinstance(focused_mask_arr, np.ndarray) and focused_mask_arr.size:
-                    ys, xs = np.where(focused_mask_arr)
-                    focus_area_ratio = float(np.mean(focused_mask_arr))
-                    if ys.size and xs.size:
-                        focus_touches_edge = bool(
-                            xs.min() <= max(2, int(descriptor_rgb.shape[1] * 0.08))
-                            or xs.max() >= min(descriptor_rgb.shape[1] - 3, int(descriptor_rgb.shape[1] * 0.92))
-                        )
-                if (
-                    resolved_type in {"top", "dress", "outer"}
-                    and selected_crop_url
-                    and (skin_ratio >= 0.24 or focus_touches_edge or focus_area_ratio <= 0.10)
-                ):
-                    semantic_color_terms = _describe_garment_color_terms_with_backend(
-                        image=descriptor_image,
-                        backend=resolved_backend,
-                        image_url=selected_crop_url,
-                        service_url=ANALYZE_MINICPM_SERVICE_URL or MINICPM_SERVICE_URL,
-                        garment_type=resolved_type,
-                    )
-                preferred_descriptor_terms = [
-                    term for term in descriptor_text_color_terms
-                    if _color_family(term) not in {"neutral_dark", "neutral_mid", "neutral_light", "brown"}
-                ]
-                if (
-                    resolved_type == "top"
-                    and preferred_descriptor_terms
-                    and (skin_ratio >= 0.18 or focus_touches_edge or focus_area_ratio <= 0.12)
-                ):
-                    forced_desc_hexes: List[str] = []
-                    for term in preferred_descriptor_terms[: max(1, FLUX2_COLOR_LOCK_TOP_K)]:
-                        rgb = _COLOR_LABEL_RGB_MAP.get(term)
-                        if rgb:
-                            forced_desc_hexes.append("#{:02X}{:02X}{:02X}".format(*rgb))
-                    if forced_desc_hexes:
-                        dominant_hexes = forced_desc_hexes
-                        color_hints = preferred_descriptor_terms[: max(1, FLUX2_COLOR_LOCK_TOP_K)]
-                        semantic_color_override_applied = True
-                if skin_ratio >= 0.24 and preferred_descriptor_terms:
-                    semantic_color_terms = [
-                        term for term in preferred_descriptor_terms + semantic_color_terms
-                        if str(term or "").strip()
-                    ]
-                if semantic_color_terms:
-                    merged_hints: List[str] = []
-                    for term in semantic_color_terms + color_hints:
-                        clean_term = str(term or "").strip().lower()
-                        if clean_term and clean_term not in merged_hints:
-                            merged_hints.append(clean_term)
-                    color_hints = merged_hints[: max(3, FLUX2_COLOR_LOCK_TOP_K + 1)]
-
-                    current_labels = [
-                        _nearest_color_label(rgb)
-                        for rgb in (_hex_to_rgb_tuple(v) for v in dominant_hexes)
-                        if rgb
-                    ]
-                    current_families = {_color_family(label) for label in current_labels if label}
-                    semantic_families = {_color_family(term) for term in semantic_color_terms if term}
-                    non_neutral_semantic = [
-                        term for term in semantic_color_terms
-                        if _color_family(term) not in {"neutral_dark", "neutral_mid", "neutral_light"}
-                    ]
-                    if non_neutral_semantic and (
-                        not current_families
-                        or current_families.issubset({"neutral_dark", "neutral_mid", "neutral_light", "brown"})
-                        or current_families.isdisjoint(semantic_families)
-                    ):
-                        semantic_hexes: List[str] = []
-                        seen_semantic_hexes: Set[str] = set()
-                        for term in non_neutral_semantic:
-                            rgb = _COLOR_LABEL_RGB_MAP.get(term)
-                            if not rgb:
-                                continue
-                            semantic_hex = "#{:02X}{:02X}{:02X}".format(*rgb)
-                            if semantic_hex not in seen_semantic_hexes:
-                                semantic_hexes.append(semantic_hex)
-                                seen_semantic_hexes.add(semantic_hex)
-                        if semantic_hexes:
-                            dominant_hexes = semantic_hexes[: max(2, FLUX2_COLOR_LOCK_TOP_K)]
-                            semantic_color_override_applied = True
-            except Exception as semantic_color_err:
-                logger.warning(f"Semantic garment color fallback skipped: {semantic_color_err}")
 
             t_stage = time.time()
             flux_prompt = _build_flux2_single_garment_extract_prompt(
@@ -8905,8 +9167,6 @@ async def flux2_extract_single_garment(
             extraction_meta["parser_input_sha256"] = parser_input_sha256
             extraction_meta["parser_used_flux_raw"] = parser_input_source == "flux_raw"
             extraction_meta["parser_input_matches_flux_raw"] = parser_input_sha256 == raw_sha256
-            extraction_meta["semanticColorTerms"] = semantic_color_terms
-            extraction_meta["semanticColorOverrideApplied"] = bool(semantic_color_override_applied)
 
             try:
                 final_img = Image.open(io.BytesIO(final_bytes))
@@ -9038,6 +9298,216 @@ async def flux2_extract_single_garment(
                 status_code=500,
             )
         )
+
+@app.post("/v1/user-image/prepare")
+@app.post("/v1/flux2/prepare-user-image")
+async def prepare_user_image_for_tryon(
+    file: Optional[UploadFile] = File(None),
+    image: Optional[UploadFile] = File(None),
+):
+    t0 = time.time()
+    stage = {
+        "read_input_s": 0.0,
+        "blur_check_s": 0.0,
+        "parser_s": 0.0,
+        "crop_s": 0.0,
+        "bg_remove_s": 0.0,
+        "upload_s": 0.0,
+        "describe_s": 0.0,
+        "api_total_s": 0.0,
+    }
+
+    upload = file or image
+    if upload is None:
+        return _json_response(
+            _build_user_prepare_payload(
+                status_code=400,
+                message="Provide one image file using `file` or `image`.",
+            )
+        )
+
+    gpu_slot_acquired = False
+    try:
+        t_stage = time.time()
+        raw_bytes = await upload.read()
+        stage["read_input_s"] = round(time.time() - t_stage, 4)
+        if not raw_bytes:
+            return _json_response(
+                _build_user_prepare_payload(status_code=400, message="Uploaded image is empty.")
+            )
+        if len(raw_bytes) > USER_PREP_MAX_FILE_BYTES:
+            return _json_response(
+                _build_user_prepare_payload(
+                    status_code=400,
+                    message=f"File too large. Max allowed is {USER_PREP_MAX_FILE_BYTES // (1024 * 1024)}MB.",
+                )
+            )
+
+        try:
+            src_img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
+        except Exception:
+            return _json_response(
+                _build_user_prepare_payload(status_code=400, message="Invalid image file.")
+            )
+
+        if USER_PREP_BLUR_CHECK_ENABLED:
+            t_stage = time.time()
+            focus_score = _focus_score(src_img)
+            stage["blur_check_s"] = round(time.time() - t_stage, 4)
+            if focus_score < USER_PREP_MIN_FOCUS_SCORE:
+                return _json_response(
+                    _build_user_prepare_payload(
+                        status_code=400,
+                        message="Image is too blurry. Upload a sharper full-person photo.",
+                    )
+                )
+
+        try:
+            await asyncio.wait_for(gpu_semaphore.acquire(), timeout=ANALYZE_GPU_QUEUE_TIMEOUT_S)
+            gpu_slot_acquired = True
+        except asyncio.TimeoutError:
+            return _json_response(
+                _build_user_prepare_payload(
+                    status_code=400,
+                    message="Server is busy. Please retry in a few seconds.",
+                )
+            )
+
+        t_stage = time.time()
+        parsing, _, components, parser_meta = _user_prep_person_components(src_img)
+        stage["parser_s"] = round(time.time() - t_stage, 4)
+        if not components:
+            return _json_response(
+                _build_user_prepare_payload(
+                    status_code=400,
+                    message="No clear person detected in the image.",
+                )
+            )
+
+        selected = _user_prep_select_main_component(components, src_img.width, src_img.height)
+        if not selected:
+            return _json_response(
+                _build_user_prepare_payload(
+                    status_code=400,
+                    message="Could not identify the main person in the image.",
+                )
+            )
+        if float(selected.get("area_ratio", 0.0)) < USER_PREP_MAIN_PERSON_MIN_AREA_RATIO:
+            return _json_response(
+                _build_user_prepare_payload(
+                    status_code=400,
+                    message="Person is too small in frame. Upload a closer full-person image.",
+                )
+            )
+        if USER_PREP_REQUIRE_FACE:
+            face_ok, face_meta = _user_prep_validate_face(
+                src_img,
+                parsing=parsing,
+                person_component_mask=selected.get("mask") if isinstance(selected.get("mask"), np.ndarray) else None,
+            )
+            if not face_ok:
+                logger.info(f"user_image_prepare rejected: face validation failed meta={face_meta}")
+                return _json_response(
+                    _build_user_prepare_payload(
+                        status_code=400,
+                        message="No clear face detected. Upload a front-facing image with visible face.",
+                    )
+                )
+
+        t_stage = time.time()
+        person_crop, crop_bbox = _user_prep_crop_main_person(src_img, [int(v) for v in selected.get("bbox", [])])
+        stage["crop_s"] = round(time.time() - t_stage, 4)
+        if min(person_crop.width, person_crop.height) < USER_PREP_MIN_CROP_SIDE_PX:
+            return _json_response(
+                _build_user_prepare_payload(
+                    status_code=400,
+                    message="Detected person crop is too small for try-on.",
+                )
+            )
+
+        if USER_PREP_BLUR_CHECK_ENABLED:
+            crop_focus = _focus_score(person_crop)
+            if crop_focus < USER_PREP_MIN_FOCUS_SCORE:
+                return _json_response(
+                    _build_user_prepare_payload(
+                        status_code=400,
+                        message="Main person region is blurry. Upload a clearer image.",
+                    )
+                )
+
+        crop_buf = io.BytesIO()
+        person_crop.save(crop_buf, format="PNG")
+        crop_bytes = crop_buf.getvalue()
+
+        t_stage = time.time()
+        processed_bytes = crop_bytes
+        bg_meta: dict = {"applied": False, "required": bool(USER_PREP_REQUIRE_BG_REMOVAL)}
+        removed_bytes, remove_meta = _remove_user_background(crop_bytes)
+        if removed_bytes:
+            processed_bytes = removed_bytes
+            bg_meta = {"applied": True, **(remove_meta or {})}
+        elif USER_PREP_REQUIRE_BG_REMOVAL:
+            logger.warning(f"User prep background removal failed meta={remove_meta}")
+            return _json_response(
+                _build_user_prepare_payload(
+                    status_code=400,
+                    message="Background removal failed for this image. Try another image.",
+                )
+            )
+        stage["bg_remove_s"] = round(time.time() - t_stage, 4)
+
+        t_stage = time.time()
+        output_url = _upload_or_raise(processed_bytes, container=USER_PREP_UPLOAD_CONTAINER)
+        stage["upload_s"] = round(time.time() - t_stage, 4)
+        if not output_url:
+            return _json_response(
+                _build_user_prepare_payload(
+                    status_code=400,
+                    message="Failed to upload processed image.",
+                )
+            )
+
+        processed_img = Image.open(io.BytesIO(processed_bytes)).convert("RGB")
+        t_stage = time.time()
+        prompt_description = _describe_user_image_for_prepare(processed_img, output_url)
+        stage["describe_s"] = round(time.time() - t_stage, 4)
+        if not prompt_description:
+            return _json_response(
+                _build_user_prepare_payload(
+                    status_code=400,
+                    message="Failed to generate user image description.",
+                )
+            )
+
+        stage["api_total_s"] = round(time.time() - t0, 4)
+        logger.info(
+            "user_image_prepare success total=%.2fs components=%s selected_area=%.4f crop_bbox=%s bg=%s",
+            stage["api_total_s"],
+            parser_meta.get("components", 0),
+            float(selected.get("area_ratio", 0.0)),
+            crop_bbox,
+            bg_meta,
+        )
+        return _json_response(
+            _build_user_prepare_payload(
+                status_code=200,
+                message="User image prepared successfully.",
+                url=output_url,
+                prompt_description=prompt_description,
+            )
+        )
+    except Exception as err:
+        logger.exception(f"User image prepare failed: {err}")
+        return _json_response(
+            _build_user_prepare_payload(
+                status_code=400,
+                message=f"User image prepare failed: {err}",
+            )
+        )
+    finally:
+        stage["api_total_s"] = round(time.time() - t0, 4)
+        if gpu_slot_acquired:
+            gpu_semaphore.release()
 
 @app.post("/analyze")
 @app.post("/analzye")
@@ -9795,7 +10265,6 @@ async def analyze_garment(
                         steps=FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS,
                         seed=FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_SEED,
                         color_reference_image=selected_item.get("_image_obj"),
-                        color_reference_mask=selected_item.get("_mask_obj"),
                     )
                     fallback = flux_fallback
                     extracted_url = str(flux_fallback.get("url") or "")
@@ -9975,6 +10444,23 @@ async def analyze_garment(
                     color_mask_source=str(extraction_obj.get("color_mask_source") or ""),
                 )
                 selected_item["garmentMetadata"] = garment_metadata
+                metadata_prompt = (
+                    garment_metadata.get("prompt")
+                    if isinstance(garment_metadata.get("prompt"), dict)
+                    else {}
+                )
+                resolved_base_prompt = " ".join(
+                    str(metadata_prompt.get("base_garment_prompt") or "").split()
+                ).strip()
+                resolved_prompt_desc = " ".join(
+                    str(metadata_prompt.get("prompt_description") or "").split()
+                ).strip()
+                if resolved_base_prompt:
+                    selected_item["baseGarmentPrompt"] = resolved_base_prompt
+                if resolved_prompt_desc:
+                    selected_item["promptDescription"] = resolved_prompt_desc
+                    selected_item["description"] = resolved_prompt_desc
+                    prompt_description = resolved_prompt_desc
                 progress_meta = {
                     "selected_type": selected_type,
                     "requested_type": requested_type,
@@ -11294,7 +11780,6 @@ def health_check():
                 "analyze_selection_preview_jpeg_quality": ANALYZE_SELECTION_PREVIEW_JPEG_QUALITY,
                 "analyze_gpu_queue_timeout_s": ANALYZE_GPU_QUEUE_TIMEOUT_S,
                 "analyze_extract_parser_only": ANALYZE_EXTRACT_PARSER_ONLY,
-                "analyze_extract_allow_source_fallback": ANALYZE_EXTRACT_ALLOW_SOURCE_FALLBACK,
                 "analyze_require_extracted_prompt": ANALYZE_REQUIRE_EXTRACTED_PROMPT,
                 "analyze_extract_force_bbox_crop": ANALYZE_EXTRACT_FORCE_BBOX_CROP,
                 "analyze_extract_crop_pad_ratio": ANALYZE_EXTRACT_CROP_PAD_RATIO,

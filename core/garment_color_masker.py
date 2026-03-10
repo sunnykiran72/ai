@@ -77,25 +77,64 @@ class GarmentColorMasker:
             return None, {"source": "parser", "used": False, "reason": "parser_unavailable"}
         try:
             parsing = self.parser.parse(image)
-            mask = self.parser.get_mask_for_category(parsing, garment_type)
+            mask, mask_source = self._strict_mask_from_parser(parsing, garment_type)
+            if mask is None:
+                mask = self.parser.get_mask_for_category(parsing, garment_type)
+                mask_source = "parser_category"
             mask = np.asarray(mask).astype(bool)
             cleaned = self._cleanup_mask(mask)
             if not self._mask_shape_ok(cleaned, image.size, garment_type, min_area_ratio=self.settings.parser_min_area_ratio):
                 return None, {
-                    "source": "parser",
+                    "source": mask_source,
                     "used": False,
                     "reason": "mask_quality_low",
                     "mask_pixels": int(np.sum(cleaned)),
                     "area_ratio": round(float(np.mean(cleaned)), 6),
                 }
             return cleaned, {
-                "source": "parser",
+                "source": mask_source,
                 "used": True,
                 "mask_pixels": int(np.sum(cleaned)),
                 "area_ratio": round(float(np.mean(cleaned)), 6),
             }
         except Exception as err:
             return None, {"source": "parser", "used": False, "reason": f"error:{err}"}
+
+    def _strict_mask_from_parser(
+        self,
+        parsing: np.ndarray,
+        garment_type: str,
+    ) -> Tuple[Optional[np.ndarray], str]:
+        runtime_labels = {}
+        runtime_fn = getattr(self.parser, "_runtime_labels", None)
+        if callable(runtime_fn):
+            try:
+                runtime_labels = dict(runtime_fn() or {})
+            except Exception:
+                runtime_labels = {}
+        if not runtime_labels:
+            return None, "parser"
+
+        alias_map = {
+            "top": ["top", "upper", "upper_clothes"],
+            "outer": ["outer", "outerwear", "coat", "jacket", "blazer", "top", "upper", "upper_clothes"],
+            "bottom": ["bottom", "pants", "trousers", "skirt", "shorts", "belt"],
+            "dress": ["dress"],
+        }
+        normalized_type = str(garment_type or "").strip().lower()
+        aliases = alias_map.get(normalized_type, [])
+        ids = []
+        for alias in aliases:
+            key = str(alias).strip().lower().replace("-", "_").replace(" ", "_")
+            if key in runtime_labels:
+                try:
+                    ids.append(int(runtime_labels[key]))
+                except Exception:
+                    continue
+        ids = sorted(set(ids))
+        if not ids:
+            return None, "parser"
+        return np.isin(parsing, ids), "parser_strict_runtime"
 
     def _mask_from_heuristic(
         self,
