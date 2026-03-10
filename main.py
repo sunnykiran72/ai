@@ -56,6 +56,21 @@ from ai.modules.vto.prompt_factory import prompt_factory
 from ai.modules.vto.board_builder import BoardBuilder
 from ai.modules.wardrobe.yolo_cropper import YoloCropper
 from ai.modules.wardrobe.human_parser import HumanParser
+from ai.modules.wardrobe.extraction.detection_stage import (
+    build_selection_required_response as _build_extraction_selection_required_response,
+    resolve_selected_item_or_response,
+    run_detection_stage_or_response,
+)
+from ai.modules.wardrobe.extraction.generation_stage import run_selected_item_extraction_or_response
+from ai.modules.wardrobe.extraction.pipeline import default_extraction_stage_timings
+from ai.modules.wardrobe.extraction.postprocess_stage import sync_selected_item_progress
+from ai.modules.wardrobe.extraction.prompting_stage import apply_selected_item_prompting
+from ai.modules.wardrobe.extraction.utils import (
+    build_success_response as _build_extraction_success_response,
+    read_input_image_or_response,
+    resolve_upload_or_response,
+    verify_authorization_or_response,
+)
 
 # Core Models (Heavy Runners)
 from ai.core.flux2_cvton_runner import Flux2CVTONRunner
@@ -117,11 +132,11 @@ VTO_OUTPUT_CONTAINER = (
 USE_FLORENCE_HYBRID_VERIFY = os.getenv("USE_FLORENCE_HYBRID_VERIFY", "0") == "1"
 USE_FLORENCE_DETAILED_PROMPT = os.getenv("USE_FLORENCE_DETAILED_PROMPT", "0") == "1"
 FLUX2_ALLOW_QWEN_BACKEND = os.getenv("FLUX2_ALLOW_QWEN_BACKEND", "0") == "1"
-FLUX2_DESCRIPTOR_BACKEND = os.getenv("FLUX2_DESCRIPTOR_BACKEND", "minicpm_service").strip().lower()
+FLUX2_DESCRIPTOR_BACKEND = os.getenv("FLUX2_DESCRIPTOR_BACKEND", "minicpm").strip().lower()
 if FLUX2_DESCRIPTOR_BACKEND not in {"florence", "qwen2_5_vl", "joycaption", "minicpm", "minicpm_service"}:
-    FLUX2_DESCRIPTOR_BACKEND = "minicpm_service"
+    FLUX2_DESCRIPTOR_BACKEND = "minicpm"
 if FLUX2_DESCRIPTOR_BACKEND == "qwen2_5_vl" and not FLUX2_ALLOW_QWEN_BACKEND:
-    FLUX2_DESCRIPTOR_BACKEND = "minicpm_service"
+    FLUX2_DESCRIPTOR_BACKEND = "minicpm"
 FLUX2_FIDELITY_BACKEND = os.getenv("FLUX2_FIDELITY_BACKEND", "florence").strip().lower()
 if FLUX2_FIDELITY_BACKEND not in {"florence", "qwen2_5_vl"}:
     FLUX2_FIDELITY_BACKEND = "florence"
@@ -304,7 +319,7 @@ FLUX2_FORCE_RUNTIME_SCORING_FOR_SINGLE_CANDIDATE = os.getenv(
 ) == "1"
 FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND = os.getenv(
     "FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND",
-    "minicpm_service",
+    "minicpm",
 ).strip().lower()
 if FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND not in {"florence", "joycaption", "minicpm", "minicpm_service"}:
     FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND = "minicpm"
@@ -338,7 +353,7 @@ ANALYZE_SELECTION_PREVIEW_MAX_SIDE = max(128, _env_int("ANALYZE_SELECTION_PREVIE
 ANALYZE_SELECTION_PREVIEW_JPEG_QUALITY = max(40, min(95, _env_int("ANALYZE_SELECTION_PREVIEW_JPEG_QUALITY", 80)))
 ANALYZE_GPU_QUEUE_TIMEOUT_S = max(5.0, _env_float("ANALYZE_GPU_QUEUE_TIMEOUT_S", 70.0))
 ANALYZE_MAX_FILE_BYTES = max(1, _env_int("ANALYZE_MAX_FILE_BYTES", 3 * 1024 * 1024))
-ANALYZE_BLUR_CHECK_ENABLED = os.getenv("ANALYZE_BLUR_CHECK_ENABLED", "1") == "1"
+ANALYZE_BLUR_CHECK_ENABLED = os.getenv("ANALYZE_BLUR_CHECK_ENABLED", "0") == "1"
 ANALYZE_BLUR_MIN_FOCUS_SCORE = _env_float("ANALYZE_BLUR_MIN_FOCUS_SCORE", 22.0)
 ANALYZE_BLUR_FOCUS_MAX_EDGE = max(256, _env_int("ANALYZE_BLUR_FOCUS_MAX_EDGE", 1024))
 ANALYZE_MIN_ACCEPT_CONFIDENCE = _env_float("ANALYZE_MIN_ACCEPT_CONFIDENCE", 0.25)
@@ -482,9 +497,9 @@ USER_PREP_ALPHA_MIN_TRANSPARENT_RATIO = min(
     0.99,
     max(0.0, _env_float("USER_PREP_ALPHA_MIN_TRANSPARENT_RATIO", 0.02)),
 )
-USER_PREP_DESCRIPTION_BACKEND = os.getenv("USER_PREP_DESCRIPTION_BACKEND", "minicpm_service").strip().lower()
+USER_PREP_DESCRIPTION_BACKEND = os.getenv("USER_PREP_DESCRIPTION_BACKEND", "minicpm").strip().lower()
 if USER_PREP_DESCRIPTION_BACKEND not in {"florence", "qwen2_5_vl", "joycaption", "minicpm", "minicpm_service"}:
-    USER_PREP_DESCRIPTION_BACKEND = "minicpm_service"
+    USER_PREP_DESCRIPTION_BACKEND = "minicpm"
 USER_PREP_MIN_PROMPT_WORDS = max(4, _env_int("USER_PREP_MIN_PROMPT_WORDS", 10))
 USER_PREP_UPLOAD_CONTAINER = os.getenv("USER_PREP_UPLOAD_CONTAINER", VTO_OUTPUT_CONTAINER).strip() or VTO_OUTPUT_CONTAINER
 gpu_semaphore = asyncio.Semaphore(GPU_CONCURRENCY)
@@ -2819,9 +2834,9 @@ def _build_flux2_runtime_negative_prompt(
 def _normalize_descriptor_backend(raw: Optional[str]) -> str:
     value = str(raw or FLUX2_DESCRIPTOR_BACKEND).strip().lower()
     if value not in {"florence", "qwen2_5_vl", "joycaption", "minicpm", "minicpm_service"}:
-        return "minicpm_service"
+        return "minicpm"
     if value == "qwen2_5_vl" and not FLUX2_ALLOW_QWEN_BACKEND:
-        return "minicpm_service"
+        return "minicpm"
     return value
 
 
@@ -3978,7 +3993,7 @@ def _remove_user_background(image_bytes: bytes) -> tuple[Optional[bytes], dict]:
 def _describe_user_image_for_prepare(user_img: Image.Image, image_url: str) -> str:
     candidates: List[str] = []
     requested = _normalize_descriptor_backend(USER_PREP_DESCRIPTION_BACKEND)
-    for item in [requested, "minicpm_service", "minicpm", "florence"]:
+    for item in [requested, "minicpm", "minicpm_service", "florence"]:
         if item and item not in candidates:
             candidates.append(item)
 
@@ -9708,40 +9723,27 @@ async def analyze_garment(
     - optional binary parts (extracted_cloth, item_1, item_2, ...)
     """
     t0 = time.time()
-    analyze_stage_timings = {
-        "read_input_s": 0.0,
-        "blur_check_s": 0.0,
-        "yolo_detect_s": 0.0,
-        "yolo_crop_s": 0.0,
-        "caption_total_s": 0.0,
-        "primary_type_total_s": 0.0,
-        "extract_total_s": 0.0,
-        "progress_sync_s": 0.0,
-    }
+    analyze_stage_timings = default_extraction_stage_timings()
 
     # ── AUTH ──
-    try:
-        auth_payload = _verify_bearer_token(_authorization)
-    except PermissionError:
-        payload = _build_error_payload(
-            title="Session Expired",
-            description="Please log in again and try uploading your item.",
-            reason_codes=["UNAUTHORIZED"],
-            status_code=401,
-            result="REJECTED",
-        )
-        return _multipart_form_response(payload)
+    auth_result = verify_authorization_or_response(
+        _authorization,
+        verify_bearer_token=_verify_bearer_token,
+        build_error_payload=_build_error_payload,
+        multipart_form_response=_multipart_form_response,
+    )
+    if not isinstance(auth_result, dict):
+        return auth_result
 
     # ── INPUT VALIDATION ──
-    upload = file or image
-    if not upload:
-        payload = _build_error_payload(
-            title="No Image Provided",
-            description="Please upload an image to analyze.",
-            reason_codes=["INVALID_IMAGE"],
-            status_code=400,
-        )
-        return _multipart_form_response(payload)
+    upload = resolve_upload_or_response(
+        file_upload=file,
+        image_upload=image,
+        build_error_payload=_build_error_payload,
+        multipart_form_response=_multipart_form_response,
+    )
+    if not isinstance(upload, UploadFile):
+        return upload
 
     effective_type = garment_type or garmentType
     requested_type = _normalize_garment_type(effective_type)
@@ -9750,30 +9752,20 @@ async def analyze_garment(
 
     try:
         # 1. Load Image
-        t_stage = time.time()
-        image_bytes = await upload.read()
-        analyze_stage_timings["read_input_s"] = round(time.time() - t_stage, 4)
-        if len(image_bytes) > ANALYZE_MAX_FILE_BYTES:
-            payload = _build_error_payload(
-                title="File Too Large",
-                description="Please upload an image smaller than 3MB.",
-                reason_codes=["FILE_TOO_LARGE"],
-                status_code=400,
-            )
-            return _multipart_form_response(payload)
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        if ANALYZE_BLUR_CHECK_ENABLED:
-            t_stage = time.time()
-            focus_score = _focus_score(img)
-            analyze_stage_timings["blur_check_s"] = round(time.time() - t_stage, 4)
-            if focus_score < ANALYZE_BLUR_MIN_FOCUS_SCORE:
-                payload = _build_error_payload(
-                    title="Image Too Blurry",
-                    description="The garment is not clear enough. Try a brighter, sharper photo.",
-                    reason_codes=["IMAGE_TOO_BLURRY"],
-                    status_code=400,
-                )
-                return _multipart_form_response(payload)
+        image_input = await read_input_image_or_response(
+            upload,
+            max_file_bytes=ANALYZE_MAX_FILE_BYTES,
+            blur_check_enabled=ANALYZE_BLUR_CHECK_ENABLED,
+            blur_min_focus_score=ANALYZE_BLUR_MIN_FOCUS_SCORE,
+            focus_score_fn=_focus_score,
+            build_error_payload=_build_error_payload,
+            multipart_form_response=_multipart_form_response,
+            stage_timings=analyze_stage_timings,
+        )
+        if not hasattr(image_input, "image"):
+            return image_input
+        image_bytes = image_input.image_bytes
+        img = image_input.image
 
         gpu_queue_wait_s = 0.0
         gpu_slot_acquired = False
@@ -9784,903 +9776,143 @@ async def analyze_garment(
             gpu_queue_wait_s = round(time.time() - t_gpu_wait, 4)
 
             # 2. Detect & Crop (YOLO) or explicit-type fast path.
-            direct_requested_type_mode = requested_type in {"top", "bottom", "dress", "outer"} and selected_index is None
-            parser_split_used = False
-            parser_candidates_count = 0
-            parser_split_reject_reason = ""
-            heuristic_split_used = False
-            heuristic_candidates_count = 0
-            raw_detected_count = 0
-            items = []
-
-            if direct_requested_type_mode:
-                direct_category_meta = _wardrobe_category_from_garment_type(requested_type, style=None)
-                items = [{
-                    "garment_id": 0,
-                    "type": requested_type,
-                    "garment_type": requested_type,
-                    "type_source": "requested_type_direct",
-                    "detection_source": "type_direct_image",
-                    "promptDescription": "",
-                    "description": "",
-                    "style": direct_category_meta["style"],
-                    "category_key": direct_category_meta["category_key"],
-                    "primary_category_key": direct_category_meta["primary_category_key"],
-                    "url": None,
-                    "bbox": [0, 0, img.width, img.height],
-                    "crop": {
-                        "width": int(img.width),
-                        "height": int(img.height),
-                        "area_ratio": 1.0,
-                    },
-                    "confidence": {
-                        "yolo": 1.0,
-                    },
-                    "_image_obj": img.copy(),
-                    "_mask_obj": None,
-                }]
-            else:
-                t_stage = time.time()
-                instances = engine.yolo.detect_instances(img)
-                analyze_stage_timings["yolo_detect_s"] = round(time.time() - t_stage, 4)
-                if not instances:
-                    payload = _build_error_payload(
-                        title="No Clothing Found",
-                        description="No clothing item was detected in the uploaded image.",
-                        reason_codes=["NO_CLOTHING"],
-                        status_code=400,
-                    )
-                    return _multipart_form_response(payload)
-                else:
-                    # Finalize crops
-                    t_stage = time.time()
-                    instances = engine.yolo.get_crops(img, instances)
-                    analyze_stage_timings["yolo_crop_s"] = round(time.time() - t_stage, 4)
-
-                # 2a. Optional parser split fallback (disabled by default for routing stability).
-                raw_detected_count = len(instances)
-                if (
-                    False
-                    and ANALYZE_USE_PARSER_FOR_PREROUTING
-                    and ANALYZE_ENABLE_PARSER_SPLIT
-                    and engine.parser is not None
-                ):
-                    try:
-                        parser_candidates = _parser_preroute_instances(
-                            image=img,
-                            requested_type=requested_type,
-                            square_padding_ratio=0.12,
-                        )
-                        parser_candidates_count = len(parser_candidates)
-                        if len(parser_candidates) >= 2:
-                            plausible, reason = _parser_split_is_plausible(parser_candidates, img.height)
-                            if plausible:
-                                parser_split_used = True
-                                instances = parser_candidates
-                            else:
-                                parser_split_reject_reason = reason
-                    except Exception as parser_err:
-                        logger.warning(f"Human parser split fallback failed: {parser_err}")
-
-                # 2b. Heuristic split when parser could not split:
-                # - single full-body candidate
-                # - multi-candidate same-type full-body detections (prevents top-only collapse)
-                if ANALYZE_ENABLE_HEURISTIC_SPLIT and not parser_split_used and instances:
-                    try:
-                        trigger_split = False
-                        base_inst = instances[0]
-                        if len(instances) == 1:
-                            trigger_split = True
-                        elif _should_force_fullbody_split(instances, img.height):
-                            largest = _largest_instance(instances)
-                            if largest is not None:
-                                base_inst = largest
-                                trigger_split = True
-
-                        if trigger_split:
-                            classify = engine.florence.classify_garment_type(base_inst["image"], hint_type=requested_type)
-                            base_type = str(classify.get("type") or "").strip().lower()
-                            base_score = float(classify.get("score", 0.0) or 0.0)
-                            dress_locked = (
-                                base_type == "dress"
-                                and base_score >= ANALYZE_FLORENCE_DRESS_LOCK_MIN_SCORE
-                                and requested_type not in {"top", "bottom"}
-                            )
-                            allow_split = not dress_locked
-                            if allow_split:
-                                heuristics = _heuristic_split_candidates(img, base_inst)
-                                heuristic_candidates_count = max(heuristic_candidates_count, len(heuristics))
-                                if len(heuristics) >= 2:
-                                    heuristic_split_used = True
-                                    instances = heuristics
-                    except Exception as heur_err:
-                        logger.warning(f"Heuristic split fallback failed: {heur_err}")
-
-                # 2b.1 Optional parser tightening. Keep disabled for first-step routing by default.
-                if False and ANALYZE_USE_PARSER_FOR_PREROUTING and len(instances) >= 1 and engine.parser is not None:
-                    try:
-                        instances = _tighten_instances_with_parser_masks(img, instances)
-                    except Exception as tighten_err:
-                        logger.warning(f"Parser-based crop tightening failed: {tighten_err}")
-
-                instances = _suppress_auxiliary_instances(instances, img.width, img.height)
-
-                # 2c. Optional hybrid semantic rerank with Florence-2 (feature-flagged).
-                if USE_FLORENCE_HYBRID_VERIFY and instances:
-                    ranked = sorted(instances, key=lambda x: float(x.get("confidence", 0.0)), reverse=True)
-                    for idx, inst in enumerate(ranked):
-                        yolo_conf = float(inst.get("confidence", 0.0))
-                        bbox = inst.get("bbox") or [0, 0, img.width, img.height]
-                        prior = _bbox_prior(bbox, img.width, img.height)
-
-                        florence_type = _normalize_garment_type(str(inst.get("label", ""))) or "top"
-                        florence_conf = 0.50
-                        florence_reason = "fallback_no_florence"
-                        florence_caption = ""
-
-                        if idx < HYBRID_TOP_K:
-                            try:
-                                source_hint = _normalize_garment_type(str(inst.get("label", "")))
-                                hint = requested_type or source_hint
-                                verdict = engine.florence.classify_garment_type(inst["image"], hint_type=hint)
-                                florence_type = verdict.get("type") or florence_type
-                                florence_conf = float(verdict.get("score", florence_conf))
-                                florence_reason = str(verdict.get("reason", "ok"))
-                                florence_caption = str(verdict.get("caption", ""))
-                                # Keep heuristic split labels stable unless Florence is very confident.
-                                if (
-                                    str(inst.get("source", "")) == "heuristic_split"
-                                    and source_hint
-                                    and florence_type != source_hint
-                                    and florence_conf < 0.90
-                                ):
-                                    florence_type = source_hint
-                                    florence_reason = f"{florence_reason}|locked_to_heuristic_label"
-
-                                # For shorts/skirt-like bottoms, trim lower leg-heavy region from heuristic split.
-                                if (
-                                    str(inst.get("source", "")) == "heuristic_split"
-                                    and source_hint == "bottom"
-                                    and _is_shorts_like_caption(florence_caption)
-                                ):
-                                    bx = inst.get("bbox") or [0, 0, img.width, img.height]
-                                    x0, y0, x1, y1 = [int(v) for v in bx]
-                                    h = max(1, y1 - y0)
-                                    keep_h = max(int(img.height * 0.16), int(h * ANALYZE_HEURISTIC_BOTTOM_TRIM_SHORTS_RATIO))
-                                    new_y1 = min(y1, y0 + keep_h)
-                                    if new_y1 - y0 >= 48:
-                                        inst["bbox"] = [x0, y0, x1, new_y1]
-                                        inst["image"] = img.crop((x0, y0, x1, new_y1))
-                                        bbox = inst["bbox"]
-                                        prior = _bbox_prior(bbox, img.width, img.height)
-                            except Exception as classify_err:
-                                logger.warning(f"Florence hybrid classify failed, falling back to YOLO candidate ordering: {classify_err}")
-
-                        score = _hybrid_score(yolo_conf=yolo_conf, florence_conf=florence_conf, bbox_prior=prior)
-                        if requested_type and florence_type == requested_type:
-                            score = min(1.0, score + 0.06)
-
-                        inst["_hybrid"] = {
-                            "predicted_type": florence_type,
-                            "yolo_confidence": yolo_conf,
-                            "florence_confidence": florence_conf,
-                            "bbox_prior": prior,
-                            "score": score,
-                            "florence_reason": florence_reason,
-                            "florence_caption": florence_caption,
-                        }
-
-                    ranked = sorted(ranked, key=lambda inst: float(inst.get("_hybrid", {}).get("score", 0.0)), reverse=True)
-                    if HYBRID_MIN_SCORE > 0.0:
-                        thresholded = [inst for inst in ranked if float(inst.get("_hybrid", {}).get("score", 0.0)) >= HYBRID_MIN_SCORE]
-                        if thresholded:
-                            ranked = thresholded
-                    instances = ranked[:ANALYZE_MAX_ITEMS]
-
-                # 3. Analyze with Florence-2 (Auto-Captioning)
-                items = []
-                for idx, inst in enumerate(instances):
-                    t_caption = time.time()
-                    if ANALYZE_CAPTION_MODE == "detailed":
-                        prompt_desc = engine.florence.describe_garment(inst["image"])
-                    else:
-                        prompt_desc = engine.florence.describe_garment_short(inst["image"])
-                    analyze_stage_timings["caption_total_s"] += (time.time() - t_caption)
-
-                    hybrid_meta = inst.get("_hybrid", {})
-                    autotype_meta = {}
-                    if USE_FLORENCE_HYBRID_VERIFY:
-                        resolved_type = hybrid_meta.get("predicted_type")
-                        type_source = "florence_hybrid"
-                    else:
-                        resolved_type = _normalize_garment_type(str(inst.get("label")))
-                        type_source = "yolo"
-                        if not resolved_type:
-                            caption_guess = _infer_type_from_caption(prompt_desc)
-                            if caption_guess:
-                                resolved_type = caption_guess
-                                type_source = "caption_autotype"
-                                autotype_meta = {"reason": "caption_guess"}
-                            else:
-                                try:
-                                    verdict = engine.florence.classify_garment_type(inst["image"], hint_type=requested_type)
-                                    guess = _normalize_garment_type(str(verdict.get("type")))
-                                    if guess:
-                                        resolved_type = guess
-                                        type_source = "florence_autotype"
-                                        autotype_meta = {
-                                            "score": float(verdict.get("score", 0.0)),
-                                            "reason": str(verdict.get("reason", "")),
-                                        }
-                                except Exception as auto_type_err:
-                                    logger.warning(f"Per-instance automatic type resolution failed: {auto_type_err}")
-                        if not resolved_type:
-                            resolved_type = "top"
-                    detection_source = str(inst.get("source", "yolo"))
-
-                    bbox = inst["bbox"]
-                    x0, y0, x1, y1 = bbox
-                    crop_w = max(1, int(x1) - int(x0))
-                    crop_h = max(1, int(y1) - int(y0))
-                    crop_area_ratio = min(1.0, float(crop_w * crop_h) / max(1.0, float(img.width * img.height)))
-
-                    # Drop obvious non-garment detections (for example furniture/background objects),
-                    # but keep plausible garment crops even when caption text is weak.
-                    non_garment_caption = _caption_non_garment_signal(prompt_desc)
-                    has_garment_caption = _caption_garment_signal(prompt_desc)
-                    if non_garment_caption and not has_garment_caption:
-                        det_conf = float(inst.get("confidence", 0.0))
-                        label_hint = (
-                            _normalize_garment_type(str(inst.get("label") or ""))
-                            or _normalize_garment_type(str(resolved_type or ""))
-                        )
-                        plausible_garment = (
-                            label_hint in {"top", "bottom", "dress", "outer"}
-                            and crop_area_ratio >= 0.045
-                            and det_conf >= 0.35
-                        )
-                        if not plausible_garment:
-                            logger.info(
-                                "Suppressing non-garment candidate from caption: %s",
-                                (prompt_desc or "")[:140],
-                            )
-                            continue
-
-                    # Category mapping from prompt/auto-type
-                    style_infer = autotype_meta.get("specific_clothing_style") if autotype_meta else None
-                    if not style_infer and prompt_desc:
-                        style_infer = _infer_style_from_text(prompt_desc, garment_type=resolved_type)
-
-                    category_meta = _wardrobe_category_from_garment_type(resolved_type, style=style_infer)
-
-                    items.append({
-                        "garment_id": idx,
-                        "type": resolved_type,
-                        "garment_type": resolved_type,
-                        "type_source": type_source,
-                        "detection_source": detection_source,
-                        "promptDescription": prompt_desc,
-                        "description": prompt_desc,
-                        "style": category_meta["style"],
-                        "category_key": category_meta["category_key"],
-                        "primary_category_key": category_meta["primary_category_key"],
-                        "url": None,
-                        "bbox": bbox,
-                        "crop": {
-                            "width": crop_w,
-                            "height": crop_h,
-                            "area_ratio": crop_area_ratio,
-                        },
-                        "confidence": {
-                            "yolo": float(hybrid_meta.get("yolo_confidence", inst.get("confidence", 0.0))),
-                            "florence_type": float(hybrid_meta.get("florence_confidence", 0.0)),
-                            "bbox_prior": float(hybrid_meta.get("bbox_prior", 0.0)),
-                            "hybrid": float(hybrid_meta.get("score", 0.0)),
-                        } if USE_FLORENCE_HYBRID_VERIFY else {
-                            "yolo": float(inst.get("confidence", 0.0)),
-                        },
-                        "_image_obj": inst["image"],
-                        "_mask_obj": inst.get("mask"),
-                    })
-                    if autotype_meta:
-                        items[-1]["autotype"] = autotype_meta
-                    if detection_source == "human_parser":
-                        items[-1]["parser_area_ratio"] = float(inst.get("parser_area_ratio", 0.0))
-                    if inst.get("tighten_source"):
-                        items[-1]["tighten_source"] = str(inst.get("tighten_source"))
-                    if inst.get("tighten_adjustment"):
-                        items[-1]["tighten_adjustment"] = str(inst.get("tighten_adjustment"))
-
-                if requested_type in {"top", "bottom", "dress", "outer"} and not items:
-                    direct_category_meta = _wardrobe_category_from_garment_type(requested_type, style=None)
-                    items = [{
-                        "garment_id": 0,
-                        "type": requested_type,
-                        "garment_type": requested_type,
-                        "type_source": "requested_type_direct",
-                        "detection_source": "type_forced_full_image",
-                        "promptDescription": "",
-                        "description": "",
-                        "style": direct_category_meta["style"],
-                        "category_key": direct_category_meta["category_key"],
-                        "primary_category_key": direct_category_meta["primary_category_key"],
-                        "url": None,
-                        "bbox": [0, 0, img.width, img.height],
-                        "crop": {
-                            "width": int(img.width),
-                            "height": int(img.height),
-                            "area_ratio": 1.0,
-                        },
-                        "confidence": {
-                            "yolo": 1.0,
-                        },
-                        "_image_obj": img.copy(),
-                        "_mask_obj": None,
-                    }]
-
-                if not items:
-                    payload = _build_error_payload(
-                        title="No Clothing Found",
-                        description="No clothing item was detected in the uploaded image.",
-                        reason_codes=["NO_CLOTHING"],
-                        status_code=400,
-                    )
-                    return _multipart_form_response(payload)
-
-            dedup_removed = 0
-            collapsed_same_type = False
-            forced_dress_fallback = None
-            if not direct_requested_type_mode:
-                deduped_items = _dedupe_items(items, iou_threshold=0.60)
-                dedup_removed = len(items) - len(deduped_items)
-                items = deduped_items
-
-                # Collapse to single candidate when all remaining detections map to same type.
-                unique_types = sorted({str(it.get("type")) for it in items if it.get("type")})
-                if len(items) > 1 and len(unique_types) <= 1 and _should_collapse_same_type(items):
-                    best = max(items, key=_item_rank_score)
-                    items = [best]
-                    collapsed_same_type = True
-
-                # Reindex ids after dedupe/collapse to keep selected_index stable for client.
-                for new_idx, item in enumerate(items):
-                    item["garment_id"] = new_idx
-
-            # Primary type identification pass: keep category detection focused on garment crop itself.
-            if (not direct_requested_type_mode) and ANALYZE_PRIMARY_TYPE_WITH_FLORENCE and items:
-                for item in items:
-                    try:
-                        t_type = time.time()
-                        crop_img = item.get("_image_obj")
-                        if crop_img is None:
-                            continue
-                        hint = requested_type or _normalize_garment_type(str(item.get("type") or ""))
-                        verdict = engine.florence.classify_garment_type(crop_img, hint_type=hint)
-                        predicted_type = _normalize_garment_type(str(verdict.get("type") or ""))
-                        predicted_score = float(verdict.get("score", 0.0) or 0.0)
-                        if predicted_type in {"top", "bottom", "dress", "outer"}:
-                            item["type"] = predicted_type
-                            item["garment_type"] = predicted_type
-                            item["type_source"] = "florence_primary"
-                            item["type_model_score"] = round(predicted_score, 4)
-                            inferred_style = _infer_style_from_text(
-                                str(item.get("promptDescription") or item.get("description") or ""),
-                                garment_type=predicted_type,
-                            )
-                            category_meta = _wardrobe_category_from_garment_type(
-                                predicted_type,
-                                style=inferred_style if inferred_style else None,
-                            )
-                            item["style"] = category_meta["style"]
-                            item["category_key"] = category_meta["category_key"]
-                            item["primary_category_key"] = category_meta["primary_category_key"]
-                        analyze_stage_timings["primary_type_total_s"] += (time.time() - t_type)
-                    except Exception as type_err:
-                        logger.warning(f"Primary type identify failed for analyze item {item.get('garment_id')}: {type_err}")
-
-            # Run a second dedupe pass after type normalization. This removes
-            # near-identical candidates that only converge to the same type
-            # after Florence relabeling.
-            if (not direct_requested_type_mode) and len(items) > 1:
-                typed_deduped_items = _dedupe_items(items, iou_threshold=0.75)
-                if typed_deduped_items:
-                    items = typed_deduped_items
-                    for new_idx, item in enumerate(items):
-                        item["garment_id"] = new_idx
-                # Parser masking is reserved for typed color measurement, not routing.
-
-            if not direct_requested_type_mode:
-                items, forced_dress_fallback = _maybe_force_uncertain_fullbody_to_dress(
-                    items,
-                    image_width=img.width,
-                    image_height=img.height,
-                    requested_type=requested_type,
-                )
-                if forced_dress_fallback:
-                    for new_idx, item in enumerate(items):
-                        item["garment_id"] = new_idx
-
-            auto_selected_index = None
-            if selected_index is None and requested_type and len(items) > 1:
-                matched = [
-                    idx for idx, item in enumerate(items)
-                    if _normalize_garment_type(str(item.get("type"))) == requested_type
-                ]
-                # If type is explicitly requested, proceed with the top-ranked matching candidate.
-                if len(matched) >= 1:
-                    auto_selected_index = matched[0]
-                else:
-                    # Frontend second-pass sends a cropped image + explicit type. If Florence
-                    # still mislabels the crop, do not ask for selection again; choose the
-                    # best geometry-matching candidate and force the requested type later.
-                    auto_selected_index = max(
-                        range(len(items)),
-                        key=lambda idx: _requested_type_geometry_score(items[idx], requested_type, img.height),
-                    )
-            elif (
-                selected_index is None
-                and not requested_type
-                and len(items) > 1
-                and ANALYZE_AUTO_SELECT_MULTI_DRESS
-            ):
-                normalized_types = [
-                    _normalize_garment_type(str(item.get("type") or "")) for item in items
-                ]
-                unique_norm_types = sorted({t for t in normalized_types if t})
-                # If detector+Florence agree this is effectively a dress-only scene,
-                # select the highest-ranked item instead of forcing a manual selection.
-                if len(unique_norm_types) == 1 and unique_norm_types[0] == "dress":
-                    auto_selected_index = max(
-                        range(len(items)),
-                        key=lambda idx: _item_rank_score(items[idx]),
-                    )
+            detection_result, detection_response = run_detection_stage_or_response(
+                image=img,
+                requested_type=requested_type,
+                selected_index=selected_index,
+                engine=engine,
+                stage_timings=analyze_stage_timings,
+                logger=logger,
+                build_error_payload=_build_error_payload,
+                multipart_form_response=_multipart_form_response,
+                wardrobe_category_from_garment_type=_wardrobe_category_from_garment_type,
+                normalize_garment_type=_normalize_garment_type,
+                parser_preroute_instances=_parser_preroute_instances,
+                parser_split_is_plausible=_parser_split_is_plausible,
+                heuristic_split_candidates=_heuristic_split_candidates,
+                should_force_fullbody_split=_should_force_fullbody_split,
+                largest_instance=_largest_instance,
+                suppress_auxiliary_instances=_suppress_auxiliary_instances,
+                bbox_prior=_bbox_prior,
+                hybrid_score=_hybrid_score,
+                is_shorts_like_caption=_is_shorts_like_caption,
+                infer_type_from_caption=_infer_type_from_caption,
+                caption_non_garment_signal=_caption_non_garment_signal,
+                caption_garment_signal=_caption_garment_signal,
+                infer_style_from_text=_infer_style_from_text,
+                dedupe_items=_dedupe_items,
+                should_collapse_same_type=_should_collapse_same_type,
+                item_rank_score=_item_rank_score,
+                maybe_force_uncertain_fullbody_to_dress=_maybe_force_uncertain_fullbody_to_dress,
+                requested_type_geometry_score=_requested_type_geometry_score,
+                analyze_use_parser_for_prerouting=ANALYZE_USE_PARSER_FOR_PREROUTING,
+                analyze_enable_parser_split=ANALYZE_ENABLE_PARSER_SPLIT,
+                analyze_enable_heuristic_split=ANALYZE_ENABLE_HEURISTIC_SPLIT,
+                analyze_florence_dress_lock_min_score=ANALYZE_FLORENCE_DRESS_LOCK_MIN_SCORE,
+                analyze_heuristic_bottom_trim_shorts_ratio=ANALYZE_HEURISTIC_BOTTOM_TRIM_SHORTS_RATIO,
+                use_florence_hybrid_verify=USE_FLORENCE_HYBRID_VERIFY,
+                hybrid_top_k=HYBRID_TOP_K,
+                hybrid_min_score=HYBRID_MIN_SCORE,
+                analyze_max_items=ANALYZE_MAX_ITEMS,
+                analyze_caption_mode=ANALYZE_CAPTION_MODE,
+                analyze_primary_type_with_florence=ANALYZE_PRIMARY_TYPE_WITH_FLORENCE,
+                analyze_auto_select_multi_dress=ANALYZE_AUTO_SELECT_MULTI_DRESS,
+            )
+            if detection_response is not None:
+                return detection_response
+            items = list(detection_result.get("items") or [])
+            direct_requested_type_mode = bool(detection_result.get("direct_requested_type_mode"))
+            raw_detected_count = int(detection_result.get("raw_detected_count") or 0)
+            parser_split_used = bool(detection_result.get("parser_split_used"))
+            heuristic_split_used = bool(detection_result.get("heuristic_split_used"))
+            auto_selected_index = detection_result.get("auto_selected_index")
 
             # ── MULTI-ITEM SELECTION REQUIRED (400 with multipart) ──
             if ANALYZE_REQUIRE_SELECTION and len(items) > 1 and selected_index is None and auto_selected_index is None:
-                total_s = round(time.time() - t0, 4)
-                # Build item_breakdown for Flutter
-                item_breakdown = []
-                binary_parts = []
-                split_selection_needed = raw_detected_count <= 1 and (parser_split_used or heuristic_split_used)
-                for item in items:
-                    pub = _to_public_item(item)
-                    pub["selection_index"] = int(pub.get("garment_id", 0))
-                    pub["rank"] = int(pub["selection_index"]) + 1
-                    mapped_type = item.get("garment_type") or item.get("type", "unknown")
-                    pub["garment_type"] = mapped_type
-                    item_breakdown.append(pub)
+                return _build_extraction_selection_required_response(
+                    items=items,
+                    full_image=img,
+                    started_at=t0,
+                    gpu_queue_wait_s=gpu_queue_wait_s,
+                    raw_detected_count=raw_detected_count,
+                    parser_split_used=parser_split_used,
+                    heuristic_split_used=heuristic_split_used,
+                    selection_preview_format=ANALYZE_SELECTION_PREVIEW_FORMAT,
+                    selection_preview_max_side=ANALYZE_SELECTION_PREVIEW_MAX_SIDE,
+                    selection_preview_jpeg_quality=ANALYZE_SELECTION_PREVIEW_JPEG_QUALITY,
+                    to_public_item=_to_public_item,
+                    build_adaptive_rect_crop_variants=_build_adaptive_rect_crop_variants,
+                    prepare_extract_source_image=_prepare_extract_source_image,
+                    build_multipart_parts=_build_multipart_parts,
+                    build_success_payload=_build_success_payload,
+                    multipart_form_response=_multipart_form_response,
+                )
 
-                    preview = None
-                    try:
-                        preview_variants = _build_adaptive_rect_crop_variants(
-                            full_image=img,
-                            selected_candidate=item,
-                            garment_type=str(mapped_type or ""),
-                            all_candidates=items,
-                        )
-                        if preview_variants:
-                            chosen_preview = preview_variants[0]
-                            preview = chosen_preview.get("image")
-                            if isinstance(preview, Image.Image):
-                                preview = preview.convert("RGB")
-                            pub["preview_crop_bbox"] = [
-                                int(v) for v in (chosen_preview.get("bbox") or item.get("bbox") or [0, 0, img.width, img.height])
-                            ]
-                            pub["preview_geometry_source"] = str(chosen_preview.get("name") or "adaptive_rect")
-                        if preview is None:
-                            preview_plan = _prepare_extract_source_image(
-                                full_image=img,
-                                bbox=item.get("bbox"),
-                                garment_type=str(mapped_type or ""),
-                                total_items=len(items),
-                                detector_mask=item.get("_mask_obj"),
-                            )
-                            preview = preview_plan.image.convert("RGB")
-                            pub["preview_crop_bbox"] = [int(v) for v in preview_plan.extract_bbox]
-                            pub["preview_geometry_source"] = str(preview_plan.geometry_source)
-                    except Exception as preview_err:
-                        logger.warning(
-                            "Analyze selection preview refinement failed for item %s: %s",
-                            pub.get("selection_index"),
-                            preview_err,
-                        )
-                        item_img = item.get("_image_obj")
-                        if item_img is not None:
-                            preview = item_img.convert("RGB")
+            selected_item, _selected_index_internal, selected_item_response = resolve_selected_item_or_response(
+                items=items,
+                requested_type=requested_type,
+                selected_index=selected_index,
+                auto_selected_index=auto_selected_index,
+                min_accept_confidence=ANALYZE_MIN_ACCEPT_CONFIDENCE,
+                build_error_payload=_build_error_payload,
+                multipart_form_response=_multipart_form_response,
+            )
+            if selected_item_response is not None:
+                return selected_item_response
 
-                    if preview is not None:
-                        if max(preview.size) > ANALYZE_SELECTION_PREVIEW_MAX_SIDE:
-                            resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
-                            preview.thumbnail(
-                                (ANALYZE_SELECTION_PREVIEW_MAX_SIDE, ANALYZE_SELECTION_PREVIEW_MAX_SIDE),
-                                resampling,
-                            )
-                        buf = io.BytesIO()
-                        if ANALYZE_SELECTION_PREVIEW_FORMAT == "png":
-                            preview.save(buf, format="PNG", optimize=True)
-                            file_ext = "png"
-                            content_type = "image/png"
-                        else:
-                            preview.save(
-                                buf,
-                                format="JPEG",
-                                quality=ANALYZE_SELECTION_PREVIEW_JPEG_QUALITY,
-                                optimize=True,
-                            )
-                            file_ext = "jpg"
-                            content_type = "image/jpeg"
-                        part_name = f"item_{int(pub['rank'])}"
-                        binary_parts.append({
-                            "name": part_name,
-                            "filename": f"{part_name}.{file_ext}",
-                            "content_type": content_type,
-                            "bytes": buf.getvalue(),
-                        })
+            selected_item, selected_item_response = run_selected_item_extraction_or_response(
+                selected_item=selected_item,
+                requested_type=requested_type,
+                direct_requested_type_mode=direct_requested_type_mode,
+                full_image=img,
+                all_items_count=len(items),
+                stage_timings=analyze_stage_timings,
+                engine=engine,
+                logger=logger,
+                analyze_extract_cloth=ANALYZE_EXTRACT_CLOTH,
+                analyze_prompt_from_extracted=ANALYZE_PROMPT_FROM_EXTRACTED,
+                analyze_require_extracted_prompt=ANALYZE_REQUIRE_EXTRACTED_PROMPT,
+                analyze_caption_mode=ANALYZE_CAPTION_MODE,
+                flux2_single_garment_extract_default_backend=FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND,
+                flux2_single_garment_extract_default_steps=FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS,
+                flux2_single_garment_extract_default_seed=FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_SEED,
+                normalize_garment_type=_normalize_garment_type,
+                prepare_extract_source_image=_prepare_extract_source_image,
+                build_error_payload=_build_error_payload,
+                multipart_form_response=_multipart_form_response,
+                run_flux2_cloth_only_extract=_run_flux2_cloth_only_extract,
+                descriptor_is_weak=_descriptor_is_weak,
+                caption_non_garment_signal=_caption_non_garment_signal,
+                download_image=download_image,
+                flatten_rgba_on_white=_flatten_rgba_on_white,
+                sanitize_garment_description=_sanitize_garment_description,
+                infer_style_from_text=_infer_style_from_text,
+                wardrobe_category_from_garment_type=_wardrobe_category_from_garment_type,
+            )
+            if selected_item_response is not None:
+                return selected_item_response
 
-                data = {
-                    "result": "REJECTED",
-                    "title": "Selection Required",
-                    "description": "We found multiple garments. Please select one item to continue.",
-                    "reason_codes": (
-                        ["MULTI_ITEM_SELECTION_REQUIRED", "LOW_CONFIDENCE"]
-                        if split_selection_needed
-                        else ["MULTI_ITEM_SELECTION_REQUIRED"]
-                    ),
-                    "selection_required": True,
-                    "total_garments_found": len(items),
-                    "selection_hint": {
-                        "expected_field": "type",
-                        "allowed_types": ["top", "bottom", "dress", "outer"],
-                    },
-                    "item_breakdown": item_breakdown,
-                    "multipart_data": _build_multipart_parts(items=item_breakdown),
-                    "latencies": {"total": total_s, "gpu_queue_wait": gpu_queue_wait_s},
-                    "processing_time_ms": int(total_s * 1000),
-                }
-                payload = _build_success_payload(data=data, status_code=400, message="")
-                return _multipart_form_response(payload, binary_parts=binary_parts)
-
-            selected_item = None
-            selected_index_internal = None
-            if selected_index is not None:
-                # Backward compatibility: accept 0-based index and 1-based rank.
-                if 1 <= selected_index <= len(items):
-                    selected_index_internal = selected_index - 1
-                else:
-                    selected_index_internal = selected_index
-                if selected_index_internal < 0 or selected_index_internal >= len(items):
-                    payload = _build_error_payload(
-                        title="Invalid Selection",
-                        description=f"selected_index must be 0..{max(0, len(items) - 1)} (legacy) or 1..{len(items)} (rank).",
-                        reason_codes=["INVALID_SELECTION_TYPE"],
-                        status_code=400,
-                    )
-                    return _multipart_form_response(payload)
-                selected_item = items[selected_index_internal]
-            elif auto_selected_index is not None:
-                selected_item = items[auto_selected_index]
-                selected_index = auto_selected_index
-            elif items:
-                selected_item = items[0]
-
-            if selected_item and not requested_type:
-                conf_obj = selected_item.get("confidence") if isinstance(selected_item.get("confidence"), dict) else {}
-                best_conf = float(conf_obj.get("hybrid", conf_obj.get("yolo", 0.0)))
-                if best_conf < ANALYZE_MIN_ACCEPT_CONFIDENCE:
-                    payload = _build_error_payload(
-                        title="Low Confidence Detection",
-                        description="The garment is not clear enough. Try a centered and brighter photo.",
-                        reason_codes=["LOW_CONFIDENCE"],
-                        status_code=400,
-                    )
-                    return _multipart_form_response(payload)
-
-            if selected_item and ANALYZE_EXTRACT_CLOTH:
-                forced_type = requested_type if requested_type in {"top", "bottom", "dress", "outer"} else None
-                selected_type = forced_type or _normalize_garment_type(str(selected_item.get("type")))
-                if not selected_type:
-                    payload = _build_error_payload(
-                        title="Type Required",
-                        description="Could not determine garment type. Please provide type as top, bottom, dress, or outer.",
-                        reason_codes=["INVALID_SELECTION_TYPE"],
-                        status_code=400,
-                    )
-                    return _multipart_form_response(payload)
-                if forced_type and str(selected_item.get("type")) != forced_type:
-                    selected_item["type_original"] = selected_item.get("type")
-                    selected_item["type"] = forced_type
-                    selected_item["garment_type"] = forced_type
-                    selected_item["type_source"] = "requested_type"
-
-                try:
-                    if direct_requested_type_mode:
-                        selected_item["bbox_geometry_source"] = "requested_type_direct_full_image"
-                        selected_item["extract_crop_bbox"] = [0, 0, img.width, img.height]
-                        selected_item["extract_crop_mode"] = "full_image_direct"
-                        extract_source_image = img.copy()
-                    else:
-                        extract_plan = _prepare_extract_source_image(
-                            full_image=img,
-                            bbox=selected_item.get("bbox"),
-                            garment_type=selected_type,
-                            total_items=len(items),
-                            detector_mask=selected_item.get("_mask_obj"),
-                        )
-                        if selected_item.get("bbox") != extract_plan.anchor_bbox:
-                            selected_item["detector_bbox"] = list(selected_item.get("bbox") or [])
-                            selected_item["bbox"] = list(extract_plan.anchor_bbox)
-                        selected_item["bbox_geometry_source"] = str(extract_plan.geometry_source)
-                        if extract_plan.mask_bbox:
-                            selected_item["mask_bbox"] = list(extract_plan.mask_bbox)
-                        selected_item["extract_crop_bbox"] = list(extract_plan.extract_bbox)
-                        selected_item["extract_crop_mode"] = str(extract_plan.crop_mode)
-                        extract_source_image = extract_plan.image
-                except Exception as crop_save_err:
-                    payload = _build_error_payload(
-                        title="Invalid Image",
-                        description="Could not process the image. Please upload a clearer photo.",
-                        reason_codes=["INVALID_IMAGE"],
-                        status_code=400,
-                    )
-                    return _multipart_form_response(payload)
-
-                selected_prompt_hint = " ".join(str(selected_item.get("promptDescription") or "").split()).strip()
-                if (
-                    not selected_prompt_hint
-                    or _descriptor_is_weak(selected_prompt_hint)
-                    or _caption_non_garment_signal(selected_prompt_hint)
-                ):
-                    selected_prompt_hint = ""
-
-                extracted_url = ""
-                extraction_meta = {}
-                extracted_image_bytes = b""
-                fallback: Dict[str, object] = {}
-                t_extract = time.time()
-                try:
-                    flux_fallback = _run_flux2_cloth_only_extract(
-                        source_image=extract_source_image,
-                        garment_type=selected_type,
-                        prompt_description="",
-                        fallback_prompt_description=selected_prompt_hint,
-                        description_backend=FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND,
-                        steps=FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS,
-                        seed=FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_SEED,
-                        color_reference_image=selected_item.get("_image_obj"),
-                        apply_type_color_mask=bool(forced_type),
-                    )
-                    fallback = flux_fallback
-                    extracted_url = str(flux_fallback.get("url") or "")
-                    extraction_meta = dict(flux_fallback.get("meta") or {})
-                    extracted_image_bytes = bytes(flux_fallback.get("_processed_image_bytes") or b"")
-                except Exception as extract_err:
-                    logger.error(
-                        "Flux2 extraction failed (type=%s, bbox=%s): %s",
-                        selected_type,
-                        selected_item.get("bbox"),
-                        extract_err,
-                    )
-                    payload = _build_error_payload(
-                        title="Extraction Failed",
-                        description="Garment extraction failed. Please retry with a clearer image.",
-                        reason_codes=["EXTRACTION_FAILED"],
-                        status_code=502,
-                    )
-                    return _multipart_form_response(payload)
-                analyze_stage_timings["extract_total_s"] = round(time.time() - t_extract, 4)
-
-                if not extracted_url:
-                    payload = _build_error_payload(
-                        title="Extraction Failed",
-                        description="No garment could be extracted. Please upload a clearer image.",
-                        reason_codes=["EXTRACTION_FAILED"],
-                        status_code=400,
-                    )
-                    return _multipart_form_response(payload)
-                selected_item["url"] = extracted_url
-                selected_item["output_image_url"] = extracted_url
-                selected_item["output_image_source"] = str(extraction_meta.get("path", "flux2_extract"))
-                selected_item["raw_image_url"] = str(fallback.get("raw_url") or extracted_url)
-                selected_item["raw_image_source"] = str(extraction_meta.get("pipeline") or "extract")
-                selected_item["extraction"] = extraction_meta
-                selected_item["_extracted_image_bytes"] = extracted_image_bytes
-                selected_item["cloth_verified"] = bool(extracted_url)
-                selected_item["cloth_verification_source"] = "flux2_extraction"
-                selected_item["baseGarmentPrompt"] = str(extraction_meta.get("base_garment_prompt") or "").strip()
-                selected_item["extractionAvoidClause"] = str(extraction_meta.get("extraction_avoid_clause") or "").strip()
-                selected_item["promptSectionsRaw"] = str(extraction_meta.get("prompt_sections_raw") or "").strip()
-                extracted_prompt_desc = " ".join(
-                    str(extraction_meta.get("prompt_description") or "").split()
-                ).strip()
-                if extracted_prompt_desc:
-                    # Keep the descriptor that was actually used to generate extracted cloth.
-                    selected_item["promptDescriptionRaw"] = extracted_prompt_desc
-
-                if ANALYZE_PROMPT_FROM_EXTRACTED:
-                    prompt_desc = ""
-                    if extracted_prompt_desc:
-                        prompt_desc = extracted_prompt_desc
-                        selected_item["promptDescriptionSource"] = "flux2_extract_descriptor"
-                    else:
-                        try:
-                            if extracted_image_bytes:
-                                cloth_image = Image.open(io.BytesIO(extracted_image_bytes)).convert("RGBA")
-                            else:
-                                cloth_image = download_image(extracted_url)
-                            caption_image = _flatten_rgba_on_white(cloth_image)
-                            if ANALYZE_CAPTION_MODE == "detailed":
-                                prompt_desc = engine.florence.describe_garment(caption_image)
-                            else:
-                                prompt_desc = engine.florence.describe_garment_short(caption_image)
-                            prompt_desc = _sanitize_garment_description(prompt_desc)
-                            selected_item["promptDescriptionSource"] = "florence_extracted_caption"
-                        except Exception as caption_err:
-                            if ANALYZE_REQUIRE_EXTRACTED_PROMPT:
-                                payload = _build_error_payload(
-                                    title="Extraction Failed",
-                                    description="Could not generate garment description. Please retry.",
-                                    reason_codes=["EXTRACTION_FAILED"],
-                                    status_code=400,
-                                )
-                                return _multipart_form_response(payload)
-                            logger.warning(f"Prompt generation from extracted cloth failed: {caption_err}")
-                            prompt_desc = ""
-
-                    if prompt_desc:
-                        selected_item["promptDescription"] = prompt_desc
-                        selected_item["description"] = prompt_desc
-                        extracted_style = _infer_style_from_text(prompt_desc, garment_type=selected_type)
-                        extracted_category = _wardrobe_category_from_garment_type(selected_type, style=extracted_style)
-                        selected_item["style"] = extracted_category["style"]
-                        selected_item["category_key"] = extracted_category["category_key"]
-                        selected_item["primary_category_key"] = extracted_category["primary_category_key"]
-
-                if forced_type:
-                    selected_item["extract_type_forced"] = forced_type
-
-            progress_id = None
-            progress_sync = None
+            prompting_context = {}
             if selected_item:
-                prompt_text_raw = str(selected_item.get("promptDescription") or selected_item.get("description") or "")
-                prompt_source = str(selected_item.get("promptDescriptionSource") or "").strip().lower()
-                if prompt_source == "flux2_extract_descriptor":
-                    # Preserve extracted descriptor verbatim for downstream try-on reuse.
-                    prompt_for_product = " ".join(
-                        str(
-                            selected_item.get("baseGarmentPrompt")
-                            or prompt_text_raw
-                        ).split()
-                    ).strip()
-                    if not prompt_for_product:
-                        prompt_for_product = _product_prompt_description(
-                            prompt_text_raw,
-                            garment_type=str(selected_item.get("type") or ""),
-                            style=str(selected_item.get("style") or ""),
-                            category_key=str(selected_item.get("category_key") or ""),
-                        )
-                else:
-                    prompt_for_product = _product_prompt_description(
-                        prompt_text_raw,
-                        garment_type=str(selected_item.get("type") or ""),
-                        style=str(selected_item.get("style") or ""),
-                        category_key=str(selected_item.get("category_key") or ""),
-                    )
-                selected_item["promptDescription"] = prompt_for_product
-                selected_item["description"] = prompt_for_product
-
-                progress_id = str(uuid.uuid4())
-                forced_type = requested_type if requested_type in {"top", "bottom", "dress", "outer"} else None
-                selected_type = forced_type or _normalize_garment_type(str(selected_item.get("type"))) or "top"
-                output_url = str(selected_item.get("url") or "")
-                prompt_description = str(selected_item.get("promptDescription") or "")
-                output_source = str(selected_item.get("output_image_source") or "")
-                extraction_obj = selected_item.get("extraction") if isinstance(selected_item.get("extraction"), dict) else {}
-                has_extraction_output = bool(output_url)
-                sync_style_guess = str(selected_item.get("style") or "")
-                if not sync_style_guess:
-                    sync_style_guess = str(
-                        _infer_style_from_text(prompt_description, garment_type=selected_type) or ""
-                    )
-                sync_category = _wardrobe_category_from_garment_type(
-                    selected_type,
-                    style=sync_style_guess if sync_style_guess else None,
+                selected_item, prompting_context = apply_selected_item_prompting(
+                    selected_item=selected_item,
+                    requested_type=requested_type,
+                    analyze_prompt_from_extracted=ANALYZE_PROMPT_FROM_EXTRACTED,
+                    normalize_garment_type=_normalize_garment_type,
+                    infer_style_from_text=_infer_style_from_text,
+                    wardrobe_category_from_garment_type=_wardrobe_category_from_garment_type,
+                    product_prompt_description=_product_prompt_description,
+                    build_garment_metadata=_build_garment_metadata,
                 )
-                selected_item["primary_category_key"] = sync_category["primary_category_key"]
-                selected_item["category_key"] = sync_category["category_key"]
-                selected_item["style"] = sync_category["style"]
-                garment_metadata = _build_garment_metadata(
-                    base_garment_prompt=str(selected_item.get("baseGarmentPrompt") or prompt_description),
-                    extraction_avoid_clause=str(selected_item.get("extractionAvoidClause") or ""),
-                    prompt_sections_raw=str(selected_item.get("promptSectionsRaw") or ""),
-                    descriptor_raw_text=str(extraction_obj.get("descriptor_raw_text") or ""),
-                    prompt_description=prompt_description,
-                    prompt_source=str(selected_item.get("promptDescriptionSource") or ""),
-                    target_type=selected_type,
-                    backend_target_type=selected_type,
-                    style=sync_category["style"],
-                    primary_category_key=sync_category["primary_category_key"],
-                    category_key=sync_category["category_key"],
-                    dominant_hexes=[
-                        str(v)
-                        for v in (
-                            extraction_obj.get("dominant_hexes")
-                            or selected_item.get("dominant_color_hexes")
-                            or []
-                        )
-                        if str(v).strip()
-                    ],
-                    accent_hexes=[
-                        str(v)
-                        for v in (extraction_obj.get("accent_hexes") or [])
-                        if str(v).strip()
-                    ],
-                    color_hints=[
-                        str(v)
-                        for v in (extraction_obj.get("color_hints") or [])
-                        if str(v).strip()
-                    ],
-                    color_profile=(
-                        extraction_obj.get("color_profile")
-                        if isinstance(extraction_obj.get("color_profile"), dict)
-                        else {}
-                    ),
-                    color_mask_source=str(extraction_obj.get("color_mask_source") or ""),
+                selected_item, _sync_context = sync_selected_item_progress(
+                    selected_item=selected_item,
+                    requested_type=requested_type,
+                    stage_timings=analyze_stage_timings,
+                    enable_progress_sync=ENABLE_WARDROBE_PROGRESS_SYNC,
+                    authorization=_authorization,
+                    sync_wardrobe_progress_dispatch=_sync_wardrobe_progress_dispatch,
+                    prompting_context=prompting_context,
                 )
-                selected_item["garmentMetadata"] = garment_metadata
-                metadata_prompt = (
-                    garment_metadata.get("prompt")
-                    if isinstance(garment_metadata.get("prompt"), dict)
-                    else {}
-                )
-                resolved_base_prompt = " ".join(
-                    str(metadata_prompt.get("base_garment_prompt") or "").split()
-                ).strip()
-                resolved_prompt_desc = " ".join(
-                    str(metadata_prompt.get("prompt_description") or "").split()
-                ).strip()
-                if resolved_base_prompt:
-                    selected_item["baseGarmentPrompt"] = resolved_base_prompt
-                if resolved_prompt_desc:
-                    selected_item["promptDescription"] = resolved_prompt_desc
-                    selected_item["description"] = resolved_prompt_desc
-                    prompt_description = resolved_prompt_desc
-                progress_meta = {
-                    "selected_type": selected_type,
-                    "requested_type": requested_type,
-                    "primary_category_key": sync_category["primary_category_key"],
-                    "category_key": sync_category["category_key"],
-                    "style": sync_category["style"],
-                    "outputImageSource": output_source or "crop",
-                    "prompt_source": "extracted_output" if ANALYZE_PROMPT_FROM_EXTRACTED else "detected_crop",
-                    "extraction": selected_item.get("extraction"),
-                    "cloth_verified": bool(selected_item.get("cloth_verified")),
-                    "cloth_verification_source": selected_item.get("cloth_verification_source"),
-                    "detection_source": selected_item.get("detection_source"),
-                    "type_source": selected_item.get("type_source"),
-                    "bbox": selected_item.get("bbox"),
-                    "crop": selected_item.get("crop"),
-                }
-                if has_extraction_output:
-                    t_sync = time.time()
-                    progress_sync = _sync_wardrobe_progress_dispatch(
-                        authorization=_authorization,
-                        progress_id=progress_id,
-                        output_url=output_url,
-                        prompt_description=prompt_description,
-                        garment_metadata=garment_metadata,
-                        metadata=progress_meta,
-                    )
-                    analyze_stage_timings["progress_sync_s"] = round(time.time() - t_sync, 4)
-                else:
-                    progress_sync = {
-                        "enabled": True,
-                        "synced": False,
-                        "reason": "skipped_missing_output",
-                        "id": progress_id,
-                    }
-                progress_id = str(progress_sync.get("id") or progress_id)
-                selected_item["wardrobe_progress_id"] = progress_id
-                selected_item["progress_sync"] = progress_sync
         except asyncio.TimeoutError:
             wait_s = round(time.time() - t_gpu_wait, 4)
             payload = _build_error_payload(
@@ -10701,82 +9933,22 @@ async def analyze_garment(
         # ── SUCCESS RESPONSE (200 with multipart: metadata + extracted_cloth) ──
         public_item = _to_public_item(selected_item) if selected_item else None
         total_s = round(time.time() - t0, 4)
-
-        # Resolve category mapping for the selected item
-        final_type = str(public_item.get("type", "top")) if public_item else "top"
-        final_style = str(public_item.get("style", "")) if public_item else ""
-        category_meta = _wardrobe_category_from_garment_type(final_type, style=final_style if final_style else None)
-
-        reason_codes = ["SINGLE_ITEM"]
-        extraction_path = str(public_item.get("output_image_source", "")) if public_item else ""
-        extraction_meta_public = (public_item or {}).get("extraction") or {}
         analyze_stage_timings["caption_total_s"] = round(float(analyze_stage_timings["caption_total_s"]), 4)
         analyze_stage_timings["primary_type_total_s"] = round(float(analyze_stage_timings["primary_type_total_s"]), 4)
-        if isinstance(extraction_meta_public, dict):
-            extraction_timings = extraction_meta_public.get("timings")
-            if isinstance(extraction_timings, dict):
-                analyze_stage_timings["extraction_pipeline"] = extraction_timings
-        if str(extraction_meta_public.get("pipeline") or "") == "flux2_extract":
-            reason_codes.append("FLUX2_EXTRACT_PIPELINE")
-        elif extraction_meta_public.get("endpoint"):
-            reason_codes.append("VTON_ONLY_PIPELINE")
-            reason_codes.append("VTON_USED")
-        if public_item and public_item.get("type_source") == "uncertain_fullbody_dress_fallback":
-            reason_codes.append("UNCERTAIN_FULLBODY_DRESS_FALLBACK")
-        if requested_type:
-            reason_codes.append("TYPE_FORCED_EXTRACT")
-
-        output_image_url = public_item.get("output_image_url", public_item.get("url")) if public_item else None
-        multipart_data = _build_multipart_parts(items=[], cloth_url=output_image_url)
-        data = {
-            "result": "ACCEPTED",
-            "title": "Added To Wardrobe",
-            "description": "Garment extracted successfully.",
-            "reason_codes": reason_codes,
-            "selection_required": False,
-            "clothing_type": category_meta["style"],
-            "category_key": category_meta["category_key"],
-            "primary_category_key": category_meta["primary_category_key"],
-            "style": category_meta["style"],
-            "selected_type": final_type,
-            "selected_item": public_item,
-            "garmentMetadata": public_item.get("garmentMetadata") if public_item else None,
-            "cloth_url": public_item.get("url") if public_item else None,
-            "output_image_url": output_image_url,
-            "extraction_path": extraction_path,
-            "promptDescription": public_item.get("promptDescription") if public_item else None,
-            "wardrobe_progress_id": public_item.get("wardrobe_progress_id") if public_item else None,
-            "multipart_data": multipart_data,
-            "total_garments_found": len(items),
-            "latencies": {
-                "total": total_s,
-                "gpu_queue_wait": gpu_queue_wait_s,
-                "stages": analyze_stage_timings,
-            },
-            "processing_time_ms": int(total_s * 1000),
-        }
-
-        # Legacy fields for backward compatibility
-        data["imageUrl"] = data["cloth_url"]
-        data["progressId"] = data["wardrobe_progress_id"]
-
-        success_binary_parts = []
-        extracted_bytes = bytes((selected_item or {}).get("_extracted_image_bytes") or b"")
-        if not extracted_bytes and output_image_url:
-            try:
-                extracted_bytes = _fetch_image_bytes(str(output_image_url), timeout=45)
-            except Exception as dl_err:
-                logger.warning(f"Could not fetch output_image_url for multipart extracted_cloth part: {dl_err}")
-        if extracted_bytes:
-            success_binary_parts.append({
-                "name": "extracted_cloth",
-                "filename": "extracted_cloth.png",
-                "content_type": "image/png",
-                "bytes": extracted_bytes,
-            })
-
-        payload = _build_success_payload(data=data, status_code=200, message="")
-        return _multipart_form_response(payload, binary_parts=success_binary_parts)
+        return _build_extraction_success_response(
+            public_item=public_item,
+            selected_item=selected_item,
+            items=items,
+            requested_type=requested_type,
+            total_s=total_s,
+            gpu_queue_wait_s=gpu_queue_wait_s,
+            analyze_stage_timings=analyze_stage_timings.to_dict(),
+            wardrobe_category_from_garment_type=_wardrobe_category_from_garment_type,
+            build_multipart_parts=_build_multipart_parts,
+            build_success_payload=_build_success_payload,
+            multipart_form_response=_multipart_form_response,
+            fetch_image_bytes=_fetch_image_bytes,
+        )
 
     except HTTPException as he:
         # Convert old-style HTTPException to Flutter contract envelope
