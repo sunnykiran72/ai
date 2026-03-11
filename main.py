@@ -54,6 +54,7 @@ except ImportError:
 # Modular Components
 from ai.modules.vto.prompt_factory import prompt_factory
 from ai.modules.vto.board_builder import BoardBuilder
+from ai.modules.wardrobe.cloth_detection import ClothDetector
 from ai.modules.wardrobe.yolo_cropper import YoloCropper
 from ai.modules.wardrobe.human_parser import HumanParser
 from ai.modules.wardrobe.extraction.detection_stage import (
@@ -78,6 +79,7 @@ from ai.core.florence_runner import FlorenceRunner
 from ai.core.qwen25vl_runner import Qwen25VLRunner
 from ai.core.joycaption_runner import JoyCaptionRunner
 from ai.core.minicpm_runner import MiniCPMVRunner
+from ai.core.fashion_detection_runner import FashionDetectionRunner
 from ai.core.yolo_runner import YoloRunner
 from ai.core.human_parser_runner import HumanParserRunner
 from ai.core.openclip_runner import OpenCLIPRunner
@@ -580,9 +582,14 @@ app = FastAPI(
 class AIEngine:
     def __init__(self):
         self.yolo_runner = YoloRunner()
+        self.fashion_detection_runner = FashionDetectionRunner()
         self.parser_runner = HumanParserRunner() if ANALYZE_ENABLE_HUMAN_PARSER else None
         self.yolo = YoloCropper(predictor=self.yolo_runner.predict)
         self.parser = HumanParser(parser_fn=self.parser_runner.parse) if self.parser_runner is not None else None
+        self.cloth_detector = ClothDetector(
+            legacy_detector=self.yolo,
+            fashion_detector=self.fashion_detection_runner,
+        )
         self.garment_color_masker = GarmentColorMasker(
             parser=self.parser,
             base_mask_fn=lambda image: _get_clean_foreground_mask(image),
@@ -684,6 +691,8 @@ class AIEngine:
             "yolo_expected_label_family": self.yolo_runner.expected_label_family,
             "yolo_label_family": self.yolo_runner.label_family,
             "yolo_class_count": self.yolo_runner.class_count,
+            "fashion_detection_loaded": self.fashion_detection_runner.is_loaded,
+            "fashion_detection_model_path": self.fashion_detection_runner.model_path,
             "human_parser_loaded": bool(self.parser_runner and self.parser_runner.is_loaded),
         }
 
@@ -1038,6 +1047,7 @@ def _resolve_garment_color_truth(
     base_garment_prompt: str,
     dominant_hexes: Optional[List[str]] = None,
     color_hints: Optional[List[str]] = None,
+    color_profile: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     prompt_fields = dict(_parse_structured_descriptor(base_garment_prompt))
     prompt_fields.update(_extract_prompt_fact_segments(base_garment_prompt))
@@ -1105,6 +1115,39 @@ def _resolve_garment_color_truth(
         if semantic_hexes:
             resolved_hexes = list(semantic_hexes)
 
+    def _normalize_resolved_color_hints(
+        hints: List[str],
+        profile: Optional[Dict[str, object]],
+    ) -> List[str]:
+        ordered = list(dict.fromkeys(str(v).strip().lower() for v in (hints or []) if str(v).strip()))
+        if not ordered:
+            return []
+        non_neutral = [term for term in ordered if _color_family(term) not in {"neutral_dark", "neutral_mid", "neutral_light", "brown"}]
+        if not non_neutral:
+            return ordered
+
+        dominant_family = _color_family(non_neutral[0])
+        mean_chroma = profile.get("meanChroma") if isinstance(profile, dict) else None
+        mean_b = profile.get("meanB") if isinstance(profile, dict) else None
+        soft_warm_neutrals = {"beige", "champagne", "tan", "nude", "khaki"}
+
+        filtered = list(ordered)
+        if (
+            dominant_family in {"yellow", "green"}
+            and isinstance(mean_chroma, (int, float))
+            and isinstance(mean_b, (int, float))
+            and float(mean_chroma) >= 18.0
+            and float(mean_b) >= 12.0
+        ):
+            pruned = [term for term in ordered if term not in soft_warm_neutrals]
+            if any(_color_family(term) == dominant_family for term in pruned):
+                filtered = pruned
+
+        non_neutral_filtered = [term for term in filtered if _color_family(term) not in {"neutral_dark", "neutral_mid", "neutral_light", "brown"}]
+        neutral_filtered = [term for term in filtered if term not in non_neutral_filtered]
+        return non_neutral_filtered + neutral_filtered
+
+    resolved_hints = _normalize_resolved_color_hints(resolved_hints, color_profile)
     resolved_hints = resolved_hints[: max(2, FLUX2_COLOR_LOCK_TOP_K)]
     resolved_hexes = resolved_hexes[: max(2, FLUX2_COLOR_LOCK_TOP_K + 1)]
     resolved_color_text = ", ".join(resolved_hints)
@@ -1181,6 +1224,7 @@ def _build_garment_metadata(
         base_garment_prompt=base_prompt,
         dominant_hexes=dominant_hexes,
         color_hints=color_hints,
+        color_profile=color_profile if isinstance(color_profile, dict) else None,
     )
     resolved_base_prompt = str(reconciled_color.get("base_garment_prompt") or base_prompt).strip()
     resolved_prompt_description = " ".join(str(prompt_description or resolved_base_prompt).split()).strip()
@@ -1771,6 +1815,59 @@ def _extract_dominant_color_labels(image: Image.Image, top_k: int = 3) -> List[s
         if len(out) >= max(1, int(top_k)):
             break
     return out
+
+
+def _build_garment_color_tone_guidance(
+    *,
+    color_hints: Optional[List[str]] = None,
+    color_profile: Optional[Dict[str, object]] = None,
+) -> Dict[str, object]:
+    hints = [str(v).strip().lower() for v in (color_hints or []) if str(v).strip()]
+    if not hints:
+        return {"phrase": "", "negative_terms": []}
+
+    primary = hints[0]
+    family = _color_family(primary)
+    profile = color_profile if isinstance(color_profile, dict) else {}
+    median_l = profile.get("medianL")
+    mean_c = profile.get("meanChroma")
+    mean_b = profile.get("meanB")
+    phrase = primary
+    negative_terms: List[str] = []
+
+    if family == "yellow":
+        if (
+            isinstance(median_l, (int, float))
+            and isinstance(mean_c, (int, float))
+            and isinstance(mean_b, (int, float))
+            and float(median_l) >= 74.0
+            and float(mean_c) >= 28.0
+            and float(mean_b) >= 28.0
+        ):
+            phrase = "bright lemon yellow"
+            negative_terms = ["gold", "golden", "mustard", "beige", "champagne", "tan", "bronze", "brown", "orange"]
+        elif (
+            isinstance(median_l, (int, float))
+            and isinstance(mean_c, (int, float))
+            and float(median_l) >= 66.0
+            and float(mean_c) >= 18.0
+        ):
+            phrase = "clear yellow"
+            negative_terms = ["gold", "mustard", "beige", "champagne", "tan", "brown"]
+    elif family == "green":
+        if (
+            isinstance(mean_c, (int, float))
+            and isinstance(median_l, (int, float))
+            and float(mean_c) < 18.0
+            and float(median_l) >= 48.0
+        ):
+            phrase = "muted sage green"
+            negative_terms = ["gray", "silver", "gold", "beige", "olive brown"]
+
+    return {
+        "phrase": phrase,
+        "negative_terms": negative_terms,
+    }
 
 def _extract_dominant_hex_colors_with_coverage(
     image: Image.Image,
@@ -6353,6 +6450,17 @@ def _build_flux2_single_garment_extract_prompt(
             + ", ".join(hints[: max(2, FLUX2_COLOR_LOCK_TOP_K)])
             + ". "
         )
+    tone_guidance = _build_garment_color_tone_guidance(
+        color_hints=hints,
+        color_profile=color_profile if isinstance(color_profile, dict) else None,
+    )
+    color_tone_clause = ""
+    tone_phrase = str(tone_guidance.get("phrase") or "").strip()
+    tone_negative_terms = [str(v).strip() for v in (tone_guidance.get("negative_terms") or []) if str(v).strip()]
+    if tone_phrase:
+        color_tone_clause += f" Match the source garment as {tone_phrase} exactly. "
+    if tone_negative_terms:
+        color_tone_clause += "Do not reinterpret this color as " + ", ".join(tone_negative_terms) + ". "
     profile_clause = ""
     profile_obj = color_profile if isinstance(color_profile, dict) else {}
     if profile_obj:
@@ -6409,7 +6517,7 @@ def _build_flux2_single_garment_extract_prompt(
         f"Generate only one {explicit_category} category garment and nothing from other categories. "
         "Do not generate any artificial fashion variant, redesign, or alternate styling. "
         "Reconstruct only the exact source garment visible in the crop. "
-        f"{type_lock_clause}{subtype_lock_clause}{color_lock_clause}{color_hint_clause}{profile_clause}"
+        f"{type_lock_clause}{subtype_lock_clause}{color_lock_clause}{color_hint_clause}{color_tone_clause}{profile_clause}"
         "Preserve exact garment structure, fabric, texture, print placement, seams, pleats, closures, trims, closures, button count, button size, button spacing, button placement, front placket geometry, border placement, lapel geometry, and pocket placement. "
         "Keep every visible button, snap, stud, or dot-button exactly where it appears in the source, with the same count and vertical spacing. "
         "Preserve the exact source color and material appearance; do not brighten black garments into gray, silver, or white. "
@@ -6421,6 +6529,8 @@ def _build_flux2_single_garment_extract_negative_prompt(
     *,
     garment_type: str,
     custom_negative_prompt: str = "",
+    color_hints: Optional[List[str]] = None,
+    color_profile: Optional[Dict[str, object]] = None,
 ) -> str:
     gtype = _normalize_garment_type(garment_type) or "top"
     custom = " ".join(str(custom_negative_prompt or "").split()).strip()
@@ -6452,6 +6562,14 @@ def _build_flux2_single_garment_extract_negative_prompt(
             "two-piece outfit, separate top and bottom, skirt with separate blouse, trouser plus shirt combo, "
             "incomplete dress replacement, split bodice, split hemline"
         )
+
+    tone_guidance = _build_garment_color_tone_guidance(
+        color_hints=color_hints,
+        color_profile=color_profile if isinstance(color_profile, dict) else None,
+    )
+    tone_negative_terms = [str(v).strip() for v in (tone_guidance.get("negative_terms") or []) if str(v).strip()]
+    if tone_negative_terms:
+        parts.append(", ".join(tone_negative_terms))
 
     return " | ".join([p for p in parts if p]).strip()
 
@@ -8067,7 +8185,8 @@ def _run_flux2_cloth_only_extract(
     requested_backend = _normalize_descriptor_backend(
         str(description_backend or FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND)
     )
-    resolved_backend = requested_backend if requested_backend in {"minicpm", "minicpm_service"} else "minicpm"
+    allowed_extract_backends = {"florence", "joycaption", "minicpm", "minicpm_service"}
+    resolved_backend = requested_backend if requested_backend in allowed_extract_backends else "minicpm"
     analyze_service_url = str(ANALYZE_MINICPM_SERVICE_URL or MINICPM_SERVICE_URL or "").strip().rstrip("/")
     run_steps = int(steps if isinstance(steps, int) and steps >= 4 else FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS)
     run_seed = int(seed if isinstance(seed, int) and seed >= 0 else FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_SEED)
@@ -8278,6 +8397,7 @@ def _run_flux2_cloth_only_extract(
         base_garment_prompt=garment_desc,
         dominant_hexes=dominant_hexes,
         color_hints=color_hints,
+        color_profile=color_profile if isinstance(color_profile, dict) else None,
     )
     resolved_garment_desc = " ".join(
         str(reconciled_color.get("base_garment_prompt") or garment_desc).split()
@@ -8320,6 +8440,8 @@ def _run_flux2_cloth_only_extract(
     built_negative_prompt = _build_flux2_single_garment_extract_negative_prompt(
         garment_type=resolved_type,
         custom_negative_prompt=" ".join(str(negative_prompt or "").split()).strip(),
+        color_hints=color_hints,
+        color_profile=color_profile,
     )
     stage["prompt_build_s"] = round(time.time() - t_stage, 4)
 
@@ -8371,6 +8493,90 @@ def _run_flux2_cloth_only_extract(
     extraction_meta["parser_used_flux_raw"] = False
     extraction_meta["parser_input_matches_flux_raw"] = False
 
+    color_guard_meta: Dict[str, object] = {"attempted": False, "applied": False, "reason": "not_run"}
+    if FLUX2_COLOR_GUARD_RERUN_ENABLED and dominant_hexes:
+        try:
+            final_image_for_score = Image.open(io.BytesIO(final_bytes)).convert("RGB")
+            base_color_score = _score_color_fidelity(
+                output_image=final_image_for_score,
+                input_palettes=[dominant_hexes],
+                target_types=[resolved_type],
+                input_profiles=[color_profile] if isinstance(color_profile, dict) and color_profile else None,
+            )
+            color_guard_meta["attempted"] = True
+            color_guard_meta["initial"] = base_color_score
+            base_drift = base_color_score.get("total_drift")
+            drift_is_valid = isinstance(base_drift, (int, float)) and np.isfinite(float(base_drift))
+            if drift_is_valid and float(base_drift) > float(FLUX2_COLOR_GUARD_DRIFT_THRESHOLD):
+                palette_metrics = [[{"hex": hx, "areaPercent": 0.0} for hx in dominant_hexes if str(hx).strip()]]
+                color_guard_clause = _build_flux2_hex_color_guard_clause(palette_metrics)
+                if color_guard_clause:
+                    guard_prompt = f"{flux_prompt} {color_guard_clause}".strip()
+                    guard_steps = min(
+                        FLUX2_COLOR_GUARD_RERUN_MAX_STEPS,
+                        max(run_steps, run_steps + FLUX2_COLOR_GUARD_RERUN_EXTRA_STEPS),
+                    )
+                    guard_seed = min(2147483647, run_seed + 31)
+                    retry_result = analyze_flux_runner.run_tryon(
+                        person_image=src,
+                        board_image=src,
+                        prompt=guard_prompt,
+                        steps=guard_steps,
+                        seed=guard_seed,
+                        negative_prompt=built_negative_prompt,
+                        use_lora=not ANALYZE_FLUX_DISABLE_LORA,
+                    )
+                    retry_raw_img = retry_result["image"].convert("RGBA")
+                    retry_raw_buf = io.BytesIO()
+                    retry_raw_img.save(retry_raw_buf, format="PNG")
+                    retry_raw_bytes = retry_raw_buf.getvalue()
+                    retry_final_bytes = retry_raw_bytes
+                    retry_postprocess_meta: Dict[str, object] = {}
+                    retry_extraction_path = "background_removal_only"
+                    try:
+                        retry_final_bytes, retry_postprocess_meta = _postprocess_extracted_garment_bytes(
+                            retry_raw_bytes,
+                            garment_type=resolved_type,
+                            force_transparent=True,
+                            transparent_only=True,
+                        )
+                    except Exception as retry_extract_err:
+                        helper_warnings.append(f"extract_postprocess_retry_failed:{retry_extract_err}")
+                        retry_final_bytes, retry_postprocess_meta = _crop_and_fit_garment_bytes(retry_raw_bytes)
+                        retry_extraction_path = "crop_then_aspect_only_fallback"
+
+                    retry_score = _score_color_fidelity(
+                        output_image=Image.open(io.BytesIO(retry_final_bytes)).convert("RGB"),
+                        input_palettes=[dominant_hexes],
+                        target_types=[resolved_type],
+                        input_profiles=[color_profile] if isinstance(color_profile, dict) and color_profile else None,
+                    )
+                    color_guard_meta["retry"] = retry_score
+                    retry_drift = retry_score.get("total_drift")
+                    retry_is_valid = isinstance(retry_drift, (int, float)) and np.isfinite(float(retry_drift))
+                    if retry_is_valid and (not drift_is_valid or float(retry_drift) <= float(base_drift)):
+                        final_bytes = retry_final_bytes
+                        postprocess_meta = retry_postprocess_meta
+                        extraction_path = retry_extraction_path
+                        raw_bytes = retry_raw_bytes
+                        raw_sha256 = hashlib.sha256(raw_bytes).hexdigest()
+                        extraction_meta["raw_flux_sha256"] = raw_sha256
+                        flux_result = retry_result
+                        flux_prompt = guard_prompt
+                        run_steps = guard_steps
+                        run_seed = guard_seed
+                        color_guard_meta["applied"] = True
+                        color_guard_meta["reason"] = "retry_improved_or_matched_drift"
+                    else:
+                        color_guard_meta["reason"] = "retry_not_better"
+                else:
+                    color_guard_meta["reason"] = "no_guard_clause"
+            else:
+                color_guard_meta["reason"] = "drift_below_threshold" if drift_is_valid else "drift_unavailable"
+        except Exception as color_guard_err:
+            helper_warnings.append(f"extract_color_guard_failed:{color_guard_err}")
+            color_guard_meta = {"attempted": True, "applied": False, "reason": f"error:{color_guard_err}"}
+
     stage["flux_extract_s"] = round(time.time() - t_stage, 4)
 
     t_stage = time.time()
@@ -8408,6 +8614,7 @@ def _run_flux2_cloth_only_extract(
             "flux_prompt": flux_prompt,
             "negative_prompt": built_negative_prompt,
             "warnings": helper_warnings,
+            "color_guard": color_guard_meta,
             "steps": run_steps,
             "seed": run_seed,
             "resolved_type": resolved_type,
@@ -9742,7 +9949,7 @@ async def analyze_garment(
         build_error_payload=_build_error_payload,
         multipart_form_response=_multipart_form_response,
     )
-    if not isinstance(upload, UploadFile):
+    if not hasattr(upload, "read"):
         return upload
 
     effective_type = garment_type or garmentType
@@ -9873,7 +10080,6 @@ async def analyze_garment(
                 analyze_prompt_from_extracted=ANALYZE_PROMPT_FROM_EXTRACTED,
                 analyze_require_extracted_prompt=ANALYZE_REQUIRE_EXTRACTED_PROMPT,
                 analyze_caption_mode=ANALYZE_CAPTION_MODE,
-                flux2_single_garment_extract_default_backend=FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND,
                 flux2_single_garment_extract_default_steps=FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS,
                 flux2_single_garment_extract_default_seed=FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_SEED,
                 normalize_garment_type=_normalize_garment_type,
@@ -9903,6 +10109,7 @@ async def analyze_garment(
                     wardrobe_category_from_garment_type=_wardrobe_category_from_garment_type,
                     product_prompt_description=_product_prompt_description,
                     build_garment_metadata=_build_garment_metadata,
+                    strip_descriptor_color_clause=_strip_descriptor_color_clause,
                 )
                 selected_item, _sync_context = sync_selected_item_progress(
                     selected_item=selected_item,

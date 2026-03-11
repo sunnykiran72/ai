@@ -13,16 +13,23 @@ def apply_selected_item_prompting(
     wardrobe_category_from_garment_type: Callable[..., Dict[str, str]],
     product_prompt_description: Callable[..., str],
     build_garment_metadata: Callable[..., Dict[str, object]],
+    strip_descriptor_color_clause: Callable[[str], str],
 ) -> Tuple[Optional[Dict[str, object]], Dict[str, object]]:
     if not selected_item:
         return selected_item, {}
 
+    extraction_obj = selected_item.get("extraction") if isinstance(selected_item.get("extraction"), dict) else {}
     prompt_text_raw = str(selected_item.get("promptDescription") or selected_item.get("description") or "")
     prompt_source = str(selected_item.get("promptDescriptionSource") or "").strip().lower()
+    structure_seed = str(
+        selected_item.get("baseGarmentPrompt")
+        or extraction_obj.get("base_garment_prompt")
+        or prompt_text_raw
+        or ""
+    )
+    structure_prompt = " ".join(strip_descriptor_color_clause(structure_seed).split()).strip()
     if prompt_source == "flux2_extract_descriptor":
-        prompt_for_product = " ".join(
-            str(selected_item.get("baseGarmentPrompt") or prompt_text_raw).split()
-        ).strip()
+        prompt_for_product = structure_prompt
         if not prompt_for_product:
             prompt_for_product = product_prompt_description(
                 prompt_text_raw,
@@ -32,18 +39,19 @@ def apply_selected_item_prompting(
             )
     else:
         prompt_for_product = product_prompt_description(
-            prompt_text_raw,
+            structure_prompt or prompt_text_raw,
             garment_type=str(selected_item.get("type") or ""),
             style=str(selected_item.get("style") or ""),
             category_key=str(selected_item.get("category_key") or ""),
         )
     selected_item["promptDescription"] = prompt_for_product
     selected_item["description"] = prompt_for_product
+    if structure_prompt:
+        selected_item["baseGarmentPrompt"] = structure_prompt
 
     forced_type = requested_type if requested_type in {"top", "bottom", "dress", "outer"} else None
     selected_type = forced_type or normalize_garment_type(str(selected_item.get("type"))) or "top"
     prompt_description = str(selected_item.get("promptDescription") or "")
-    extraction_obj = selected_item.get("extraction") if isinstance(selected_item.get("extraction"), dict) else {}
 
     sync_style_guess = str(selected_item.get("style") or "")
     if not sync_style_guess:
@@ -57,7 +65,7 @@ def apply_selected_item_prompting(
     selected_item["style"] = sync_category["style"]
 
     garment_metadata = build_garment_metadata(
-        base_garment_prompt=str(selected_item.get("baseGarmentPrompt") or prompt_description),
+        base_garment_prompt=str(selected_item.get("baseGarmentPrompt") or structure_prompt or prompt_description),
         extraction_avoid_clause=str(selected_item.get("extractionAvoidClause") or ""),
         prompt_sections_raw=str(selected_item.get("promptSectionsRaw") or ""),
         descriptor_raw_text=str(extraction_obj.get("descriptor_raw_text") or ""),

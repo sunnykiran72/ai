@@ -16,7 +16,7 @@ class MiniCPMVRunner:
     """
 
     def __init__(self, model_id: Optional[str] = None):
-        self.model_id = model_id or os.getenv("MINICPM_MODEL_ID", "openbmb/MiniCPM-o-2_6")
+        self.model_id = model_id or os.getenv("MINICPM_MODEL_ID", "openbmb/MiniCPM-V-4_5")
         desired_device = os.getenv("MINICPM_DEVICE", "auto").strip().lower()
         if desired_device not in {"cpu", "cuda", "auto"}:
             desired_device = "auto"
@@ -45,8 +45,8 @@ class MiniCPMVRunner:
             64,
             int(os.getenv("MINICPM_USER_MAX_NEW_TOKENS", str(self.max_new_tokens))),
         )
-        # MiniCPM-o remote code is more stable with eager attention in this runtime.
-        self.attn_implementation = os.getenv("MINICPM_ATTN_IMPLEMENTATION", "eager").strip().lower()
+        # MiniCPM-V 4.5 officially uses sdpa in recent transformers runtimes.
+        self.attn_implementation = os.getenv("MINICPM_ATTN_IMPLEMENTATION", "sdpa").strip().lower()
         if self.attn_implementation not in {"sdpa", "eager", "flash_attention_2"}:
             self.attn_implementation = "sdpa"
 
@@ -143,21 +143,20 @@ class MiniCPMVRunner:
 
         # Remote-code chat signatures vary slightly across MiniCPM releases.
         attempts = [
-            {"sampling": False, "temperature": 0.0, "max_new_tokens": int(max_new_tokens)},
-            {"sampling": False, "max_new_tokens": int(max_new_tokens)},
-            {"max_new_tokens": int(max_new_tokens)},
-            {},
+            ({"msgs": msgs, "tokenizer": self._tokenizer, "max_new_tokens": int(max_new_tokens), "enable_thinking": False}, False),
+            ({"msgs": msgs, "tokenizer": self._tokenizer, "sampling": False, "temperature": 0.0, "max_new_tokens": int(max_new_tokens), "enable_thinking": False}, False),
+            ({"msgs": msgs, "tokenizer": self._tokenizer, "sampling": False, "max_new_tokens": int(max_new_tokens)}, False),
+            ({"msgs": msgs, "tokenizer": self._tokenizer, "max_new_tokens": int(max_new_tokens)}, False),
+            ({"image": None, "msgs": msgs, "tokenizer": self._tokenizer, "sampling": False, "temperature": 0.0, "max_new_tokens": int(max_new_tokens)}, True),
+            ({"image": None, "msgs": msgs, "tokenizer": self._tokenizer, "sampling": False, "max_new_tokens": int(max_new_tokens)}, True),
+            ({"image": None, "msgs": msgs, "tokenizer": self._tokenizer, "max_new_tokens": int(max_new_tokens)}, True),
+            ({"image": None, "msgs": msgs, "tokenizer": self._tokenizer}, True),
         ]
         last_err: Optional[Exception] = None
 
-        for extra in attempts:
+        for kwargs, _legacy_image_arg in attempts:
             try:
-                response = self._model.chat(
-                    image=None,
-                    msgs=msgs,
-                    tokenizer=self._tokenizer,
-                    **extra,
-                )
+                response = self._model.chat(**kwargs)
                 if isinstance(response, (list, tuple)) and response:
                     return self._normalize_text(response[0])
                 return self._normalize_text(response)

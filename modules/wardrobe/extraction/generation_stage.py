@@ -21,7 +21,6 @@ def run_selected_item_extraction_or_response(
     analyze_prompt_from_extracted: bool,
     analyze_require_extracted_prompt: bool,
     analyze_caption_mode: str,
-    flux2_single_garment_extract_default_backend: str,
     flux2_single_garment_extract_default_steps: int,
     flux2_single_garment_extract_default_seed: int,
     normalize_garment_type: Callable[[Optional[str]], Optional[str]],
@@ -108,11 +107,11 @@ def run_selected_item_extraction_or_response(
             garment_type=selected_type,
             prompt_description="",
             fallback_prompt_description=selected_prompt_hint,
-            description_backend=flux2_single_garment_extract_default_backend,
+            description_backend="minicpm",
             steps=flux2_single_garment_extract_default_steps,
             seed=flux2_single_garment_extract_default_seed,
             color_reference_image=selected_item.get("_image_obj"),
-            apply_type_color_mask=bool(forced_type),
+            apply_type_color_mask=bool(selected_type),
         )
         fallback = flux_fallback
         extracted_url = str(flux_fallback.get("url") or "")
@@ -165,30 +164,14 @@ def run_selected_item_extraction_or_response(
         if extracted_prompt_desc:
             prompt_desc = extracted_prompt_desc
             selected_item["promptDescriptionSource"] = "flux2_extract_descriptor"
-        else:
-            try:
-                if extracted_image_bytes:
-                    cloth_image = Image.open(io.BytesIO(extracted_image_bytes)).convert("RGBA")
-                else:
-                    cloth_image = download_image(extracted_url)
-                caption_image = flatten_rgba_on_white(cloth_image)
-                if analyze_caption_mode == "detailed":
-                    prompt_desc = engine.florence.describe_garment(caption_image)
-                else:
-                    prompt_desc = engine.florence.describe_garment_short(caption_image)
-                prompt_desc = sanitize_garment_description(prompt_desc)
-                selected_item["promptDescriptionSource"] = "florence_extracted_caption"
-            except Exception as caption_err:
-                if analyze_require_extracted_prompt:
-                    payload = build_error_payload(
-                        title="Extraction Failed",
-                        description="Could not generate garment description. Please retry.",
-                        reason_codes=["EXTRACTION_FAILED"],
-                        status_code=400,
-                    )
-                    return None, multipart_form_response(payload)
-                logger.warning(f"Prompt generation from extracted cloth failed: {caption_err}")
-                prompt_desc = ""
+        elif analyze_require_extracted_prompt:
+            payload = build_error_payload(
+                title="Extraction Failed",
+                description="Could not generate garment description. Please retry.",
+                reason_codes=["EXTRACTION_FAILED"],
+                status_code=400,
+            )
+            return None, multipart_form_response(payload)
 
         if prompt_desc:
             selected_item["promptDescription"] = prompt_desc
