@@ -36,7 +36,7 @@ class MiniCPMVRunner:
         else:
             self.torch_dtype = torch.bfloat16
 
-        self.max_new_tokens = max(48, int(os.getenv("MINICPM_MAX_NEW_TOKENS", "160")))
+        self.max_new_tokens = max(64, int(os.getenv("MINICPM_MAX_NEW_TOKENS", "256")))
         self.garment_max_new_tokens = max(
             48,
             int(os.getenv("MINICPM_GARMENT_MAX_NEW_TOKENS", str(self.max_new_tokens))),

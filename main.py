@@ -188,7 +188,7 @@ MINICPM_SERVICE_CONNECT_TIMEOUT_S = max(
     1.0, _env_float("MINICPM_SERVICE_CONNECT_TIMEOUT_S", 6.0 if FLUX2_LOW_LATENCY_MODE else 10.0)
 )
 MINICPM_SERVICE_GARMENT_MAX_NEW_TOKENS = max(
-    32, _env_int("MINICPM_SERVICE_GARMENT_MAX_NEW_TOKENS", 180 if FLUX2_LOW_LATENCY_MODE else 180)
+    64, _env_int("MINICPM_SERVICE_GARMENT_MAX_NEW_TOKENS", 256 if FLUX2_LOW_LATENCY_MODE else 256)
 )
 MINICPM_SERVICE_PERSON_MAX_NEW_TOKENS = max(
     32, _env_int("MINICPM_SERVICE_PERSON_MAX_NEW_TOKENS", 96 if FLUX2_LOW_LATENCY_MODE else 140)
@@ -1706,7 +1706,12 @@ def _descriptor_word_count(text: str) -> int:
     return len(re.findall(r"[A-Za-z0-9#]+", str(text or "")))
 
 
-def _descriptor_is_weak(text: str, *, min_words: int = MINICPM_SERVICE_GARMENT_MIN_WORDS) -> bool:
+def _descriptor_is_weak(
+    text: str,
+    *,
+    garment_type: Optional[str] = None,
+    min_words: int = MINICPM_SERVICE_GARMENT_MIN_WORDS,
+) -> bool:
     clean = " ".join(str(text or "").split()).strip()
     if not clean:
         return True
@@ -1730,7 +1735,41 @@ def _descriptor_is_weak(text: str, *, min_words: int = MINICPM_SERVICE_GARMENT_M
         "pleat",
     )
     lower = clean.lower()
-    return not any(token in lower for token in richness_markers)
+    if not any(token in lower for token in richness_markers):
+        return True
+
+    gtype = _normalize_garment_type(garment_type) if garment_type else None
+    signal_groups = {
+        "top": (
+            ("sleeve", "sleeveless", "long-sleeve", "short-sleeve"),
+            ("neckline", "neck", "v-neck", "crew", "collar", "cowl"),
+            ("wrap", "crossover", "cross-over", "tie-front", "blouson", "gathered", "draped front", "tuck", "waist", "hem", "cropped"),
+        ),
+        "dress": (
+            ("sleeve", "sleeveless", "long-sleeve", "short-sleeve", "three-quarter"),
+            ("neckline", "neck", "v-neck", "crew", "collar", "placket"),
+            ("waist", "belt", "drawstring", "gathered", "empire"),
+            ("skirt", "hem", "ankle-length", "knee-length", "maxi", "mini", "midi", "full-length"),
+            ("pattern", "floral", "striped", "print", "motif"),
+        ),
+        "bottom": (
+            ("waist", "high-waisted", "mid-rise", "low-rise"),
+            ("straight-leg", "wide-leg", "tapered", "flare", "leg"),
+            ("pleat", "crease", "fly", "pocket", "hem"),
+        ),
+        "outer": (
+            ("sleeve", "long-sleeve", "short-sleeve"),
+            ("collar", "lapel", "hood"),
+            ("placket", "button", "zipper", "snap"),
+            ("hem", "waist", "cropped", "length"),
+        ),
+    }
+    required = signal_groups.get(gtype or "", ())
+    if not required:
+        return False
+    matched = sum(1 for group in required if any(token in lower for token in group))
+    threshold = 3 if gtype in {"top", "bottom", "outer"} else 4
+    return matched < threshold
 
 
 def _enrich_garment_descriptor(primary: str, fallback: str, garment_type: str) -> str:
@@ -3671,6 +3710,62 @@ def _build_minicpm_garment_retry_prompt(
     )
 
 
+def _build_minicpm_garment_detail_retry_prompt(
+    *,
+    garment_type: str,
+    dominant_color_hexes: Optional[List[str]] = None,
+    color_hints: Optional[List[str]] = None,
+) -> str:
+    gtype = _normalize_garment_type(garment_type) or "garment"
+    detail_clause = {
+        "top": (
+            "Your previous response was too generic. In base_garment_prompt, include visible front construction with garment type, "
+            "neckline or front opening, sleeve configuration, and waist or hem behavior. "
+            "If visible, include wrap, crossover, tie-front, gathered waist, blouson waist, draped front, tuck, or cropped hem."
+        ),
+        "dress": (
+            "Your previous response was too generic. In base_garment_prompt, include visible neckline or collar, sleeve length, "
+            "waist treatment, skirt or hem length, closure or placket if visible, and pattern summary if present."
+        ),
+        "bottom": (
+            "Your previous response was too generic. In base_garment_prompt, include visible rise, leg shape, closure, pleats or creases, "
+            "pockets if visible, and hem behavior."
+        ),
+        "outer": (
+            "Your previous response was too generic. In base_garment_prompt, include visible collar or lapel, sleeve length, "
+            "closure details, hem or waist behavior, and front structure."
+        ),
+    }.get(gtype, "Your previous response was too generic. In base_garment_prompt, include more visible front-facing garment structure.")
+    return (
+        _build_minicpm_garment_retry_prompt(
+            garment_type=garment_type,
+            dominant_color_hexes=dominant_color_hexes,
+            color_hints=color_hints,
+        )
+        + " "
+        + detail_clause
+    )
+
+
+def _choose_better_garment_prompt_bundle(
+    primary_bundle: Dict[str, str],
+    candidate_bundle: Dict[str, str],
+    *,
+    garment_type: Optional[str] = None,
+) -> Dict[str, str]:
+    primary_prompt = str(primary_bundle.get("base_garment_prompt") or "")
+    candidate_prompt = str(candidate_bundle.get("base_garment_prompt") or "")
+    primary_weak = _descriptor_is_weak(primary_prompt, garment_type=garment_type)
+    candidate_weak = _descriptor_is_weak(candidate_prompt, garment_type=garment_type)
+    if primary_weak and not candidate_weak:
+        return candidate_bundle
+    if candidate_weak and not primary_weak:
+        return primary_bundle
+    if _descriptor_word_count(candidate_prompt) > _descriptor_word_count(primary_prompt):
+        return candidate_bundle
+    return primary_bundle
+
+
 def _describe_garment_prompt_bundle_with_backend(
     image: Image.Image,
     backend: str,
@@ -3690,23 +3785,38 @@ def _describe_garment_prompt_bundle_with_backend(
         )
         raw_text = str(fetch_raw_text(primary_prompt) or "").strip()
         bundle = _parse_garment_prompt_sections(raw_text, garment_type=garment_type)
-        if _minicpm_bundle_has_valid_json_contract(bundle):
-            return bundle
 
-        retry_prompt = _build_minicpm_garment_retry_prompt(
-            garment_type=str(garment_type or ""),
-            dominant_color_hexes=dominant_color_hexes,
-            color_hints=color_hints,
-        )
-        retry_text = str(fetch_raw_text(retry_prompt) or "").strip()
-        retry_bundle = _parse_garment_prompt_sections(retry_text, garment_type=garment_type)
-        if _minicpm_bundle_has_valid_json_contract(retry_bundle):
-            return retry_bundle
+        if not _minicpm_bundle_has_valid_json_contract(bundle):
+            retry_prompt = _build_minicpm_garment_retry_prompt(
+                garment_type=str(garment_type or ""),
+                dominant_color_hexes=dominant_color_hexes,
+                color_hints=color_hints,
+            )
+            retry_text = str(fetch_raw_text(retry_prompt) or "").strip()
+            retry_bundle = _parse_garment_prompt_sections(retry_text, garment_type=garment_type)
+            if _minicpm_bundle_has_valid_json_contract(retry_bundle):
+                bundle = retry_bundle
+            else:
+                raise RuntimeError(
+                    "MiniCPM garment response did not satisfy JSON prompt contract "
+                    f"(first_format={bundle.get('source_format')}, retry_format={retry_bundle.get('source_format')})"
+                )
 
-        raise RuntimeError(
-            "MiniCPM garment response did not satisfy JSON prompt contract "
-            f"(first_format={bundle.get('source_format')}, retry_format={retry_bundle.get('source_format')})"
-        )
+        if _descriptor_is_weak(str(bundle.get("base_garment_prompt") or ""), garment_type=garment_type):
+            detail_prompt = _build_minicpm_garment_detail_retry_prompt(
+                garment_type=str(garment_type or ""),
+                dominant_color_hexes=dominant_color_hexes,
+                color_hints=color_hints,
+            )
+            detail_text = str(fetch_raw_text(detail_prompt) or "").strip()
+            detail_bundle = _parse_garment_prompt_sections(detail_text, garment_type=garment_type)
+            if _minicpm_bundle_has_valid_json_contract(detail_bundle):
+                bundle = _choose_better_garment_prompt_bundle(
+                    bundle,
+                    detail_bundle,
+                    garment_type=garment_type,
+                )
+        return bundle
 
     if resolved == "minicpm_service":
         try:
@@ -8967,7 +9077,7 @@ def _run_flux2_cloth_only_extract(
         elif desc_err and not garment_desc:
             raise desc_err
 
-        if fallback_prompt and _descriptor_is_weak(garment_desc):
+        if fallback_prompt and _descriptor_is_weak(garment_desc, garment_type=resolved_type):
             enriched = _enrich_garment_descriptor(
                 primary=garment_desc,
                 fallback=fallback_prompt,
