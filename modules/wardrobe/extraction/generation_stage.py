@@ -132,6 +132,7 @@ def run_selected_item_extraction_or_response(
             description_backend="minicpm",
             steps=flux2_single_garment_extract_default_steps,
             seed=flux2_single_garment_extract_default_seed,
+            descriptor_source_image=selected_item.get("_image_obj") or extract_source_image,
             color_reference_image=extract_source_image,
             reference_mask=reference_mask,
             apply_type_color_mask=bool(selected_type),

@@ -6,6 +6,7 @@ import os
 import tempfile
 import uuid
 import re
+import json
 import hashlib
 import colorsys
 import threading
@@ -225,15 +226,14 @@ MINICPM_SERVICE_GARMENT_PROMPT = os.getenv(
 MINICPM_SERVICE_PERSON_PROMPT = os.getenv(
     "MINICPM_SERVICE_PERSON_PROMPT",
     (
-        "Describe only identity and scene context for identity-preserving virtual try-on. "
-        "Return one detailed line with schema: "
+        "Describe identity, posture, and outfit for identity-preserving virtual try-on. "
+        "Ignore the background entirely. Return one detailed line with schema: "
         "identity=<face traits, skin tone, hair style/color, age band>; "
-        "body_pose=<pose, camera angle, visible limbs>; "
-        "framing_lighting=<framing/crop, light direction/intensity, background>; "
-        "occlusion=<hair/hands/objects overlapping garment region>; "
-        "preserve=<face identity, skin tone, hair, body proportions, pose, background unchanged>. "
-        "Do not describe outfit details unless they directly occlude the target garment region. "
-        "Use unknown when not visible."
+        "body_pose=<posture, standing/sitting, limb position>; "
+        "outfit=<brief summary of worn clothing like shoes, bottoms, accessories>; "
+        "framing_lighting=<framing/crop, light direction/intensity>; "
+        "occlusion=<hair/hands/objects overlapping body regions>; "
+        "preserve=<face identity, skin tone, hair, body proportions, pose>."
     ),
 ).strip()
 FLUX2_NEGATIVE_PROMPT_RUNTIME_MODE = os.getenv(
@@ -922,6 +922,26 @@ def _clean_prompt_section_text(text: str) -> str:
     return cleaned.strip(" -")
 
 
+def _extract_json_object_from_text(text: str) -> Optional[Dict[str, object]]:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, flags=re.IGNORECASE | re.DOTALL)
+    candidates = [fenced.group(1)] if fenced else []
+    candidates.append(raw)
+    brace_match = re.search(r"(\{.*\})", raw, flags=re.DOTALL)
+    if brace_match:
+        candidates.append(brace_match.group(1))
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
 def _parse_garment_prompt_sections(
     raw_text: str,
     *,
@@ -932,20 +952,39 @@ def _parse_garment_prompt_sections(
     base_prompt = ""
     avoid_clause = ""
 
-    base_match = re.search(
-        r"BASE_GARMENT_PROMPT\s*:\s*(.*?)(?=\bEXTRACTION_AVOID_CLAUSE\s*:|$)",
-        text,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    avoid_match = re.search(
-        r"EXTRACTION_AVOID_CLAUSE\s*:\s*(.*)$",
-        text,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    if base_match:
-        base_prompt = _clean_prompt_section_text(base_match.group(1))
-    if avoid_match:
-        avoid_clause = _clean_prompt_section_text(avoid_match.group(1))
+    parsed_json = _extract_json_object_from_text(text)
+    if isinstance(parsed_json, dict):
+        base_prompt = _clean_prompt_section_text(
+            str(
+                parsed_json.get("base_garment_prompt")
+                or parsed_json.get("BASE_GARMENT_PROMPT")
+                or ""
+            )
+        )
+        avoid_clause = _clean_prompt_section_text(
+            str(
+                parsed_json.get("extraction_avoid_clause")
+                or parsed_json.get("EXTRACTION_AVOID_CLAUSE")
+                or ""
+            )
+        )
+
+    if not base_prompt:
+        base_match = re.search(
+            r"BASE_GARMENT_PROMPT\s*:\s*(.*?)(?=\bEXTRACTION_AVOID_CLAUSE\s*:|$)",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if base_match:
+            base_prompt = _clean_prompt_section_text(base_match.group(1))
+    if not avoid_clause:
+        avoid_match = re.search(
+            r"EXTRACTION_AVOID_CLAUSE\s*:\s*(.*)$",
+            text,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if avoid_match:
+            avoid_clause = _clean_prompt_section_text(avoid_match.group(1))
 
     if not base_prompt:
         base_prompt = _normalize_minicpm_descriptor_text(text, kind="garment")
@@ -2082,7 +2121,23 @@ def _nearest_color_label(rgb_triplet: Tuple[int, int, int]) -> str:
     # Perceptual saturation in CIELAB (distance from neutral axis).
     chroma = float(np.sqrt((a_star * a_star) + (b_star * b_star)))
 
+    if (
+        45.0 <= l_star < 86.0
+        and chroma < 35.0
+        and a_star >= 6.0
+        and b_star >= 16.0
+    ):
+        if l_star >= 74.0:
+            return "champagne" if b_star < 26.0 else "beige"
+        if l_star >= 62.0:
+            return "beige"
+        if l_star >= 48.0:
+            return "tan"
+        return "brown"
+
     if chroma < 14.0:
+        if l_star < 28.0 and b_star <= -5.0:
+            return "plum" if a_star >= 9.0 else "navy"
         if l_star < 45.0 and a_star >= 10.0 and b_star <= -2.0:
             return "plum" if l_star < 34.0 else "purple"
         if l_star < 72.0 and a_star <= -2.5 and b_star >= 3.0:
@@ -3496,7 +3551,19 @@ def _describe_garment_with_backend(
                 max_side=FLUX2_MINICPM_PRODUCT_CAPTION_MAX_SIDE,
                 min_side=FLUX2_MINICPM_PRODUCT_CAPTION_MIN_SIDE,
             )
-            return str(engine.minicpm.describe_garment(minicpm_img)).strip()
+            raw_text = str(
+                engine.minicpm.describe_garment(
+                    minicpm_img,
+                    prompt_override=_build_minicpm_garment_prompt(
+                        garment_type=str(garment_type or ""),
+                        dominant_color_hexes=dominant_color_hexes,
+                        color_hints=color_hints,
+                    ),
+                )
+            ).strip()
+            return _parse_garment_prompt_sections(raw_text, garment_type=garment_type).get(
+                "base_garment_prompt", ""
+            )
         except Exception as err:
             raise RuntimeError(f"MiniCPM garment description failed: {err}") from err
     if resolved == "joycaption":
@@ -3622,7 +3689,7 @@ def _describe_user_image_for_flux2(
             engine.florence.run_task(
                 image=user_img,
                 task_prompt="<DETAILED_CAPTION>",
-                text_input=" Describe the person's identity cues and all worn garments with colors and fit.",
+                text_input=" Describe identity traits (face, hair, skin) and posture. List worn garments briefly. Do not describe background.",
                 max_new_tokens=engine.florence.detailed_max_tokens,
                 num_beams=engine.florence.detailed_num_beams,
                 use_cache_generate=False,
@@ -3641,13 +3708,12 @@ def _identity_only_user_context(user_description: str) -> str:
         return ""
 
     apparel_terms = (
-        "wearing", "outfit", "dress", "gown", "top", "shirt", "blouse", "jacket", "coat",
-        "pants", "trousers", "jeans", "skirt", "shorts", "sneaker", "shoe", "sleeve", "bodice",
+        "wearing", "wears", "outfit", "clothing", "garment", "dress", "gown", "top", "shirt", "blouse", "jacket", "coat",
+        "pants", "trousers", "jeans", "skirt", "shorts", "sneaker", "shoe", "sleeve", "bodice", "bag", "accessory",
     )
     identity_terms = (
-        "face", "facial", "hair", "skin", "complexion", "body", "build", "shape", "pose",
+        "face", "facial", "hair", "skin", "complexion", "body", "build", "shape", "pose", "posture", "standing", "sitting",
         "hand", "arm", "leg", "height", "age", "eyes", "nose", "mouth", "jaw", "lighting",
-        "background", "scene",
     )
 
     sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
@@ -6665,19 +6731,24 @@ def _build_minicpm_garment_prompt(
         f"Describe only that single {type_label} and ignore every other clothing item or body region."
     )
     return (
-        f"{MINICPM_SERVICE_GARMENT_PROMPT} {type_clause} "
+        "Describe the product garment for high-fidelity virtual try-on. "
+        f"{type_clause} "
         "If body parts, face, hair, hands, legs, room, bed, mirror, phone, bag, or props are visible, ignore them completely. "
         "Do not mention a person wearing the garment. "
         "Describe only visible front-facing garment features. Do not infer hidden back details, internal construction, closures, slits, cutouts, pockets, or panels unless they are clearly visible. "
         "Do not describe pose, scene, background, or accessories. "
-        "Return exactly these two labeled sections and no extra text: "
-        "BASE_GARMENT_PROMPT: one concise garment-only prompt containing only the requested garment's characteristics. "
-        "EXTRACTION_AVOID_CLAUSE: only extraction-specific exclusions or contamination to avoid. "
-        "If multiple garments are visible, mention the non-target garments only inside EXTRACTION_AVOID_CLAUSE as exclusions, never inside BASE_GARMENT_PROMPT. "
-        "Do not put avoid words, negatives, or exclusion phrases inside BASE_GARMENT_PROMPT. "
+        "Return exactly one valid JSON object and no extra text, markdown, or code fences. "
+        "The JSON must contain exactly these two string keys: "
+        "\"base_garment_prompt\" and \"extraction_avoid_clause\". "
+        "\"base_garment_prompt\" must contain only garment facts for the requested garment. "
+        "\"extraction_avoid_clause\" must contain only extraction-specific exclusions, contamination to ignore, or generation mistakes to avoid. "
+        "If multiple garments or visible non-garment regions appear, mention them only inside \"extraction_avoid_clause\", never inside \"base_garment_prompt\". "
+        "If visible contamination exists from skin, tattoo, hair, face, lips, background, or another garment, explicitly include it in \"extraction_avoid_clause\". "
+        "Do not put avoid words, negatives, or exclusion phrases inside \"base_garment_prompt\". "
         "Report garment colors using plain color words only; never output hex codes. "
         "Do not use skin tone, gloves, jewelry, mannequin color, or background color as garment color. "
         "Do not invent metallic, gold, silver, or hardware colors unless they are clearly visible on the garment itself. "
+        "For one-shoulder or crop tops, clearly state sleeve count, exposed shoulder side, and cropped hem geometry in \"base_garment_prompt\". "
         "If visible, explicitly preserve and report front placket shape, button or snap count, button spacing, button size, and button placement. "
         "Return category and type for the requested garment only."
         f"{color_clause}"
@@ -6738,7 +6809,7 @@ def _describe_garment_color_terms_with_backend(
                 max_side=FLUX2_MINICPM_PRODUCT_CAPTION_MAX_SIDE,
                 min_side=FLUX2_MINICPM_PRODUCT_CAPTION_MIN_SIDE,
             )
-            text = str(engine.minicpm.describe_garment(minicpm_img)).strip()
+            text = str(engine.minicpm.describe_garment(minicpm_img, prompt_override=prompt)).strip()
             return _extract_text_color_terms(text, max_items=max(2, FLUX2_COLOR_LOCK_TOP_K))
         except Exception as err:
             logger.warning(f"MiniCPM semantic garment color fallback failed: {err}")
@@ -6926,6 +6997,7 @@ def _build_flux2_single_garment_extract_prompt(
 def _build_flux2_single_garment_extract_negative_prompt(
     *,
     garment_type: str,
+    extraction_avoid_clause: str = "",
     custom_negative_prompt: str = "",
     prompt_description: str = "",
     color_hints: Optional[List[str]] = None,
@@ -6937,6 +7009,8 @@ def _build_flux2_single_garment_extract_negative_prompt(
     parts: List[str] = []
     if custom:
         parts.append(custom)
+    if extraction_avoid_clause:
+        parts.append(extraction_avoid_clause)
 
     parts.append(
         "person, human body, face, eyes, hair, skin, neck, shoulders, chest, torso, hands, fingers, arms, legs, feet, toes, mannequin, hanger, "
@@ -8574,6 +8648,7 @@ def _run_flux2_cloth_only_extract(
     description_backend: Optional[str] = None,
     steps: Optional[int] = None,
     seed: Optional[int] = None,
+    descriptor_source_image: Optional[Image.Image] = None,
     color_reference_image: Optional[Image.Image] = None,
     reference_mask: Optional[np.ndarray] = None,
     apply_type_color_mask: bool = False,
@@ -8607,7 +8682,11 @@ def _run_flux2_cloth_only_extract(
     helper_warnings = []
 
     src = source_image.convert("RGB")
-    descriptor_image = src
+    descriptor_image = (
+        descriptor_source_image.convert("RGB")
+        if isinstance(descriptor_source_image, Image.Image)
+        else src
+    )
     selected_crop_url = None
     selected_crop_url_source = ""
     selected_crop_local_path = ""
@@ -8861,6 +8940,7 @@ def _run_flux2_cloth_only_extract(
     )
     built_negative_prompt = _build_flux2_single_garment_extract_negative_prompt(
         garment_type=resolved_type,
+        extraction_avoid_clause=str(prompt_bundle.get("extraction_avoid_clause") or ""),
         custom_negative_prompt=" ".join(str(negative_prompt or "").split()).strip(),
         prompt_description=garment_desc,
         color_hints=color_hints,
@@ -9022,6 +9102,8 @@ def _run_flux2_cloth_only_extract(
             "descriptor_service_url": analyze_service_url if resolved_backend == "minicpm_service" else "",
             "descriptor_service_url_source": "analyze_override" if ANALYZE_MINICPM_SERVICE_URL else "default",
             "descriptor_transport_source": selected_crop_url_source,
+            "descriptor_input_size": {"width": int(descriptor_image.width), "height": int(descriptor_image.height)},
+            "generation_input_size": {"width": int(src.width), "height": int(src.height)},
             "prompt_source": prompt_source,
             "prompt_description": garment_desc,
             "base_garment_prompt": garment_desc,
@@ -10293,7 +10375,13 @@ async def prepare_user_image_for_tryon(
                 )
             )
 
-        processed_img = Image.open(io.BytesIO(processed_bytes)).convert("RGB")
+        # Convert to RGB, using white background if isolated to avoid VLM black-background hallucinations
+        processed_img_raw = Image.open(io.BytesIO(processed_bytes))
+        if bg_meta.get("applied") and processed_img_raw.mode == "RGBA":
+            processed_img = Image.new("RGB", processed_img_raw.size, (255, 255, 255))
+            processed_img.paste(processed_img_raw, mask=processed_img_raw.split()[3])
+        else:
+            processed_img = processed_img_raw.convert("RGB")
         t_stage = time.time()
         prompt_description = _describe_user_image_for_prepare(processed_img, output_url)
         stage["describe_s"] = round(time.time() - t_stage, 4)

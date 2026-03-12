@@ -4,6 +4,8 @@ import unittest
 import numpy as np
 from PIL import Image
 
+import ai.main as main_mod
+from ai.main import _parse_garment_prompt_sections
 from ai.modules.wardrobe.extraction.generation_stage import run_selected_item_extraction_or_response
 from ai.modules.wardrobe.extraction.prompting_stage import apply_selected_item_prompting
 
@@ -19,6 +21,24 @@ class _Plan:
 
 
 class PromptingStageTests(unittest.TestCase):
+    def test_parse_garment_prompt_sections_accepts_json_object(self):
+        bundle = _parse_garment_prompt_sections(
+            '{"base_garment_prompt":"type=one-shoulder crop top; construction=one long sleeve only.",'
+            '"extraction_avoid_clause":"ignore skin, tattoo, matching skirt."}',
+            garment_type="top",
+        )
+
+        self.assertEqual(
+            bundle["base_garment_prompt"],
+            "type=one-shoulder crop top; construction=one long sleeve only.",
+        )
+        self.assertEqual(
+            bundle["extraction_avoid_clause"],
+            "ignore skin, tattoo, matching skirt.",
+        )
+        self.assertIn("BASE_GARMENT_PROMPT", bundle["serialized_sections"])
+        self.assertIn("EXTRACTION_AVOID_CLAUSE", bundle["serialized_sections"])
+
     def test_apply_prompting_strips_descriptor_color_before_assembly(self):
         calls = {}
 
@@ -86,6 +106,8 @@ class PromptingStageTests(unittest.TestCase):
             captured["reference_mask_shape"] = None if kwargs.get("reference_mask") is None else tuple(kwargs["reference_mask"].shape)
             color_ref = kwargs.get("color_reference_image")
             captured["color_reference_image_size"] = None if color_ref is None else tuple(color_ref.size)
+            descriptor_ref = kwargs.get("descriptor_source_image")
+            captured["descriptor_source_image_size"] = None if descriptor_ref is None else tuple(descriptor_ref.size)
             return {
                 "url": "https://example.com/out.png",
                 "_processed_image_bytes": b"png",
@@ -106,10 +128,11 @@ class PromptingStageTests(unittest.TestCase):
 
         engine = types.SimpleNamespace(florence=_Florence())
         image = Image.new("RGB", (100, 120), "white")
+        detector_crop = Image.new("RGB", (49, 78), "white")
         selected_item = {
             "type": "dress",
             "bbox": [1, 2, 50, 80],
-            "_image_obj": image,
+            "_image_obj": detector_crop,
             "_mask_obj": np.ones((120, 100), dtype=bool),
             "promptDescription": "",
             "description": "",
@@ -153,7 +176,72 @@ class PromptingStageTests(unittest.TestCase):
         self.assertTrue(captured["apply_type_color_mask"])
         self.assertEqual(captured["reference_mask_shape"], (78, 49))
         self.assertEqual(captured["color_reference_image_size"], (100, 120))
+        self.assertEqual(captured["descriptor_source_image_size"], (49, 78))
         self.assertEqual(updated_item["url"], "https://example.com/out.png")
+
+    def test_local_minicpm_uses_structured_prompt_override_for_garment_description(self):
+        captured = {}
+
+        class _MiniCPM:
+            def describe_garment(self, image, prompt_override=None):
+                captured["image_size"] = tuple(image.size)
+                captured["prompt_override"] = prompt_override
+                return (
+                    '{"base_garment_prompt":"type=one-shoulder crop top; colors=sage green; '
+                    'construction=one long sleeve only, opposite side sleeveless.",'
+                    '"extraction_avoid_clause":"ignore skin, tattoo, hair, and matching skirt."}'
+                )
+
+        original_engine = main_mod.engine
+        main_mod.engine = types.SimpleNamespace(minicpm=_MiniCPM(), florence=None)
+        try:
+            image = Image.new("RGB", (320, 480), "white")
+            desc = main_mod._describe_garment_with_backend(
+                image=image,
+                backend="minicpm",
+                garment_type="top",
+                dominant_color_hexes=["#88937B"],
+                color_hints=["sage green"],
+            )
+        finally:
+            main_mod.engine = original_engine
+
+        self.assertEqual(
+            desc,
+            "type=one-shoulder crop top; colors=sage green; construction=one long sleeve only, opposite side sleeveless.",
+        )
+        self.assertEqual(captured["image_size"], (320, 480))
+        self.assertIn("Return exactly one valid JSON object", captured["prompt_override"])
+        self.assertIn("\"base_garment_prompt\"", captured["prompt_override"])
+        self.assertIn("\"extraction_avoid_clause\"", captured["prompt_override"])
+        self.assertIn("The required garment category is top.", captured["prompt_override"])
+        self.assertIn("#88937B", captured["prompt_override"])
+
+    def test_local_minicpm_uses_color_prompt_override_for_color_terms(self):
+        captured = {}
+
+        class _MiniCPM:
+            def describe_garment(self, image, prompt_override=None):
+                captured["image_size"] = tuple(image.size)
+                captured["prompt_override"] = prompt_override
+                return "sage green, olive"
+
+        original_engine = main_mod.engine
+        main_mod.engine = types.SimpleNamespace(minicpm=_MiniCPM(), florence=None)
+        try:
+            image = Image.new("RGB", (320, 480), "white")
+            terms = main_mod._describe_garment_color_terms_with_backend(
+                image=image,
+                backend="minicpm",
+                garment_type="bottom",
+            )
+        finally:
+            main_mod.engine = original_engine
+
+        self.assertEqual(terms, ["green", "olive"])
+        self.assertEqual(captured["image_size"], (320, 480))
+        self.assertIn("Look only at the requested bottom.", captured["prompt_override"])
+        self.assertIn("Return only 1 to 3 short garment fabric color words", captured["prompt_override"])
 
 
 if __name__ == "__main__":

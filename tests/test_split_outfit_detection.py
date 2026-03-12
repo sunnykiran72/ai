@@ -30,6 +30,10 @@ class SplitOutfitDetectionTests(unittest.TestCase):
         # Approximate muted sage/gray-green from the failing dress example.
         self.assertIn(_nearest_color_label((133, 141, 130)), {"green", "olive"})
 
+    def test_dark_cool_low_chroma_resolves_to_navy_or_plum_not_black(self):
+        # Approximate inky navy-black blazer tones from the top color failure case.
+        self.assertIn(_nearest_color_label((18, 15, 27)), {"navy", "plum"})
+
 
 if __name__ == "__main__":
     unittest.main()

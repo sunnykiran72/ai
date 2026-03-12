@@ -7,7 +7,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import numpy as np
 from PIL import Image
 
-from ai.shared.image_ops import rgb_to_lab
+from ai.shared.image_ops import delta_e_cie76, rgb_to_lab
 
 
 logger = logging.getLogger("glamify-ai")
@@ -96,6 +96,7 @@ class GarmentColorContextSettings:
     accent_min_area_percent: float = 0.35
     accent_top_k: int = 2
     disable_masking: bool = False
+    cluster_merge_delta_e: float = 10.0
 
 
 def _canonical_color_token(color: str) -> str:
@@ -218,7 +219,23 @@ def _nearest_color_label(rgb_triplet: Tuple[int, int, int]) -> str:
     b_star = float(lab[2]) - 128.0
     chroma = float(np.sqrt((a_star * a_star) + (b_star * b_star)))
 
+    if (
+        45.0 <= l_star < 86.0
+        and chroma < 35.0
+        and a_star >= 6.0
+        and b_star >= 16.0
+    ):
+        if l_star >= 74.0:
+            return "champagne" if b_star < 26.0 else "beige"
+        if l_star >= 62.0:
+            return "beige"
+        if l_star >= 48.0:
+            return "tan"
+        return "brown"
+
     if chroma < 14.0:
+        if l_star < 28.0 and b_star <= -5.0:
+            return "plum" if a_star >= 9.0 else "navy"
         if l_star < 45.0 and a_star >= 10.0 and b_star <= -2.0:
             return "plum" if l_star < 34.0 else "purple"
         if l_star < 10.0:
@@ -442,7 +459,7 @@ def _extract_dominant_hex_colors_with_coverage(
             return []
 
         unique_lab_count = int(np.unique(pixels_lab, axis=0).shape[0])
-        k = min(max(1, int(top_k) + 1), int(pixels_lab.shape[0]), max(1, unique_lab_count))
+        k = min(max(2, int(top_k) + 2), int(pixels_lab.shape[0]), max(1, unique_lab_count))
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.2)
         _, labels, centers = cv2.kmeans(
             pixels_lab.astype(np.float32),
@@ -472,12 +489,89 @@ def _extract_dominant_hex_colors_with_coverage(
             pixel_count = int(counts[order_idx])
             area_percent = round((float(pixel_count) / float(total_pixels)) * 100.0, 2)
             out.append({"hex": hx, "areaPercent": area_percent, "pixelCount": pixel_count})
-            if len(out) >= max(1, int(top_k)):
-                break
-        return out
+        merged = _merge_similar_palette_entries_by_delta_e(
+            out,
+            merge_delta_e=float(settings.cluster_merge_delta_e),
+        )
+        return merged[: max(1, int(top_k))]
     except Exception as err:
         logger.warning("K-Means color extraction failed: %s", err)
         return []
+
+
+def _merge_similar_palette_entries_by_delta_e(
+    palette: List[PaletteEntry],
+    merge_delta_e: float,
+) -> List[PaletteEntry]:
+    entries = list(palette or [])
+    if len(entries) <= 1 or float(merge_delta_e) <= 0.0:
+        return entries
+
+    total_pixels = max(
+        1,
+        int(
+            sum(
+                max(0, int(entry.get("pixelCount", 0) or 0))
+                for entry in entries
+            )
+        ),
+    )
+    candidates: List[Dict[str, object]] = []
+    for entry in entries:
+        hx = str(entry.get("hex", "")).strip().upper()
+        rgb = _hex_to_rgb_triplet(hx)
+        if rgb is None:
+            continue
+        pixel_count = max(1, int(entry.get("pixelCount", 0) or 0))
+        lab = rgb_to_lab(np.array([rgb], dtype=np.uint8))[0].astype(np.float32)
+        candidates.append(
+            {
+                "rgb_sum": np.array(rgb, dtype=np.float32) * float(pixel_count),
+                "lab": lab,
+                "pixelCount": pixel_count,
+            }
+        )
+    if len(candidates) <= 1:
+        return entries
+
+    merged: List[Dict[str, object]] = []
+    for candidate in sorted(candidates, key=lambda item: int(item["pixelCount"]), reverse=True):
+        matched_bucket: Optional[Dict[str, object]] = None
+        for bucket in merged:
+            if delta_e_cie76(candidate["lab"], bucket["lab"]) <= float(merge_delta_e):
+                matched_bucket = bucket
+                break
+        if matched_bucket is None:
+            merged.append(dict(candidate))
+            continue
+        matched_bucket["rgb_sum"] = np.asarray(matched_bucket["rgb_sum"], dtype=np.float32) + np.asarray(
+            candidate["rgb_sum"], dtype=np.float32
+        )
+        matched_bucket["pixelCount"] = int(matched_bucket["pixelCount"]) + int(candidate["pixelCount"])
+        mean_rgb = np.clip(
+            np.asarray(matched_bucket["rgb_sum"], dtype=np.float32) / float(max(1, int(matched_bucket["pixelCount"]))),
+            0,
+            255,
+        ).astype(np.uint8)
+        matched_bucket["lab"] = rgb_to_lab(mean_rgb.reshape(1, 3))[0].astype(np.float32)
+
+    merged_entries: List[PaletteEntry] = []
+    for bucket in sorted(merged, key=lambda item: int(item["pixelCount"]), reverse=True):
+        mean_rgb = np.clip(
+            np.asarray(bucket["rgb_sum"], dtype=np.float32) / float(max(1, int(bucket["pixelCount"]))),
+            0,
+            255,
+        ).astype(np.uint8)
+        hx = "#{:02X}{:02X}{:02X}".format(*[int(v) for v in mean_rgb.tolist()])
+        pixel_count = int(bucket["pixelCount"])
+        merged_entries.append(
+            {
+                "hex": hx,
+                "pixelCount": pixel_count,
+                "areaPercent": round((float(pixel_count) / float(total_pixels)) * 100.0, 2),
+            }
+        )
+    return merged_entries
 
 
 def _filter_palette_entries_by_area(
@@ -686,6 +780,15 @@ def build_single_image_color_context(
             [str(entry.get("hex", "")).strip().upper() for entry in palette_metrics_full],
             top_k=config.top_k,
         )
+    palette_label_entries: List[Tuple[str, float]] = []
+    for entry in palette_metrics_full:
+        hx = str(entry.get("hex", "")).strip().upper()
+        rgb = _hex_to_rgb_triplet(hx)
+        if rgb is None:
+            continue
+        palette_label_entries.append(
+            (_nearest_color_label(rgb), float(entry.get("areaPercent", 0.0) or 0.0))
+        )
 
     text_colors = [
         _canonical_color_token(c)
@@ -729,6 +832,24 @@ def build_single_image_color_context(
             warm_neutral_hints = ["beige", "champagne"]
         if warm_neutral_hints:
             hints = warm_neutral_hints + [token for token in hints if token not in warm_neutral_hints]
+
+    # Preserve high-contrast dark accents for patterned garments such as cream/black knits.
+    if hints and any(_color_family(token) == "neutral_light" for token in hints):
+        accent_candidate = next(
+            (
+                label
+                for label, area in palette_label_entries
+                if label in {"black", "charcoal", "navy"}
+                and area >= 6.0
+                and label not in hints
+            ),
+            None,
+        )
+        if accent_candidate:
+            max_hint_items = max(2, int(config.top_k))
+            if len(hints) >= max_hint_items:
+                hints = hints[: max_hint_items - 1]
+            hints.append(accent_candidate)
 
     hints = hints[: max(2, int(config.top_k))]
 

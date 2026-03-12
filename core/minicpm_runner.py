@@ -179,23 +179,27 @@ class MiniCPMVRunner:
                 max_new_tokens=int(max_new_tokens),
             )
 
-    def describe_garment(self, image: Image.Image) -> str:
+    def describe_garment(self, image: Image.Image, prompt_override: Optional[str] = None) -> str:
         return self._run_prompt(
             image=image,
             instruction=(
-                "Describe only the product garment for high-fidelity virtual try-on. "
-                "Return exactly one single line with this schema: "
-                "category=<dress|top|bottom|outerwear|set|unknown>; "
-                "type=<specific garment type>; "
-                "colors=<primary and secondary colors>; "
-                "pattern=<solid|striped|floral|graphic|etc>; "
-                "material=<fabric/material>; "
-                "silhouette=<fit and shape>; "
-                "construction=<neckline, sleeve style, waist/hip shaping, hem/length>; "
-                "details=<buttons, zipper, pleats, ruffles, lace, embroidery, pockets, slit, logo>; "
-                "coverage=<what body area it should replace>; "
-                "preserve=<state that garment colors, print placement, and structure must remain unchanged>. "
-                "Use 'unknown' when not visible. Do not mention person, mannequin, background, camera, or recommendations."
+                str(prompt_override).strip()
+                if str(prompt_override or "").strip()
+                else (
+                    "Describe only the product garment for high-fidelity virtual try-on. "
+                    "Return exactly one single line with this schema: "
+                    "category=<dress|top|bottom|outerwear|set|unknown>; "
+                    "type=<specific garment type>; "
+                    "colors=<primary and secondary colors>; "
+                    "pattern=<solid|striped|floral|graphic|etc>; "
+                    "material=<fabric/material>; "
+                    "silhouette=<fit and shape>; "
+                    "construction=<neckline, sleeve style, waist/hip shaping, hem/length>; "
+                    "details=<buttons, zipper, pleats, ruffles, lace, embroidery, pockets, slit, logo>; "
+                    "coverage=<what body area it should replace>; "
+                    "preserve=<state that garment colors, print placement, and structure must remain unchanged>. "
+                    "Use 'unknown' when not visible. Do not mention person, mannequin, background, camera, or recommendations."
+                )
             ),
             max_new_tokens=self.garment_max_new_tokens,
         )
