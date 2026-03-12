@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Callable, Dict, Optional, Tuple
 
 import numpy as np
@@ -27,6 +28,7 @@ class GarmentColorMaskerSettings:
     top_target_y: float = 0.34
     outer_target_y: float = 0.40
     dress_target_y: float = 0.52
+    parser_skin_max_strip_ratio: float = 0.38
 
 
 class GarmentColorMasker:
@@ -82,7 +84,20 @@ class GarmentColorMasker:
                 mask = self.parser.get_mask_for_category(parsing, garment_type)
                 mask_source = "parser_category"
             mask = np.asarray(mask).astype(bool)
-            cleaned = self._cleanup_mask(mask)
+            rgb = np.asarray(image.convert("RGB"), dtype=np.uint8)
+            skin_pixels = 0
+            if callable(self.skin_mask_fn):
+                try:
+                    skin = np.asarray(self.skin_mask_fn(rgb)).astype(bool)
+                    skin = self._limit_skin_mask(skin=skin, garment_type=garment_type, shape=mask.shape[:2])
+                    masked_skin = skin & mask
+                    masked_skin_ratio = float(np.sum(masked_skin)) / float(max(1, np.sum(mask)))
+                    if masked_skin_ratio <= float(self.settings.parser_skin_max_strip_ratio):
+                        mask = mask & (~masked_skin)
+                        skin_pixels = int(np.sum(masked_skin))
+                except Exception:
+                    skin_pixels = 0
+            cleaned = self._cleanup_mask(mask, keep_largest=True)
             if not self._mask_shape_ok(cleaned, image.size, garment_type, min_area_ratio=self.settings.parser_min_area_ratio):
                 return None, {
                     "source": mask_source,
@@ -96,6 +111,7 @@ class GarmentColorMasker:
                 "used": True,
                 "mask_pixels": int(np.sum(cleaned)),
                 "area_ratio": round(float(np.mean(cleaned)), 6),
+                "skin_pixels_removed": skin_pixels,
             }
         except Exception as err:
             return None, {"source": "parser", "used": False, "reason": f"error:{err}"}
@@ -118,7 +134,7 @@ class GarmentColorMasker:
         alias_map = {
             "top": ["top", "upper", "upper_clothes"],
             "outer": ["outer", "outerwear", "coat", "jacket", "blazer", "top", "upper", "upper_clothes"],
-            "bottom": ["bottom", "pants", "trousers", "skirt", "shorts", "belt"],
+            "bottom": ["bottom", "pants", "trousers", "skirt", "shorts"],
             "dress": ["dress"],
         }
         normalized_type = str(garment_type or "").strip().lower()
@@ -175,11 +191,53 @@ class GarmentColorMasker:
         if int(np.sum(working)) < max(self.settings.min_pixels, int(0.06 * np.sum(base))):
             working = base
 
+        if garment_type == "bottom":
+            # Heuristic skin suppression for bottoms when parser is unavailable.
+            # This keeps leg/skin tones from dominating skirt/pant color sampling.
+            r = arr[:, :, 0].astype(np.int16)
+            g = arr[:, :, 1].astype(np.int16)
+            b = arr[:, :, 2].astype(np.int16)
+            maxc = np.maximum.reduce([r, g, b])
+            minc = np.minimum.reduce([r, g, b])
+            skin_like = (
+                (r > 95)
+                & (g > 40)
+                & (b > 20)
+                & ((maxc - minc) > 15)
+                & (np.abs(r - g) > 15)
+                & (r > g)
+                & (r > b)
+            )
+            trimmed = working & (~skin_like)
+            if int(np.sum(trimmed)) >= max(self.settings.min_pixels, int(0.04 * np.sum(working))):
+                working = trimmed
+            # If the mask is dominated by very dark pixels (background/shadows),
+            # trim them so color sampling doesn't collapse to black/charcoal.
+            very_dark = (
+                (arr[:, :, 0] <= 28)
+                & (arr[:, :, 1] <= 28)
+                & (arr[:, :, 2] <= 28)
+                & ((arr.max(axis=2).astype(np.int16) - arr.min(axis=2).astype(np.int16)) <= 14)
+            )
+            dark_ratio = float(np.mean(very_dark[working])) if np.any(working) else 0.0
+            desc_low = str(description or "").lower()
+            dark_intended = bool(re.search(r"\\b(black|charcoal|ebony|midnight|dark|navy)\\b", desc_low))
+            if (not dark_intended) and dark_ratio > 0.2:
+                dark_trim = working & (~very_dark)
+                if int(np.sum(dark_trim)) >= max(self.settings.min_pixels, int(0.06 * np.sum(working))):
+                    working = dark_trim
+
         very_light = (
             (arr[:, :, 0] >= 226)
             & (arr[:, :, 1] >= 226)
             & (arr[:, :, 2] >= 226)
             & ((arr.max(axis=2).astype(np.int16) - arr.min(axis=2).astype(np.int16)) <= 20)
+        )
+        very_dark = (
+            (arr[:, :, 0] <= 28)
+            & (arr[:, :, 1] <= 28)
+            & (arr[:, :, 2] <= 28)
+            & ((arr.max(axis=2).astype(np.int16) - arr.min(axis=2).astype(np.int16)) <= 14)
         )
 
         num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(
@@ -230,6 +288,9 @@ class GarmentColorMasker:
                     width_ratio=width_ratio,
                     image_width=w,
                 )
+                dark_ratio = float(np.mean(very_dark[comp_mask])) if np.any(comp_mask) else 0.0
+                if dark_ratio > 0.35:
+                    score *= 0.65
             elif garment_type == "dress":
                 score += 0.30 * min(1.0, height_ratio / 0.75)
             if garment_type != "bottom" and light_ratio > 0.70:
@@ -299,7 +360,7 @@ class GarmentColorMasker:
             return False
         return True
 
-    def _cleanup_mask(self, mask: np.ndarray) -> np.ndarray:
+    def _cleanup_mask(self, mask: np.ndarray, keep_largest: bool = False) -> np.ndarray:
         cleaned = np.asarray(mask).astype(bool)
         if cleaned.size == 0:
             return cleaned
@@ -311,9 +372,15 @@ class GarmentColorMasker:
             num_labels, labels, stats, _ = cv2.connectedComponentsWithStats((cleaned.astype(np.uint8) * 255))
             out = np.zeros_like(cleaned, dtype=bool)
             min_area = max(48, self.settings.min_pixels // 2)
+            ranked = []
             for idx in range(1, int(num_labels)):
-                if int(stats[idx, cv2.CC_STAT_AREA]) >= min_area:
-                    out[labels == idx] = True
+                area = int(stats[idx, cv2.CC_STAT_AREA])
+                if area >= min_area:
+                    ranked.append((area, idx))
+            if keep_largest and ranked:
+                ranked = [max(ranked, key=lambda item: item[0])]
+            for _area, idx in ranked:
+                out[labels == idx] = True
             if int(np.sum(out)) > 0:
                 cleaned = out
         except Exception:

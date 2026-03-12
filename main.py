@@ -465,7 +465,7 @@ PARSER_FUSION_WEIGHT_OPENCLIP = _env_float("PARSER_FUSION_WEIGHT_OPENCLIP", 0.40
 PARSER_FUSION_MIN_SCORE_KEEP = _env_float("PARSER_FUSION_MIN_SCORE_KEEP", 0.24)
 PARSER_FUSION_AMBIGUITY_GAP = _env_float("PARSER_FUSION_AMBIGUITY_GAP", 0.08)
 COLOR_CONTEXT_DISABLE_MASKING = os.getenv("COLOR_CONTEXT_DISABLE_MASKING", "0") == "1"
-GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED = os.getenv("GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED", "0") == "1"
+GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED = os.getenv("GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED", "1") == "1"
 USER_PREP_MAX_FILE_BYTES = max(1, _env_int("USER_PREP_MAX_FILE_BYTES", 8 * 1024 * 1024))
 USER_PREP_BLUR_CHECK_ENABLED = os.getenv("USER_PREP_BLUR_CHECK_ENABLED", "1") == "1"
 USER_PREP_MIN_FOCUS_SCORE = _env_float("USER_PREP_MIN_FOCUS_SCORE", 18.0)
@@ -1021,6 +1021,138 @@ def _sanitize_prompt_fact_value(value: str) -> str:
     return cleaned
 
 
+def _canonical_coverage_for_type(target_type: str) -> str:
+    normalized = _normalize_garment_type(str(target_type or ""))
+    return {
+        "top": "upper body",
+        "bottom": "lower body",
+        "dress": "full body",
+        "outer": "upper body outer layer",
+    }.get(normalized, "")
+
+
+def _sanitize_prompt_fact_fields(
+    fields: Dict[str, str],
+    *,
+    target_type: str = "",
+) -> Dict[str, str]:
+    cleaned_fields = {
+        str(key): _sanitize_prompt_fact_value(str(value or ""))
+        for key, value in dict(fields or {}).items()
+        if str(key).strip()
+    }
+    normalized_type = _normalize_garment_type(str(target_type or cleaned_fields.get("category") or ""))
+
+    generic_drop_terms = (
+        "tattoo",
+        "abdomen",
+        "navel",
+        "belly",
+        "skin",
+        "torso",
+        "face",
+        "hair",
+        "hands",
+        "fingers",
+        "legs",
+        "feet",
+        "room",
+        "background",
+        "props",
+        "bag",
+        "jewelry",
+        "phone",
+        "mirror",
+    )
+    type_specific_drop_terms = {
+        "top": ("legs", "thigh", "knee", "calf", "ankle", "shoe"),
+        "bottom": ("neckline", "sleeve", "strap", "shoulder", "arm", "bust", "chest", "collar"),
+        "dress": (),
+        "outer": ("legs", "thigh", "knee", "calf", "ankle", "shoe"),
+    }
+    leak_patterns = (
+        r"\b(?:revealing|exposing|showing)\b[^,;.]*",
+        r"\b(?:visible|showing)\s+(?:skin|tattoo|abdomen|midriff|navel|belly)\b[^,;.]*",
+        r"\bpart of the\b[^,;.]*",
+    )
+
+    def _clean_field_segments(value: str, drop_terms: tuple[str, ...]) -> str:
+        cleaned = _sanitize_prompt_fact_value(value)
+        if not cleaned:
+            return ""
+        for pattern in leak_patterns:
+            cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+        segments = [seg.strip(" ,.") for seg in re.split(r"\s*,\s*", cleaned) if seg.strip(" ,.")]
+        kept = []
+        for seg in segments:
+            low = seg.lower()
+            if any(term in low for term in generic_drop_terms):
+                continue
+            if any(term in low for term in drop_terms):
+                continue
+            kept.append(seg)
+        collapsed = ", ".join(kept)
+        collapsed = re.sub(r"\s{2,}", " ", collapsed).strip(" ,.")
+        return collapsed
+
+    for label in ("construction", "details", "silhouette", "preserve"):
+        if cleaned_fields.get(label):
+            cleaned_fields[label] = _clean_field_segments(
+                cleaned_fields[label],
+                type_specific_drop_terms.get(normalized_type, ()),
+            )
+
+    canonical_coverage = _canonical_coverage_for_type(normalized_type)
+    if canonical_coverage:
+        cleaned_fields["coverage"] = canonical_coverage
+    elif cleaned_fields.get("coverage"):
+        cleaned_fields["coverage"] = _clean_field_segments(cleaned_fields["coverage"], ())
+
+    type_value = cleaned_fields.get("type") or ""
+    if normalized_type == "bottom":
+        type_value = re.sub(
+            r"\b(?:dress|gown|top|shirt|blouse|bodysuit|sleeve|sleeveless|one-shoulder)\b",
+            "",
+            type_value,
+            flags=re.IGNORECASE,
+        )
+    elif normalized_type in {"top", "outer"}:
+        type_value = re.sub(
+            r"\b(?:skirt|trouser|trousers|pants|shorts)\b",
+            "",
+            type_value,
+            flags=re.IGNORECASE,
+        )
+    cleaned_type_value = " ".join(type_value.split()).strip(" ,.-")
+    if cleaned_type_value:
+        cleaned_fields["type"] = cleaned_type_value
+
+    normalized_type_value = str(cleaned_fields.get("type") or "").lower()
+    if normalized_type in {"top", "outer"} and any(token in normalized_type_value for token in ("crop top", "cropped top", "bralette", "bra", "bustier", "corset")):
+        for label in ("construction", "details", "silhouette"):
+            value = str(cleaned_fields.get(label) or "")
+            if not value:
+                continue
+            segments = [seg.strip(" ,.") for seg in re.split(r"\s*,\s*", value) if seg.strip(" ,.")]
+            kept = []
+            for seg in segments:
+                low = seg.lower()
+                if any(term in low for term in ("slit", "cutout", "wrap")):
+                    continue
+                kept.append(seg)
+            cleaned = ", ".join(kept).strip(" ,.")
+            if cleaned:
+                cleaned_fields[label] = cleaned
+            else:
+                cleaned_fields.pop(label, None)
+
+    return {
+        key: value
+        for key, value in cleaned_fields.items()
+        if str(value or "").strip()
+    }
+
+
 def _serialize_prompt_fact_segments(fields: Dict[str, str]) -> str:
     ordered_labels = (
         "category",
@@ -1042,30 +1174,50 @@ def _serialize_prompt_fact_segments(fields: Dict[str, str]) -> str:
     return "; ".join(parts).strip(" ;.")
 
 
+
+
 def _resolve_garment_color_truth(
     *,
     base_garment_prompt: str,
+    descriptor_raw_text: str = "",
+    target_type: str = "",
     dominant_hexes: Optional[List[str]] = None,
     color_hints: Optional[List[str]] = None,
     color_profile: Optional[Dict[str, object]] = None,
+    color_mask_source: str = "",
 ) -> Dict[str, object]:
+    def _extract_color_terms(text: str) -> List[str]:
+        prompt_fields_local = dict(_parse_structured_descriptor(text))
+        prompt_fields_local.update(_extract_prompt_fact_segments(text))
+        prompt_color_text_local = str(prompt_fields_local.get("colors") or "").strip()
+        terms: List[str] = []
+        if prompt_color_text_local:
+            for raw_piece in re.split(r",|/|\band\b|&", prompt_color_text_local, flags=re.IGNORECASE):
+                clean_piece = _canonical_color_token(raw_piece)
+                if clean_piece and clean_piece in _TEXT_COLOR_TERMS and clean_piece not in terms:
+                    terms.append(clean_piece)
+                    continue
+                for term in _extract_text_color_terms(str(raw_piece or ""), max_items=2):
+                    clean_term = _canonical_color_token(term)
+                    if clean_term and clean_term not in terms:
+                        terms.append(clean_term)
+        if not terms:
+            terms = [
+                term for term in _extract_text_color_terms(str(prompt_color_text_local or text or ""), max_items=4)
+                if str(term).strip()
+            ]
+        return list(dict.fromkeys(terms))
+
     prompt_fields = dict(_parse_structured_descriptor(base_garment_prompt))
     prompt_fields.update(_extract_prompt_fact_segments(base_garment_prompt))
-    prompt_color_text = str(prompt_fields.get("colors") or "").strip()
-    prompt_color_terms: List[str] = []
-    if prompt_color_text:
-        for raw_piece in re.split(r",|/|\band\b|&", prompt_color_text, flags=re.IGNORECASE):
-            clean_piece = _canonical_color_token(raw_piece)
-            if clean_piece and clean_piece in _TEXT_COLOR_TERMS and clean_piece not in prompt_color_terms:
-                prompt_color_terms.append(clean_piece)
-    if not prompt_color_terms:
-        prompt_color_terms = [
-            term for term in _extract_text_color_terms(str(prompt_color_text or base_garment_prompt or ""), max_items=4)
-            if str(term).strip()
-        ]
-    prompt_color_terms = list(dict.fromkeys(prompt_color_terms))
+    prompt_color_terms = _extract_color_terms(base_garment_prompt)
+    descriptor_color_terms = _extract_color_terms(descriptor_raw_text)
     prompt_non_neutral = [
         term for term in prompt_color_terms
+        if _color_family(term) not in {"neutral_dark", "neutral_mid", "neutral_light", "brown"}
+    ]
+    descriptor_non_neutral = [
+        term for term in descriptor_color_terms
         if _color_family(term) not in {"neutral_dark", "neutral_mid", "neutral_light", "brown"}
     ]
 
@@ -1080,6 +1232,24 @@ def _resolve_garment_color_truth(
         if str(v).strip()
     ]
     pixel_hints = list(dict.fromkeys(pixel_hints))
+    mask_source_norm = str(color_mask_source or "").strip().lower()
+    weak_mask_source = bool(
+        mask_source_norm.startswith("heuristic")
+        or mask_source_norm in {"color_mask_error", "mask_error", "error", "disabled", "none"}
+    )
+    if weak_mask_source and pixel_hexes:
+        pixel_from_hex = _color_labels_from_hex_palette(pixel_hexes, top_k=max(1, FLUX2_COLOR_LOCK_TOP_K))
+        if pixel_from_hex:
+            should_override = not pixel_hints
+            if not should_override:
+                for term in pixel_hints:
+                    family = _color_family(term)
+                    if family and not _palette_supports_color_family(family, pixel_hexes, color_profile):
+                        should_override = True
+                        break
+            if should_override:
+                pixel_hints = pixel_from_hex
+    pixel_hints = _augment_pixel_hints_with_muted_hue_family(pixel_hints, pixel_hexes, color_profile)
     pixel_non_neutral = [
         term for term in pixel_hints
         if _color_family(term) not in {"neutral_dark", "neutral_mid", "neutral_light", "brown"}
@@ -1090,30 +1260,60 @@ def _resolve_garment_color_truth(
     resolved_source = "pixel"
 
     prompt_families = {_color_family(term) for term in prompt_non_neutral if term}
+    descriptor_families = {_color_family(term) for term in descriptor_non_neutral if term}
     pixel_families = {_color_family(term) for term in pixel_non_neutral if term}
+    semantic_terms = descriptor_color_terms or prompt_color_terms
+    semantic_non_neutral = descriptor_non_neutral or prompt_non_neutral
+    semantic_families = descriptor_families or prompt_families
+    semantic_supported = bool(
+        not semantic_families
+        or any(_palette_supports_color_family(family, pixel_hexes, color_profile) for family in semantic_families)
+    )
+    semantic_override_source = (
+        "semantic_prompt_override"
+        if (not descriptor_color_terms or descriptor_color_terms == prompt_color_terms)
+        else "semantic_descriptor_override"
+    )
     strong_semantic_override = bool(
         GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED
-        and prompt_non_neutral
+        and semantic_non_neutral
+        and semantic_supported
         and (
+            str(color_mask_source or "").strip().lower().startswith("heuristic")
+            or
             not pixel_non_neutral
-            or pixel_families.isdisjoint(prompt_families)
+            or pixel_families.isdisjoint(semantic_families)
             or all(_is_neutral_color_token(term) for term in pixel_hints[: max(1, len(pixel_hints))])
         )
     )
     if strong_semantic_override:
-        semantic_terms = prompt_color_terms[: max(2, FLUX2_COLOR_LOCK_TOP_K)]
         semantic_hexes: List[str] = []
-        for term in semantic_terms:
+        for term in semantic_terms[: max(2, FLUX2_COLOR_LOCK_TOP_K)]:
             rgb = _COLOR_LABEL_RGB_MAP.get(term)
             if rgb:
                 semantic_hex = "#{:02X}{:02X}{:02X}".format(*rgb)
                 if semantic_hex not in semantic_hexes:
                     semantic_hexes.append(semantic_hex)
         if semantic_terms:
-            resolved_hints = list(semantic_terms)
-            resolved_source = "semantic_prompt_override"
+            resolved_hints = list(semantic_terms[: max(2, FLUX2_COLOR_LOCK_TOP_K)])
+            resolved_source = semantic_override_source
         if semantic_hexes:
             resolved_hexes = list(semantic_hexes)
+    elif (
+        GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED
+        and semantic_terms
+        and semantic_families
+        and pixel_families
+        and semantic_families.intersection(pixel_families)
+        and len(pixel_families - semantic_families) >= 1
+    ):
+        merged_semantic_terms = list(semantic_terms[: max(2, FLUX2_COLOR_LOCK_TOP_K)])
+        merged_neutrals = [
+            term for term in pixel_hints
+            if _is_neutral_color_token(term) and term not in merged_semantic_terms
+        ]
+        resolved_hints = list(dict.fromkeys(merged_semantic_terms + merged_neutrals))
+        resolved_source = "semantic_descriptor_bias" if descriptor_color_terms else "semantic_prompt_bias"
 
     def _normalize_resolved_color_hints(
         hints: List[str],
@@ -1129,7 +1329,9 @@ def _resolve_garment_color_truth(
         dominant_family = _color_family(non_neutral[0])
         mean_chroma = profile.get("meanChroma") if isinstance(profile, dict) else None
         mean_b = profile.get("meanB") if isinstance(profile, dict) else None
+        median_l = profile.get("medianL") if isinstance(profile, dict) else None
         soft_warm_neutrals = {"beige", "champagne", "tan", "nude", "khaki"}
+        neutral_mid = {"gray", "silver", "charcoal"}
 
         filtered = list(ordered)
         if (
@@ -1142,6 +1344,23 @@ def _resolve_garment_color_truth(
             pruned = [term for term in ordered if term not in soft_warm_neutrals]
             if any(_color_family(term) == dominant_family for term in pruned):
                 filtered = pruned
+        elif dominant_family == "pink":
+            if "white" in filtered:
+                filtered = [term for term in filtered if term not in {"gold", "beige", "champagne", "tan", "brown"}]
+            elif (
+                isinstance(mean_chroma, (int, float))
+                and isinstance(median_l, (int, float))
+                and float(mean_chroma) <= 22.0
+                and float(median_l) >= 62.0
+            ):
+                filtered = [term for term in filtered if term not in {"gold", "brown", "beige", "champagne", "tan"}]
+            if any(_color_family(term) == "pink" for term in filtered):
+                filtered = [term for term in filtered if term not in neutral_mid]
+        elif dominant_family == "blue":
+            if any(_color_family(term) == "blue" for term in filtered):
+                filtered = [term for term in filtered if term not in {"brown", "tan", "beige", "champagne", "khaki"}]
+                if isinstance(mean_b, (int, float)) and float(mean_b) <= 6.0:
+                    filtered = [term for term in filtered if term not in {"gold"}]
 
         non_neutral_filtered = [term for term in filtered if _color_family(term) not in {"neutral_dark", "neutral_mid", "neutral_light", "brown"}]
         neutral_filtered = [term for term in filtered if term not in non_neutral_filtered]
@@ -1155,9 +1374,10 @@ def _resolve_garment_color_truth(
     reconciled_fields = dict(prompt_fields)
     if resolved_color_text:
         reconciled_fields["colors"] = resolved_color_text
-    for key in ("details", "preserve", "construction", "coverage", "material", "silhouette", "pattern", "type", "category"):
-        if key in reconciled_fields:
-            reconciled_fields[key] = _sanitize_prompt_fact_value(reconciled_fields.get(key, ""))
+    reconciled_fields = _sanitize_prompt_fact_fields(
+        reconciled_fields,
+        target_type=target_type,
+    )
     reconciled_prompt = _serialize_prompt_fact_segments(reconciled_fields)
     if reconciled_prompt:
         reconciled_prompt = f"{reconciled_prompt}."
@@ -1222,9 +1442,12 @@ def _build_garment_metadata(
     classification_backend = str(backend_target_type or classification_target).strip()
     reconciled_color = _resolve_garment_color_truth(
         base_garment_prompt=base_prompt,
+        descriptor_raw_text=descriptor_raw_text,
+        target_type=classification_backend or classification_target,
         dominant_hexes=dominant_hexes,
         color_hints=color_hints,
         color_profile=color_profile if isinstance(color_profile, dict) else None,
+        color_mask_source=color_mask_source,
     )
     resolved_base_prompt = str(reconciled_color.get("base_garment_prompt") or base_prompt).strip()
     resolved_prompt_description = " ".join(str(prompt_description or resolved_base_prompt).split()).strip()
@@ -1237,9 +1460,14 @@ def _build_garment_metadata(
             if rebuilt_prompt:
                 resolved_prompt_description = f"{rebuilt_prompt}."
 
+
     fact_fields = _extract_garment_descriptor_facts(
         base_garment_prompt=resolved_base_prompt,
         descriptor_raw_text=descriptor_raw_text,
+    )
+    fact_fields = _sanitize_prompt_fact_fields(
+        fact_fields,
+        target_type=classification_backend or classification_target,
     )
     return {
         "schema_version": "garment_metadata.v1",
@@ -1718,6 +1946,110 @@ def _palette_weighted_hue_deg(palette: List[Dict[str, object]], max_colors: int 
         ang += 360.0
     return ang
 
+
+def _palette_hue_from_hexes(hexes: Optional[List[str]]) -> Optional[float]:
+    palette: List[Dict[str, object]] = []
+    for idx, hx in enumerate(hexes or []):
+        token = str(hx or "").strip()
+        if not re.fullmatch(r"#[0-9A-Fa-f]{6}", token):
+            continue
+        palette.append({"hex": token, "areaPercent": max(1.0, float(100 - idx * 10))})
+    if not palette:
+        return None
+    return _palette_weighted_hue_deg(palette, max_colors=min(4, len(palette)))
+
+
+def _palette_supports_color_family(
+    family: str,
+    dominant_hexes: Optional[List[str]],
+    color_profile: Optional[Dict[str, object]],
+) -> bool:
+    fam = str(family or "").strip().lower()
+    if not fam or fam.startswith("neutral") or fam == "brown":
+        return True
+
+    hue = _palette_hue_from_hexes(dominant_hexes)
+    profile = color_profile if isinstance(color_profile, dict) else {}
+    mean_chroma = float(profile.get("meanChroma") or 0.0)
+    mean_a = float(profile.get("meanA") or 0.0)
+    mean_b = float(profile.get("meanB") or 0.0)
+    median_l = float(profile.get("medianL") or 0.0)
+
+    if fam == "blue":
+        return bool(
+            hue is not None
+            and 170.0 <= float(hue) <= 255.0
+            and (mean_b <= -2.0 or mean_chroma >= 14.0)
+        )
+    if fam == "green":
+        return bool(
+            hue is not None
+            and 70.0 <= float(hue) <= 155.0
+            and (mean_a <= -1.0 or mean_b >= 1.5)
+        )
+    if fam == "yellow":
+        return bool(
+            hue is not None
+            and 35.0 <= float(hue) <= 80.0
+            and mean_b >= 8.0
+        )
+    if fam == "pink":
+        return bool(
+            hue is not None
+            and (float(hue) >= 320.0 or float(hue) <= 25.0)
+            and mean_a >= 4.0
+            and median_l >= 45.0
+        )
+    if fam == "red":
+        return bool(
+            hue is not None
+            and (float(hue) >= 345.0 or float(hue) <= 20.0)
+            and mean_a >= 8.0
+            and median_l < 72.0
+        )
+    if fam == "purple":
+        return bool(hue is not None and 255.0 <= float(hue) <= 330.0 and mean_a >= 3.0)
+    if fam == "orange":
+        return bool(hue is not None and 15.0 <= float(hue) <= 45.0 and mean_b >= 10.0)
+    return True
+
+
+def _augment_pixel_hints_with_muted_hue_family(
+    pixel_hints: List[str],
+    dominant_hexes: Optional[List[str]],
+    color_profile: Optional[Dict[str, object]],
+) -> List[str]:
+    ordered = list(dict.fromkeys(str(v).strip().lower() for v in (pixel_hints or []) if str(v).strip()))
+    if not ordered:
+        return ordered
+    if any(not _is_neutral_color_token(term) and _color_family(term) != "brown" for term in ordered):
+        return ordered
+
+    profile = color_profile if isinstance(color_profile, dict) else {}
+    hue = _palette_hue_from_hexes(dominant_hexes)
+    if hue is None:
+        return ordered
+
+    mean_chroma = float(profile.get("meanChroma") or 0.0)
+    mean_a = float(profile.get("meanA") or 0.0)
+    mean_b = float(profile.get("meanB") or 0.0)
+    median_l = float(profile.get("medianL") or 0.0)
+    promoted: Optional[str] = None
+
+    if mean_chroma <= 18.0:
+        if 70.0 <= float(hue) <= 150.0 and (mean_a <= -1.0 or mean_b >= 1.5):
+            promoted = "olive" if mean_b >= 4.0 and median_l < 70.0 else "green"
+        elif (float(hue) >= 320.0 or float(hue) <= 25.0) and mean_a >= 4.0 and median_l >= 52.0:
+            promoted = "pink"
+        elif 35.0 <= float(hue) <= 80.0 and mean_b >= 8.0:
+            promoted = "yellow"
+        elif 170.0 <= float(hue) <= 255.0 and mean_b <= -2.0:
+            promoted = "blue"
+
+    if promoted and promoted not in ordered:
+        return [promoted] + ordered
+    return ordered
+
 def _profile_is_near_white(profile: Dict[str, object]) -> bool:
     if not isinstance(profile, dict):
         return False
@@ -1863,6 +2195,26 @@ def _build_garment_color_tone_guidance(
         ):
             phrase = "muted sage green"
             negative_terms = ["gray", "silver", "gold", "beige", "olive brown"]
+    elif family == "pink":
+        if (
+            isinstance(median_l, (int, float))
+            and isinstance(mean_c, (int, float))
+            and float(median_l) >= 72.0
+            and float(mean_c) <= 24.0
+        ):
+            phrase = "soft blush pink"
+            negative_terms = ["brown", "burgundy", "maroon", "gray", "silver", "beige", "tan"]
+        elif (
+            isinstance(median_l, (int, float))
+            and isinstance(mean_c, (int, float))
+            and float(median_l) >= 60.0
+            and float(mean_c) <= 28.0
+        ):
+            phrase = "blush pink"
+            negative_terms = ["brown", "burgundy", "maroon", "gray", "silver", "tan"]
+        elif isinstance(mean_c, (int, float)) and float(mean_c) < 24.0:
+            phrase = "dusty pink"
+            negative_terms = ["brown", "burgundy", "maroon", "gray", "silver"]
 
     return {
         "phrase": phrase,
@@ -6316,6 +6668,7 @@ def _build_minicpm_garment_prompt(
         f"{MINICPM_SERVICE_GARMENT_PROMPT} {type_clause} "
         "If body parts, face, hair, hands, legs, room, bed, mirror, phone, bag, or props are visible, ignore them completely. "
         "Do not mention a person wearing the garment. "
+        "Describe only visible front-facing garment features. Do not infer hidden back details, internal construction, closures, slits, cutouts, pockets, or panels unless they are clearly visible. "
         "Do not describe pose, scene, background, or accessories. "
         "Return exactly these two labeled sections and no extra text: "
         "BASE_GARMENT_PROMPT: one concise garment-only prompt containing only the requested garment's characteristics. "
@@ -6472,6 +6825,41 @@ def _build_flux2_single_garment_extract_prompt(
                 "avoid washout, over-darkening, or metallic sheen drift. "
             )
 
+    structural_markers = {
+        "pockets": ("pocket",),
+        "buttons": ("button", "snap", "stud"),
+        "zipper": ("zipper", "zip"),
+        "placket": ("placket",),
+        "belt": ("belt", "belted"),
+        "cutout": ("cutout",),
+        "slit": ("slit",),
+        "ruffles": ("ruffle", "ruffled"),
+        "pleats": ("pleat", "pleated"),
+        "bows": ("bow",),
+    }
+    visible_structure = {
+        name for name, needles in structural_markers.items()
+        if any(needle in low_desc for needle in needles)
+    }
+    preserve_visible_clause = ""
+    if visible_structure:
+        preserve_visible_clause = (
+            " Preserve only the visible source features: "
+            + ", ".join(sorted(visible_structure))
+            + ". "
+        )
+    structural_absent = [
+        name for name in ("pockets", "buttons", "zipper", "placket", "belt", "cutout", "slit", "bows")
+        if name not in visible_structure
+    ]
+    no_invention_clause = ""
+    if structural_absent:
+        no_invention_clause = (
+            " Do not invent "
+            + ", ".join(structural_absent)
+            + ", or any extra bands, panels, layered sections, or closures not clearly visible in the source. "
+        )
+
     type_lock_clause = {
         "top": (
             "Generate only a top garment. Never generate bottoms, dress silhouettes, legs, or shoes. "
@@ -6502,6 +6890,17 @@ def _build_flux2_single_garment_extract_prompt(
         subtype_lock_clause = (
             f" This garment is a {inferred_subtype}. Preserve exact cup shape, neckline, strap geometry, closure placement, and bust contour from the source."
         )
+    if any(token in low_desc for token in ("crop top", "cropped top", "bralette", "bra", "bustier", "corset")):
+        subtype_lock_clause += (
+            " Preserve the exact cropped hemline from the source. "
+            "The garment must end at the original cropped waist hem and must not extend into a full-length top or tunic. "
+            "Do not generate any detached waistband, extra lower strip, separate abdominal band, second garment section below the hem, or extended torso panel."
+        )
+    if any(token in low_desc for token in ("one-shoulder", "one shoulder", "single shoulder", "single-shoulder")):
+        subtype_lock_clause += (
+            " Preserve exactly one shoulder connection and one sleeve/strap layout only. "
+            "Do not generate a second strap, second shoulder panel, or any extra lower torso band."
+        )
     clean_avoid_clause = " ".join(str(extraction_avoid_clause or "").split()).strip()
     avoid_clause = ""
     if clean_avoid_clause:
@@ -6517,9 +6916,8 @@ def _build_flux2_single_garment_extract_prompt(
         f"Generate only one {explicit_category} category garment and nothing from other categories. "
         "Do not generate any artificial fashion variant, redesign, or alternate styling. "
         "Reconstruct only the exact source garment visible in the crop. "
-        f"{type_lock_clause}{subtype_lock_clause}{color_lock_clause}{color_hint_clause}{color_tone_clause}{profile_clause}"
-        "Preserve exact garment structure, fabric, texture, print placement, seams, pleats, closures, trims, closures, button count, button size, button spacing, button placement, front placket geometry, border placement, lapel geometry, and pocket placement. "
-        "Keep every visible button, snap, stud, or dot-button exactly where it appears in the source, with the same count and vertical spacing. "
+        f"{type_lock_clause}{subtype_lock_clause}{color_lock_clause}{color_hint_clause}{color_tone_clause}{profile_clause}{preserve_visible_clause}{no_invention_clause}"
+        "Preserve exact garment structure, fabric, texture, print placement, and only the seams, trims, and closures that are clearly visible in the source. "
         "Preserve the exact source color and material appearance; do not brighten black garments into gray, silver, or white. "
         "Do not include visible limbs, face, torso, neck, shoulders, hands, fingers, legs, feet, or any human remnants in the output garment region. "
         f"Garment descriptor: {clean_desc}{avoid_clause}"
@@ -6529,11 +6927,13 @@ def _build_flux2_single_garment_extract_negative_prompt(
     *,
     garment_type: str,
     custom_negative_prompt: str = "",
+    prompt_description: str = "",
     color_hints: Optional[List[str]] = None,
     color_profile: Optional[Dict[str, object]] = None,
 ) -> str:
     gtype = _normalize_garment_type(garment_type) or "top"
     custom = " ".join(str(custom_negative_prompt or "").split()).strip()
+    prompt_low = " ".join(str(prompt_description or "").split()).strip().lower()
     parts: List[str] = []
     if custom:
         parts.append(custom)
@@ -6570,6 +6970,19 @@ def _build_flux2_single_garment_extract_negative_prompt(
     tone_negative_terms = [str(v).strip() for v in (tone_guidance.get("negative_terms") or []) if str(v).strip()]
     if tone_negative_terms:
         parts.append(", ".join(tone_negative_terms))
+
+    if any(token in f"{custom.lower()} {prompt_low}" for token in ("one-shoulder", "one shoulder", "single shoulder", "single-shoulder")):
+        parts.append("second strap, second sleeve, extra shoulder panel, duplicate shoulder")
+    if any(token in prompt_low for token in ("crop top", "cropped top", "bralette", "bra", "bustier", "corset")):
+        parts.append("detached waistband, extra lower strip, separate abdominal band, extra lower torso panel, second garment section below hem, full-length top, tunic length, extended torso panel")
+    if "pocket" not in prompt_low:
+        parts.append("invented pockets, pocket flaps")
+    if all(token not in prompt_low for token in ("button", "snap", "stud")):
+        parts.append("invented buttons, snaps, studs")
+    if "zip" not in prompt_low:
+        parts.append("invented zipper")
+    if "placket" not in prompt_low:
+        parts.append("invented placket")
 
     return " | ".join([p for p in parts if p]).strip()
 
@@ -8162,6 +8575,7 @@ def _run_flux2_cloth_only_extract(
     steps: Optional[int] = None,
     seed: Optional[int] = None,
     color_reference_image: Optional[Image.Image] = None,
+    reference_mask: Optional[np.ndarray] = None,
     apply_type_color_mask: bool = False,
 ) -> dict:
     """
@@ -8209,7 +8623,12 @@ def _run_flux2_cloth_only_extract(
     ).strip()
     descriptor_color_mask = None
     descriptor_color_mask_meta = {"source": "disabled", "used": False, "reason": "type_mask_not_requested"}
-    if apply_type_color_mask:
+    if isinstance(reference_mask, np.ndarray):
+        mask_arr = np.asarray(reference_mask).astype(bool)
+        if mask_arr.ndim == 2 and mask_arr.shape[:2] == (descriptor_color_ctx_image.height, descriptor_color_ctx_image.width):
+            descriptor_color_mask = mask_arr
+            descriptor_color_mask_meta = {"source": "detector_mask_runtime", "used": True, "reason": "provided_reference_mask"}
+    if apply_type_color_mask and not isinstance(descriptor_color_mask, np.ndarray):
         descriptor_color_mask, descriptor_color_mask_meta = _estimate_type_focused_color_mask(
             descriptor_color_ctx_image,
             resolved_type,
@@ -8395,9 +8814,12 @@ def _run_flux2_cloth_only_extract(
     ).strip()
     reconciled_color = _resolve_garment_color_truth(
         base_garment_prompt=garment_desc,
+        descriptor_raw_text=str(prompt_bundle.get("raw_text") or garment_desc or ""),
+        target_type=resolved_type,
         dominant_hexes=dominant_hexes,
         color_hints=color_hints,
         color_profile=color_profile if isinstance(color_profile, dict) else None,
+        color_mask_source=color_mask_source,
     )
     resolved_garment_desc = " ".join(
         str(reconciled_color.get("base_garment_prompt") or garment_desc).split()
@@ -8440,6 +8862,7 @@ def _run_flux2_cloth_only_extract(
     built_negative_prompt = _build_flux2_single_garment_extract_negative_prompt(
         garment_type=resolved_type,
         custom_negative_prompt=" ".join(str(negative_prompt or "").split()).strip(),
+        prompt_description=garment_desc,
         color_hints=color_hints,
         color_profile=color_profile,
     )
@@ -9519,6 +9942,7 @@ async def flux2_extract_single_garment(
             built_negative_prompt = _build_flux2_single_garment_extract_negative_prompt(
                 garment_type=resolved_type,
                 custom_negative_prompt=provided_negative,
+                prompt_description=garment_desc,
             )
             stage_timings["prompt_build_s"] = round(time.time() - t_stage, 4)
 

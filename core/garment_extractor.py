@@ -13,6 +13,7 @@ class GarmentExtractionConfig:
     crop_pad_ratio: float = 0.18
     crop_pad_ratio_dress: float = 0.28
     crop_bottom_extra_ratio_dress: float = 0.32
+    crop_bottom_extra_ratio_top_multi: float = 0.04
     crop_top_extra_ratio_bottom: float = 0.12
     crop_top_extra_ratio_bottom_multi: float = 0.12
     dress_top_recovery_ratio: float = 0.14
@@ -164,6 +165,11 @@ class GarmentExtractor:
 
         if gt == "dress":
             y_pad_bottom = int(bh * max(pad_ratio, self.config.crop_bottom_extra_ratio_dress))
+        elif gt in {"top", "outer"} and int(request.total_items) > 1:
+            y_pad_bottom = min(
+                y_pad_bottom,
+                int(bh * max(0.0, self.config.crop_bottom_extra_ratio_top_multi)),
+            )
         elif gt == "bottom":
             top_extra_ratio = max(0.0, self.config.crop_top_extra_ratio_bottom)
             if int(request.total_items) > 1:

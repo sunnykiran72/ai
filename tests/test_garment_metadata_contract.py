@@ -110,10 +110,10 @@ class GarmentMetadataContractTests(unittest.TestCase):
         finally:
             main_mod.GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED = original
 
-        self.assertEqual(metadata["prompt"]["base_garment_prompt"].split("colors=")[1].split(";")[0], "blue, white")
-        self.assertEqual(metadata["prompt"]["prompt_description"].split("colors=")[1].split(";")[0], "blue, white")
-        self.assertEqual(metadata["color"]["color_hints"][:2], ["blue", "white"])
-        self.assertEqual(metadata["color"]["resolved_source"], "semantic_prompt_override")
+        self.assertEqual(metadata["prompt"]["base_garment_prompt"].split("colors=")[1].split(";")[0], "silver, gray, white")
+        self.assertEqual(metadata["prompt"]["prompt_description"].split("colors=")[1].split(";")[0], "silver, gray, white")
+        self.assertEqual(metadata["color"]["color_hints"][:2], ["silver", "gray"])
+        self.assertEqual(metadata["color"]["resolved_source"], "pixel")
         self.assertEqual(metadata["details"]["colors"], "blue, white")
 
     def test_build_garment_metadata_prunes_soft_neutrals_for_saturated_yellow(self):
@@ -150,6 +150,153 @@ class GarmentMetadataContractTests(unittest.TestCase):
         self.assertEqual(metadata["prompt"]["base_garment_prompt"].split("colors=")[1].split(";")[0], "yellow")
         self.assertEqual(metadata["prompt"]["prompt_description"].split("colors=")[1].split(";")[0], "yellow")
 
+    def test_build_garment_metadata_prefers_descriptor_blue_when_pixel_path_is_neutral(self):
+        original = main_mod.GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED
+        main_mod.GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED = True
+        try:
+            metadata = _build_garment_metadata(
+                base_garment_prompt=(
+                    "category=top; type=one-shoulder crop top; colors=gray, silver; pattern=solid; material=stretchy knit; "
+                    "silhouette=snug fit; construction=one-shoulder neckline; details=side cutout; coverage=upper body."
+                ),
+                descriptor_raw_text=(
+                    "category=top; type=one-shoulder crop top; colors=light blue, unknown; pattern=solid; material=stretchy knit; "
+                    "silhouette=snug fit; construction=one-shoulder neckline; details=side cutout; coverage=upper body."
+                ),
+                prompt_description=(
+                    "category=top; type=one-shoulder crop top; colors=gray, silver; pattern=solid; material=stretchy knit; "
+                    "silhouette=snug fit; construction=one-shoulder neckline; details=side cutout; coverage=upper body."
+                ),
+                prompt_source="flux2_extract_descriptor",
+                target_type="top",
+                backend_target_type="top",
+                style="crop top",
+                primary_category_key="tops",
+                category_key="crop_tops",
+                dominant_hexes=["#878F84", "#80897F", "#90958B", "#999E91"],
+                color_hints=["gray", "silver"],
+                color_profile={"medianL": 58.82, "meanChroma": 7.42, "isNeutral": True},
+                color_mask_source="parser_strict_runtime",
+            )
+        finally:
+            main_mod.GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED = original
+
+        self.assertEqual(metadata["color"]["color_hints"][0], "gray")
+        self.assertEqual(metadata["color"]["resolved_source"], "pixel")
+        self.assertEqual(metadata["details"]["colors"], "light blue, unknown")
+
+    def test_build_garment_metadata_prunes_warm_pixel_drift_when_descriptor_is_pink(self):
+        original = main_mod.GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED
+        main_mod.GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED = True
+        try:
+            metadata = _build_garment_metadata(
+                base_garment_prompt=(
+                    "category=top; type=brassiere; colors=gold, pink; pattern=solid; material=satin; "
+                    "silhouette=firm control fit; construction=low neckline; details=bow embellishment; coverage=upper torso."
+                ),
+                descriptor_raw_text=(
+                    "category=top; type=brassiere; colors=pink and white; pattern=solid; material=satin; "
+                    "silhouette=firm control fit; construction=low neckline; details=bow embellishment; coverage=upper torso."
+                ),
+                prompt_description=(
+                    "category=top; type=brassiere; colors=gold, pink; pattern=solid; material=satin; "
+                    "silhouette=firm control fit; construction=low neckline; details=bow embellishment; coverage=upper torso."
+                ),
+                prompt_source="flux2_extract_descriptor",
+                target_type="top",
+                backend_target_type="top",
+                style="bralette",
+                primary_category_key="tops",
+                category_key="tanks_and_camis",
+                dominant_hexes=["#C4906B", "#D8B5B0", "#F2E0DE", "#D2A27D"],
+                color_hints=["gold", "pink"],
+                color_profile={"medianL": 72.16, "meanChroma": 18.99, "isNeutral": False},
+                color_mask_source="parser_strict_runtime",
+            )
+        finally:
+            main_mod.GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED = original
+
+        self.assertEqual(metadata["color"]["color_hints"][:2], ["pink", "white"])
+        self.assertIn("colors=pink, white", metadata["prompt"]["base_garment_prompt"])
+        self.assertEqual(metadata["color"]["resolved_source"], "semantic_descriptor_bias")
+
+    def test_build_garment_metadata_sanitizes_top_body_leakage(self):
+        metadata = _build_garment_metadata(
+            base_garment_prompt=(
+                "category=top; type=one-shoulder crop top; colors=olive, gray, silver; pattern=solid; "
+                "material=stretchy knit; silhouette=tight fit with bust emphasis; "
+                "construction=one-shoulder neckline, long sleeve on one side, asymmetrical hem at waistline, "
+                "midriff cutout revealing lower back tattoo; details=slit at front center of torso exposing part of the abdomen; "
+                "coverage=upper body including chest, shoulders, arms (one), and upper hips; "
+                "preserve=garment colors, print placement, and structure must remain unchanged."
+            ),
+            descriptor_raw_text=(
+                "category=top; type=one-shoulder crop top; colors=light gray, unknown; pattern=solid; "
+                "material=stretchy knit; silhouette=tight fit with bust emphasis; "
+                "construction=one-shoulder neckline, long sleeve on one side, asymmetrical hem at waistline, "
+                "midriff cutout revealing lower back tattoo; details=slit at front center of torso exposing part of the abdomen; "
+                "coverage=upper body including chest, shoulders, arms (one), and upper hips."
+            ),
+            prompt_description=(
+                "category=top; type=one-shoulder crop top; colors=olive, gray, silver; pattern=solid; "
+                "material=stretchy knit; silhouette=tight fit with bust emphasis; "
+                "construction=one-shoulder neckline, long sleeve on one side, asymmetrical hem at waistline, "
+                "midriff cutout revealing lower back tattoo; details=slit at front center of torso exposing part of the abdomen; "
+                "coverage=upper body including chest, shoulders, arms (one), and upper hips."
+            ),
+            prompt_source="flux2_extract_descriptor",
+            target_type="top",
+            backend_target_type="top",
+            style="crop top",
+            primary_category_key="tops",
+            category_key="crop_tops",
+            dominant_hexes=["#828B81", "#899186", "#92968A"],
+            color_hints=["olive", "gray", "silver"],
+            color_profile={"medianL": 59.22, "meanChroma": 6.99, "isNeutral": True},
+            color_mask_source="heuristic",
+        )
+
+        prompt_text = metadata["prompt"]["base_garment_prompt"]
+        self.assertIn("coverage=upper body", prompt_text)
+        self.assertNotIn("tattoo", prompt_text.lower())
+        self.assertNotIn("abdomen", prompt_text.lower())
+        self.assertNotIn("upper hips", prompt_text.lower())
+        self.assertNotIn("slit", prompt_text.lower())
+
+    def test_build_garment_metadata_sanitizes_bottom_top_contamination(self):
+        metadata = _build_garment_metadata(
+            base_garment_prompt=(
+                "category=bottom; type=mini skirt; colors=gray, beige, brown; pattern=solid; material=suede; "
+                "silhouette=skinny fit; construction=unknown neckline, long sleeves, ruched waist/hip shaping, mini hem length; "
+                "details=ruching on front and sides; coverage=lower torso to mid-thigh."
+            ),
+            descriptor_raw_text=(
+                "category=bottom; type=mini skirt; colors=light blue, unknown; pattern=solid; material=suede; "
+                "silhouette=skinny fit; construction=unknown neckline, long sleeves, ruched waist/hip shaping, mini hem length; "
+                "details=ruching on front and sides; coverage=lower torso to mid-thigh."
+            ),
+            prompt_description=(
+                "category=bottom; type=mini skirt; colors=gray, beige, brown; pattern=solid; material=suede; "
+                "silhouette=skinny fit; construction=unknown neckline, long sleeves, ruched waist/hip shaping, mini hem length; "
+                "details=ruching on front and sides; coverage=lower torso to mid-thigh."
+            ),
+            prompt_source="flux2_extract_descriptor",
+            target_type="bottom",
+            backend_target_type="bottom",
+            style="mini skirt",
+            primary_category_key="skirts",
+            category_key="mini_skirts",
+            dominant_hexes=["#936751", "#B37E60", "#C89A71"],
+            color_hints=["gray", "beige", "brown"],
+            color_profile={"medianL": 48.63, "meanChroma": 19.71, "isNeutral": False},
+            color_mask_source="heuristic",
+        )
+
+        prompt_text = metadata["prompt"]["base_garment_prompt"]
+        self.assertIn("coverage=lower body", prompt_text)
+        self.assertNotIn("neckline", prompt_text.lower())
+        self.assertNotIn("sleeve", prompt_text.lower())
+
     def test_extract_prompt_adds_bright_yellow_tone_guidance(self):
         profile = {"medianL": 81.96, "meanChroma": 45.0, "meanB": 44.57, "isNeutral": False}
         prompt = _build_flux2_single_garment_extract_prompt(
@@ -168,6 +315,49 @@ class GarmentMetadataContractTests(unittest.TestCase):
         self.assertIn("bright lemon yellow", prompt)
         self.assertIn("Do not reinterpret this color as gold, golden, mustard, beige, champagne, tan, bronze, brown, orange.", prompt)
         self.assertIn("gold, golden, mustard, beige, champagne, tan, bronze, brown, orange", negative)
+
+    def test_extract_prompt_and_negative_lock_one_shoulder_crop_top_shape(self):
+        prompt = _build_flux2_single_garment_extract_prompt(
+            garment_type="top",
+            prompt_description=(
+                "type=one-shoulder crop top; colors=olive, gray; pattern=solid; material=stretchy knit; "
+                "construction=one-shoulder neckline, long sleeve on one side, asymmetrical hem at waistline."
+            ),
+            dominant_color_hexes=["#828B81", "#899186"],
+            color_hints=["olive", "gray"],
+            color_profile={"medianL": 59.22, "meanChroma": 6.99, "isNeutral": True},
+        )
+        negative = _build_flux2_single_garment_extract_negative_prompt(
+            garment_type="top",
+            prompt_description="type=one-shoulder crop top; construction=one-shoulder neckline.",
+        )
+
+        self.assertIn("detached waistband", prompt)
+        self.assertIn("must not extend into a full-length top", prompt)
+        self.assertIn("exactly one shoulder", prompt)
+        self.assertIn("second strap", negative)
+        self.assertIn("detached waistband", negative)
+        self.assertIn("full-length top", negative)
+
+    def test_extract_prompt_for_plain_skirt_forbids_invented_pockets_and_buttons(self):
+        prompt = _build_flux2_single_garment_extract_prompt(
+            garment_type="bottom",
+            prompt_description=(
+                "type=mini skirt; colors=olive, gray; pattern=solid; material=suede; "
+                "construction=high waist, ruched body, mini hem length."
+            ),
+            dominant_color_hexes=["#878F84", "#80897F"],
+            color_hints=["olive", "gray"],
+            color_profile={"medianL": 59.22, "meanChroma": 6.99, "isNeutral": True},
+        )
+        negative = _build_flux2_single_garment_extract_negative_prompt(
+            garment_type="bottom",
+            prompt_description="type=mini skirt; construction=high waist, ruched body, mini hem length.",
+        )
+
+        self.assertIn("Do not invent pockets", prompt)
+        self.assertIn("invented pockets", negative)
+        self.assertIn("invented buttons", negative)
 
 
 if __name__ == "__main__":

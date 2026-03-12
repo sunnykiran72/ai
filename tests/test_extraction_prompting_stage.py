@@ -1,6 +1,7 @@
 import types
 import unittest
 
+import numpy as np
 from PIL import Image
 
 from ai.modules.wardrobe.extraction.generation_stage import run_selected_item_extraction_or_response
@@ -82,6 +83,9 @@ class PromptingStageTests(unittest.TestCase):
         def run_flux2_cloth_only_extract(**kwargs):
             captured["garment_type"] = kwargs["garment_type"]
             captured["apply_type_color_mask"] = kwargs["apply_type_color_mask"]
+            captured["reference_mask_shape"] = None if kwargs.get("reference_mask") is None else tuple(kwargs["reference_mask"].shape)
+            color_ref = kwargs.get("color_reference_image")
+            captured["color_reference_image_size"] = None if color_ref is None else tuple(color_ref.size)
             return {
                 "url": "https://example.com/out.png",
                 "_processed_image_bytes": b"png",
@@ -106,6 +110,7 @@ class PromptingStageTests(unittest.TestCase):
             "type": "dress",
             "bbox": [1, 2, 50, 80],
             "_image_obj": image,
+            "_mask_obj": np.ones((120, 100), dtype=bool),
             "promptDescription": "",
             "description": "",
         }
@@ -146,6 +151,8 @@ class PromptingStageTests(unittest.TestCase):
         self.assertIsNone(response)
         self.assertEqual(captured["garment_type"], "dress")
         self.assertTrue(captured["apply_type_color_mask"])
+        self.assertEqual(captured["reference_mask_shape"], (78, 49))
+        self.assertEqual(captured["color_reference_image_size"], (100, 120))
         self.assertEqual(updated_item["url"], "https://example.com/out.png")
 
 

@@ -4,6 +4,7 @@ import io
 import time
 from typing import Callable, Dict, Optional, Tuple
 
+import numpy as np
 from PIL import Image
 
 
@@ -100,6 +101,27 @@ def run_selected_item_extraction_or_response(
     extraction_meta = {}
     extracted_image_bytes = b""
     fallback: Dict[str, object] = {}
+    reference_mask = None
+    detector_mask_obj = selected_item.get("_mask_obj")
+    if isinstance(detector_mask_obj, np.ndarray):
+        try:
+            detector_mask = np.asarray(detector_mask_obj).astype(bool)
+            if detector_mask.ndim == 2:
+                if direct_requested_type_mode and detector_mask.shape[:2] == (full_image.height, full_image.width):
+                    reference_mask = detector_mask
+                else:
+                    extract_bbox = selected_item.get("extract_crop_bbox") or []
+                    if (
+                        len(extract_bbox) == 4
+                        and detector_mask.shape[:2] == (full_image.height, full_image.width)
+                    ):
+                        ex0, ey0, ex1, ey1 = [int(v) for v in extract_bbox]
+                        if ex1 > ex0 and ey1 > ey0:
+                            cropped_mask = detector_mask[max(0, ey0):max(0, ey1), max(0, ex0):max(0, ex1)]
+                            if cropped_mask.size > 0:
+                                reference_mask = cropped_mask
+        except Exception:
+            reference_mask = None
     t_extract = time.time()
     try:
         flux_fallback = run_flux2_cloth_only_extract(
@@ -110,7 +132,8 @@ def run_selected_item_extraction_or_response(
             description_backend="minicpm",
             steps=flux2_single_garment_extract_default_steps,
             seed=flux2_single_garment_extract_default_seed,
-            color_reference_image=selected_item.get("_image_obj"),
+            color_reference_image=extract_source_image,
+            reference_mask=reference_mask,
             apply_type_color_mask=bool(selected_type),
         )
         fallback = flux_fallback

@@ -13,6 +13,7 @@ class _FakeParser:
             "upper": 4,
             "pants": 6,
             "dress": 7,
+            "belt": 8,
             "torso": 18,
         }
 
@@ -56,6 +57,33 @@ class GarmentColorMaskerTests(unittest.TestCase):
         mask = np.asarray(mask).astype(bool)
         self.assertTrue(bool(mask[180, 90]))
         self.assertFalse(bool(mask[40, 90]))
+
+    def test_parser_mask_removes_skin_overlap_for_top_color_sampling(self):
+        w, h = 160, 220
+        img = Image.new("RGB", (w, h), color=(245, 242, 238))
+        parsing = np.zeros((h, w), dtype=np.uint8)
+        parsing[40:130, 25:135] = 4
+        parser = _FakeParser(parsing)
+
+        def _skin_mask(rgb: np.ndarray) -> np.ndarray:
+            mask = np.zeros((h, w), dtype=bool)
+            mask[70:120, 85:130] = True
+            return mask
+
+        masker = GarmentColorMasker(
+            parser=parser,
+            base_mask_fn=lambda image: np.ones((h, w), dtype=bool),
+            skin_mask_fn=_skin_mask,
+        )
+        mask, meta = masker.estimate_mask(img, "top", "")
+
+        self.assertIsNotNone(mask)
+        self.assertTrue(bool(meta.get("used")))
+        self.assertEqual(meta.get("source"), "parser_strict_runtime")
+        self.assertGreater(int(meta.get("skin_pixels_removed", 0)), 0)
+        mask = np.asarray(mask).astype(bool)
+        self.assertTrue(bool(mask[80, 60]))
+        self.assertFalse(bool(mask[95, 110]))
 
     def test_heuristic_bottom_mask_keeps_light_neutral_trousers(self):
         w, h = 220, 300
@@ -118,6 +146,27 @@ class GarmentColorMaskerTests(unittest.TestCase):
         mask = np.asarray(mask).astype(bool)
         self.assertTrue(bool(mask[180, 90]))
         self.assertFalse(bool(mask[60, 90]))
+
+    def test_parser_bottom_mask_keeps_largest_component_only(self):
+        w, h = 200, 260
+        img = Image.new("RGB", (w, h), color=(245, 242, 238))
+        parsing = np.zeros((h, w), dtype=np.uint8)
+        parsing[115:250, 40:135] = 6
+        parsing[95:125, 145:190] = 6
+        parser = _FakeParser(parsing)
+
+        masker = GarmentColorMasker(
+            parser=parser,
+            base_mask_fn=lambda image: np.ones((h, w), dtype=bool),
+            skin_mask_fn=lambda rgb: np.zeros((h, w), dtype=bool),
+        )
+        mask, meta = masker.estimate_mask(img, "bottom", "")
+
+        self.assertIsNotNone(mask)
+        self.assertTrue(bool(meta.get("used")))
+        mask = np.asarray(mask).astype(bool)
+        self.assertTrue(bool(mask[180, 80]))
+        self.assertFalse(bool(mask[105, 165]))
 
 
 if __name__ == "__main__":

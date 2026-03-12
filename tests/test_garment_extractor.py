@@ -93,6 +93,30 @@ class TestGarmentExtractor(unittest.TestCase):
         self.assertEqual(result.extract_bbox, [20, 109, 160, 288])
         self.assertEqual(result.crop_mode, "garment_bbox_expanded")
 
+    def test_top_multi_item_limits_bottom_padding(self):
+        image = Image.new("RGB", (200, 300), (255, 255, 255))
+        extractor = GarmentExtractor(
+            GarmentExtractionConfig(
+                crop_pad_ratio=0.20,
+                crop_bottom_extra_ratio_top_multi=0.04,
+                dress_top_recovery_ratio=0.0,
+                top_top_recovery_ratio=0.0,
+            )
+        )
+
+        result = extractor.prepare(
+            GarmentExtractionRequest(
+                full_image=image,
+                garment_type="top",
+                total_items=2,
+                detected_bbox=[40, 60, 140, 180],
+            )
+        )
+
+        self.assertEqual(result.anchor_bbox, [40, 60, 140, 180])
+        self.assertEqual(result.extract_bbox, [20, 36, 160, 184])
+        self.assertEqual(result.crop_mode, "garment_bbox_expanded")
+
     def test_semantic_box_can_refine_top_when_overlap_is_strong(self):
         image = Image.new("RGB", (220, 320), (255, 255, 255))
         extractor = GarmentExtractor(
