@@ -156,9 +156,9 @@ class Qwen25VLRunner:
         return self._run_prompt(
             image=image,
             instruction=(
-                "Describe person identity and current outfit for virtual try-on preservation in two short sentences. "
-                "Sentence 1 must focus on identity cues (face, hair, skin tone, body shape, pose, lighting). "
-                "Sentence 2 can summarize currently worn outfit."
+                "Describe only the human subject for virtual try-on preservation in two short sentences. "
+                "Sentence 1 must focus on identity cues (face, hair, skin tone, body shape, pose, framing, lighting). "
+                "Sentence 2 can mention only occlusions or accessories that cover body regions. Do not describe background or current clothing."
             ),
             max_new_tokens=self.user_max_new_tokens,
         )

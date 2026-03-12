@@ -208,14 +208,14 @@ class MiniCPMVRunner:
         return self._run_prompt(
             image=image,
             instruction=(
-                "Describe the person context for virtual try-on identity and scene preservation. "
+                "Describe only the human subject for virtual try-on identity preservation. "
                 "Return exactly one single line with this schema: "
                 "identity=<face shape/features, skin tone, hair style/color, age band>; "
                 "body_pose=<pose, camera angle, visible limbs>; "
                 "framing_lighting=<framing, crop, light direction/intensity>; "
-                "current_outfit=<top, bottom, footwear, accessories>; "
-                "occlusion=<hair/hands/bags/objects overlapping garment region>; "
-                "preserve=<face identity, skin tone, hair, body proportions, pose, background should remain unchanged>. "
+                "occlusion=<hair/hands/accessories/objects overlapping body regions>; "
+                "preserve=<face identity, skin tone, hair, body proportions, pose, framing, and lighting should remain unchanged>. "
+                "Do not describe background or current clothing unless it creates an occlusion. "
                 "Be factual from visible pixels only; use 'unknown' for hidden details."
             ),
             max_new_tokens=self.user_max_new_tokens,

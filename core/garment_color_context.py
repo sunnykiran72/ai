@@ -234,6 +234,10 @@ def _nearest_color_label(rgb_triplet: Tuple[int, int, int]) -> str:
         return "brown"
 
     if chroma < 14.0:
+        if l_star < 38.0 and a_star >= 2.5 and b_star >= 6.0:
+            return "brown"
+        if l_star < 50.0 and a_star >= 4.0 and b_star >= 10.0:
+            return "brown"
         if l_star < 28.0 and b_star <= -5.0:
             return "plum" if a_star >= 9.0 else "navy"
         if l_star < 45.0 and a_star >= 10.0 and b_star <= -2.0:

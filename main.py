@@ -136,9 +136,7 @@ USE_FLORENCE_HYBRID_VERIFY = os.getenv("USE_FLORENCE_HYBRID_VERIFY", "0") == "1"
 USE_FLORENCE_DETAILED_PROMPT = os.getenv("USE_FLORENCE_DETAILED_PROMPT", "0") == "1"
 FLUX2_ALLOW_QWEN_BACKEND = os.getenv("FLUX2_ALLOW_QWEN_BACKEND", "0") == "1"
 FLUX2_DESCRIPTOR_BACKEND = os.getenv("FLUX2_DESCRIPTOR_BACKEND", "minicpm").strip().lower()
-if FLUX2_DESCRIPTOR_BACKEND not in {"florence", "qwen2_5_vl", "joycaption", "minicpm", "minicpm_service"}:
-    FLUX2_DESCRIPTOR_BACKEND = "minicpm"
-if FLUX2_DESCRIPTOR_BACKEND == "qwen2_5_vl" and not FLUX2_ALLOW_QWEN_BACKEND:
+if FLUX2_DESCRIPTOR_BACKEND not in {"minicpm", "minicpm_service"}:
     FLUX2_DESCRIPTOR_BACKEND = "minicpm"
 FLUX2_FIDELITY_BACKEND = os.getenv("FLUX2_FIDELITY_BACKEND", "florence").strip().lower()
 if FLUX2_FIDELITY_BACKEND not in {"florence", "qwen2_5_vl"}:
@@ -226,13 +224,13 @@ MINICPM_SERVICE_GARMENT_PROMPT = os.getenv(
 MINICPM_SERVICE_PERSON_PROMPT = os.getenv(
     "MINICPM_SERVICE_PERSON_PROMPT",
     (
-        "Describe identity, posture, and outfit for identity-preserving virtual try-on. "
-        "Ignore the background entirely. Return one detailed line with schema: "
+        "Describe only the human subject for identity-preserving virtual try-on. "
+        "Ignore the background entirely and do not describe the current clothing except when needed for occlusion. "
+        "Return one detailed line with schema: "
         "identity=<face traits, skin tone, hair style/color, age band>; "
         "body_pose=<posture, standing/sitting, limb position>; "
-        "outfit=<brief summary of worn clothing like shoes, bottoms, accessories>; "
         "framing_lighting=<framing/crop, light direction/intensity>; "
-        "occlusion=<hair/hands/objects overlapping body regions>; "
+        "occlusion=<hair/hands/accessories/objects overlapping body regions>; "
         "preserve=<face identity, skin tone, hair, body proportions, pose>."
     ),
 ).strip()
@@ -500,7 +498,7 @@ USER_PREP_ALPHA_MIN_TRANSPARENT_RATIO = min(
     max(0.0, _env_float("USER_PREP_ALPHA_MIN_TRANSPARENT_RATIO", 0.02)),
 )
 USER_PREP_DESCRIPTION_BACKEND = os.getenv("USER_PREP_DESCRIPTION_BACKEND", "minicpm").strip().lower()
-if USER_PREP_DESCRIPTION_BACKEND not in {"florence", "qwen2_5_vl", "joycaption", "minicpm", "minicpm_service"}:
+if USER_PREP_DESCRIPTION_BACKEND not in {"minicpm", "minicpm_service"}:
     USER_PREP_DESCRIPTION_BACKEND = "minicpm"
 USER_PREP_MIN_PROMPT_WORDS = max(4, _env_int("USER_PREP_MIN_PROMPT_WORDS", 10))
 USER_PREP_UPLOAD_CONTAINER = os.getenv("USER_PREP_UPLOAD_CONTAINER", VTO_OUTPUT_CONTAINER).strip() or VTO_OUTPUT_CONTAINER
@@ -859,7 +857,6 @@ def _normalize_minicpm_descriptor_text(raw_text: str, kind: str) -> str:
         identity = fields.get("identity", "")
         pose = fields.get("body_pose", "") or fields.get("by_pose", "")
         framing = fields.get("framing_lighting", "")
-        outfit = fields.get("current_outfit", "")
         occlusion = fields.get("occlusion", "")
         preserve = fields.get("preserve", "")
         parts = []
@@ -869,8 +866,6 @@ def _normalize_minicpm_descriptor_text(raw_text: str, kind: str) -> str:
             parts.append(f"pose: {pose}")
         if framing:
             parts.append(f"framing/lighting: {framing}")
-        if outfit:
-            parts.append(f"current outfit: {outfit}")
         if occlusion and occlusion.lower() not in {"none", "no", "n/a"}:
             parts.append(f"occlusion: {occlusion}")
         if preserve:
@@ -1323,6 +1318,10 @@ def _resolve_garment_color_truth(
     semantic_terms = descriptor_color_terms or prompt_color_terms
     semantic_non_neutral = descriptor_non_neutral or prompt_non_neutral
     semantic_families = descriptor_families or prompt_families
+    light_neutral_semantic_terms = [
+        term for term in semantic_terms
+        if term in {"white", "off-white", "ivory", "cream"}
+    ]
     semantic_supported = bool(
         not semantic_families
         or any(_palette_supports_color_family(family, pixel_hexes, color_profile) for family in semantic_families)
@@ -1344,7 +1343,30 @@ def _resolve_garment_color_truth(
             or all(_is_neutral_color_token(term) for term in pixel_hints[: max(1, len(pixel_hints))])
         )
     )
-    if strong_semantic_override:
+    strong_light_neutral_semantic_override = bool(
+        GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED
+        and weak_mask_source
+        and light_neutral_semantic_terms
+        and semantic_supported
+        and not semantic_non_neutral
+        and (
+            not pixel_hints
+            or all(_color_family(term) in {"neutral_dark", "neutral_mid", "neutral_light", "brown"} for term in pixel_hints)
+        )
+    )
+    if strong_light_neutral_semantic_override:
+        semantic_hexes: List[str] = []
+        for term in light_neutral_semantic_terms[: max(2, FLUX2_COLOR_LOCK_TOP_K)]:
+            rgb = _COLOR_LABEL_RGB_MAP.get(term)
+            if rgb:
+                semantic_hex = "#{:02X}{:02X}{:02X}".format(*rgb)
+                if semantic_hex not in semantic_hexes:
+                    semantic_hexes.append(semantic_hex)
+        resolved_hints = list(dict.fromkeys(light_neutral_semantic_terms[: max(2, FLUX2_COLOR_LOCK_TOP_K)]))
+        resolved_source = semantic_override_source
+        if semantic_hexes:
+            resolved_hexes = list(semantic_hexes)
+    elif strong_semantic_override:
         semantic_hexes: List[str] = []
         for term in semantic_terms[: max(2, FLUX2_COLOR_LOCK_TOP_K)]:
             rgb = _COLOR_LABEL_RGB_MAP.get(term)
@@ -1381,6 +1403,8 @@ def _resolve_garment_color_truth(
         if not ordered:
             return []
         mean_b = profile.get("meanB") if isinstance(profile, dict) else None
+        mean_chroma = profile.get("meanChroma") if isinstance(profile, dict) else None
+        median_l = profile.get("medianL") if isinstance(profile, dict) else None
         if _profile_is_near_white(profile if isinstance(profile, dict) else {}):
             white_label = "ivory" if isinstance(mean_b, (int, float)) and float(mean_b) >= 4.0 else "white"
             remapped: List[str] = []
@@ -1391,18 +1415,72 @@ def _resolve_garment_color_truth(
             if white_label not in remapped:
                 remapped.insert(0, white_label)
             return remapped
+        if (
+            isinstance(profile, dict)
+            and bool(profile.get("isNeutral"))
+            and all(term in {"silver", "gray", "off-white", "white", "ivory", "cream"} for term in ordered[:3])
+            and isinstance(mean_chroma, (int, float))
+            and isinstance(median_l, (int, float))
+            and isinstance(mean_b, (int, float))
+            and float(median_l) >= 70.0
+            and float(mean_chroma) <= 4.5
+            and float(mean_b) >= 1.5
+        ):
+            light_label = "ivory" if float(mean_b) >= 2.5 else "off-white"
+            remapped: List[str] = []
+            for term in ordered:
+                candidate = light_label if term in {"silver", "gray"} else term
+                if candidate not in remapped:
+                    remapped.append(candidate)
+            if light_label not in remapped:
+                remapped.insert(0, light_label)
+            return remapped
+        if (
+            weak_mask_source
+            and all(term in {"silver", "gray", "off-white", "white", "ivory", "cream"} for term in ordered[:3])
+            and isinstance(mean_chroma, (int, float))
+            and isinstance(median_l, (int, float))
+            and float(mean_chroma) <= 6.5
+            and float(median_l) >= 66.0
+        ):
+            light_label = "white" if float(median_l) >= 76.0 else ("ivory" if isinstance(mean_b, (int, float)) and float(mean_b) >= 2.5 else "off-white")
+            remapped: List[str] = []
+            for term in ordered:
+                candidate = light_label if term in {"silver", "gray"} else term
+                if candidate not in remapped:
+                    remapped.append(candidate)
+            if light_label not in remapped:
+                remapped.insert(0, light_label)
+            return remapped
         non_neutral = [term for term in ordered if _color_family(term) not in {"neutral_dark", "neutral_mid", "neutral_light", "brown"}]
         if not non_neutral:
             return ordered
 
         dominant_family = _color_family(non_neutral[0])
-        mean_chroma = profile.get("meanChroma") if isinstance(profile, dict) else None
-        median_l = profile.get("medianL") if isinstance(profile, dict) else None
         soft_warm_neutrals = {"beige", "champagne", "tan", "nude", "khaki"}
+        light_neutrals = soft_warm_neutrals | {"ivory", "cream", "off-white", "white"}
         neutral_mid = {"gray", "silver", "charcoal"}
 
         filtered = list(ordered)
+        light_neutral_majority = sum(
+            1
+            for term in filtered[:3]
+            if term in light_neutrals or term in neutral_mid
+        ) >= 2
         if (
+            dominant_family == "green"
+            and light_neutral_majority
+            and isinstance(mean_chroma, (int, float))
+            and isinstance(median_l, (int, float))
+            and isinstance(mean_b, (int, float))
+            and float(mean_chroma) <= 14.0
+            and float(median_l) >= 46.0
+            and float(mean_b) <= 10.0
+        ):
+            filtered = [term for term in filtered if _color_family(term) != "green"]
+            if not any(term in light_neutrals for term in filtered):
+                filtered = ["beige", "champagne"] + filtered
+        elif (
             dominant_family in {"yellow", "green"}
             and isinstance(mean_chroma, (int, float))
             and isinstance(mean_b, (int, float))
@@ -1742,8 +1820,9 @@ def _descriptor_is_weak(
     signal_groups = {
         "top": (
             ("sleeve", "sleeveless", "long-sleeve", "short-sleeve"),
-            ("neckline", "neck", "v-neck", "crew", "collar", "cowl"),
-            ("wrap", "crossover", "cross-over", "tie-front", "blouson", "gathered", "draped front", "tuck", "waist", "hem", "cropped"),
+            ("neckline", "neck", "v-neck", "crew", "collar", "cowl", "placket", "button-front"),
+            ("fit", "fitted", "loose fit", "tailored", "semi-sheer", "sheer", "knit", "woven", "fabric", "wrap", "crossover", "cross-over", "tie-front", "draped front", "ruched", "pleated"),
+            ("waist", "hem", "cropped", "blouson", "tucked", "length", "below the waist", "above the waist"),
         ),
         "dress": (
             ("sleeve", "sleeveless", "long-sleeve", "short-sleeve", "three-quarter"),
@@ -1768,7 +1847,7 @@ def _descriptor_is_weak(
     if not required:
         return False
     matched = sum(1 for group in required if any(token in lower for token in group))
-    threshold = 3 if gtype in {"top", "bottom", "outer"} else 4
+    threshold = 4 if gtype == "top" else (3 if gtype in {"bottom", "outer"} else 4)
     return matched < threshold
 
 
@@ -2159,11 +2238,31 @@ def _augment_pixel_hints_with_muted_hue_family(
     median_l = float(profile.get("medianL") or 0.0)
     near_white = _profile_is_near_white(profile)
     soft_warm_neutrals = {"beige", "champagne", "tan", "nude", "ivory", "cream", "off-white", "white"}
+    light_neutral_majority = sum(
+        1
+        for term in ordered[:3]
+        if term in soft_warm_neutrals or term in {"silver", "gray"}
+    ) >= 2
     promoted: Optional[str] = None
 
+    if (
+        mean_chroma <= 22.0
+        and 5.0 <= float(hue) <= 42.0
+        and median_l < 24.0
+        and mean_a >= 2.0
+        and mean_b >= 4.0
+    ):
+        promoted = "brown"
+
     if mean_chroma <= 18.0:
-        if 70.0 <= float(hue) <= 150.0 and (mean_a <= -1.0 or mean_b >= 1.5):
-            promoted = "olive" if mean_b >= 4.0 and median_l < 70.0 else "green"
+        if (
+            70.0 <= float(hue) <= 150.0
+            and mean_chroma >= 6.5
+            and (mean_a <= -4.0 or mean_b >= 5.0)
+            and not near_white
+            and not (light_neutral_majority and median_l >= 54.0 and mean_chroma <= 12.0)
+        ):
+            promoted = "olive" if mean_b >= 7.0 and median_l < 66.0 else "green"
         elif (float(hue) >= 320.0 or float(hue) <= 25.0) and mean_a >= 4.0 and median_l >= 52.0:
             promoted = "pink"
         elif 35.0 <= float(hue) <= 80.0 and mean_b >= 8.0:
@@ -2174,7 +2273,7 @@ def _augment_pixel_hints_with_muted_hue_family(
                     promoted = "yellow"
             elif mean_chroma >= 12.0 and mean_b >= 10.0:
                 promoted = "yellow"
-        elif 170.0 <= float(hue) <= 255.0 and mean_b <= -2.0:
+        elif 170.0 <= float(hue) <= 255.0 and mean_b <= -2.0 and mean_chroma >= 8.0:
             promoted = "blue"
 
     if promoted and promoted not in ordered:
@@ -2228,12 +2327,16 @@ def _nearest_color_label(rgb_triplet: Tuple[int, int, int]) -> str:
         return "brown"
 
     if chroma < 14.0:
+        if l_star < 38.0 and a_star >= 2.5 and b_star >= 6.0:
+            return "brown"
+        if l_star < 50.0 and a_star >= 4.0 and b_star >= 10.0:
+            return "brown"
         if l_star < 28.0 and b_star <= -5.0:
             return "plum" if a_star >= 9.0 else "navy"
         if l_star < 45.0 and a_star >= 10.0 and b_star <= -2.0:
             return "plum" if l_star < 34.0 else "purple"
-        if l_star < 72.0 and a_star <= -2.5 and b_star >= 3.0:
-            return "olive" if b_star >= 6.0 else "green"
+        if l_star < 62.0 and chroma >= 8.0 and a_star <= -3.5 and b_star >= 6.0:
+            return "olive" if b_star >= 10.0 and l_star < 58.0 else "green"
         # This is a neutral/near-neutral color. Use L* to bucket it.
         if l_star < 10.0:
             return "black"
@@ -3130,6 +3233,8 @@ def _build_flux2_targeted_prompt(
     target_hint = ", ".join(garment_descriptions)
     types = {t for t in target_types if t}
     is_dress_mode = ("dress" in types) and len(types) == 1 and len(garment_descriptions) == 1
+    target_hint_low = target_hint.lower()
+    is_saree_mode = any(token in target_hint_low for token in ("saree", "sari"))
     is_multi = board_mode == "collage"
     identity_context = _identity_only_user_context(user_description)
     if not identity_context or re.search(r"\bis\s*\.\s*$", identity_context, flags=re.IGNORECASE):
@@ -3163,6 +3268,12 @@ def _build_flux2_targeted_prompt(
             "ruffle/tier distribution, hem contour (including asymmetry/high-low), slit position, and train length. "
             "No layering artifacts. Ignore existing clothing design details in image 1 while preserving the person identity. "
         )
+        if is_saree_mode:
+            prompt += (
+                "This is a saree transfer. Use image 2 only for textile attributes: border placement, motif layout, pleat flow, "
+                "pallu path, drape layering, and hem fall. Ignore any mannequin, shoulder stump, torso contour, arm pose, elbow, "
+                "wrist, palm, fingers, or hidden hand silhouette implied by image 2. Use arm and hand geometry only from image 1. "
+            )
     else:
         if "top" in types:
             prompt += "Replace only the upper-body garment region with the target top. "
@@ -3221,7 +3332,7 @@ def _build_flux2_targeted_prompt(
         )
     else:
         prompt += (
-            f"Person and current outfit reference from image 1: {user_description}. "
+            f"Person identity reference from image 1: {identity_context}. "
             "Keep exact same person identity: facial features, skin tone, hair, hands, body proportions, "
             "and scene lighting. Keep exact same head angle and facial expression. "
             "Ensure realistic fabric drape, seams, folds, and shadows."
@@ -3386,6 +3497,13 @@ def _build_flux2_runtime_negative_prompt(
                 "top/bottom layering under dress",
                 "split two-piece look",
                 "wrong skirt silhouette",
+                "mannequin arm imprint",
+                "hidden hand under drape",
+                "extra exposed forearm",
+                "extra wrist",
+                "extra palm",
+                "extra fingers under garment",
+                "torso stump from source image",
             ]
         )
     elif types == {"top"}:
@@ -3432,6 +3550,12 @@ def _normalize_descriptor_backend(raw: Optional[str]) -> str:
     if value not in {"florence", "qwen2_5_vl", "joycaption", "minicpm", "minicpm_service"}:
         return "minicpm"
     if value == "qwen2_5_vl" and not FLUX2_ALLOW_QWEN_BACKEND:
+        return "minicpm"
+    return value
+
+def _normalize_prompt_descriptor_backend(raw: Optional[str]) -> str:
+    value = str(raw or FLUX2_DESCRIPTOR_BACKEND).strip().lower()
+    if value not in {"minicpm", "minicpm_service"}:
         return "minicpm"
     return value
 
@@ -3686,6 +3810,80 @@ def _minicpm_bundle_has_valid_json_contract(bundle: Optional[Dict[str, str]]) ->
     )
 
 
+def _default_extraction_avoid_clause_for_type(garment_type: Optional[str]) -> str:
+    gtype = _normalize_garment_type(garment_type) or "garment"
+    return {
+        "top": "Ignore skin, hair, face, hands, background, accessories, and lower-body garments.",
+        "bottom": "Ignore skin, hands, background, accessories, and upper-body garments.",
+        "dress": "Ignore skin, hair, face, hands, legs, background, and accessories.",
+        "outer": "Ignore skin, hair, face, hands, background, accessories, and inner-layer garments.",
+    }.get(gtype, "Ignore skin, hair, face, body parts, background, accessories, and other garments.")
+
+
+def _repair_non_json_garment_prompt_bundle(
+    *bundles: Optional[Dict[str, str]],
+    garment_type: Optional[str] = None,
+) -> Dict[str, str]:
+    candidates: List[Dict[str, str]] = []
+    for bundle in bundles:
+        if not isinstance(bundle, dict):
+            continue
+        if " ".join(str(bundle.get("base_garment_prompt") or "").split()).strip():
+            candidates.append(dict(bundle))
+    if not candidates:
+        return _parse_garment_prompt_sections("", garment_type=garment_type)
+
+    repaired = candidates[0]
+    for candidate in candidates[1:]:
+        repaired = _choose_better_garment_prompt_bundle(
+            repaired,
+            candidate,
+            garment_type=garment_type,
+        )
+
+    base_prompt = " ".join(str(repaired.get("base_garment_prompt") or "").split()).strip()
+    avoid_clause = " ".join(str(repaired.get("extraction_avoid_clause") or "").split()).strip()
+    if not avoid_clause:
+        avoid_clause = _default_extraction_avoid_clause_for_type(garment_type)
+    if avoid_clause and not avoid_clause.endswith("."):
+        avoid_clause = f"{avoid_clause}."
+
+    source_format = str(repaired.get("source_format") or "freeform").strip() or "freeform"
+    if not source_format.endswith("_repaired"):
+        source_format = f"{source_format}_repaired"
+
+    repaired["base_garment_prompt"] = base_prompt or "Garment."
+    repaired["extraction_avoid_clause"] = avoid_clause
+    repaired["json_contract_valid"] = "false"
+    repaired["source_format"] = source_format
+    repaired["serialized_sections"] = (
+        f"BASE_GARMENT_PROMPT: {repaired['base_garment_prompt']}\n"
+        f"EXTRACTION_AVOID_CLAUSE: {avoid_clause}"
+    )
+    return repaired
+
+
+def _ensure_garment_prompt_bundle_avoid_clause(
+    bundle: Dict[str, str],
+    *,
+    garment_type: Optional[str] = None,
+) -> Dict[str, str]:
+    ensured = dict(bundle or {})
+    base_prompt = " ".join(str(ensured.get("base_garment_prompt") or "").split()).strip() or "Garment."
+    avoid_clause = " ".join(str(ensured.get("extraction_avoid_clause") or "").split()).strip()
+    if not avoid_clause:
+        avoid_clause = _default_extraction_avoid_clause_for_type(garment_type)
+    if avoid_clause and not avoid_clause.endswith("."):
+        avoid_clause = f"{avoid_clause}."
+    ensured["base_garment_prompt"] = base_prompt
+    ensured["extraction_avoid_clause"] = avoid_clause
+    ensured["serialized_sections"] = (
+        f"BASE_GARMENT_PROMPT: {base_prompt}\n"
+        f"EXTRACTION_AVOID_CLAUSE: {avoid_clause}"
+    )
+    return ensured
+
+
 def _build_minicpm_garment_retry_prompt(
     *,
     garment_type: str,
@@ -3797,9 +3995,16 @@ def _describe_garment_prompt_bundle_with_backend(
             if _minicpm_bundle_has_valid_json_contract(retry_bundle):
                 bundle = retry_bundle
             else:
-                raise RuntimeError(
-                    "MiniCPM garment response did not satisfy JSON prompt contract "
-                    f"(first_format={bundle.get('source_format')}, retry_format={retry_bundle.get('source_format')})"
+                logger.warning(
+                    "MiniCPM garment response missed JSON contract; repairing locally "
+                    "(first_format=%s, retry_format=%s)",
+                    bundle.get("source_format"),
+                    retry_bundle.get("source_format"),
+                )
+                bundle = _repair_non_json_garment_prompt_bundle(
+                    bundle,
+                    retry_bundle,
+                    garment_type=garment_type,
                 )
 
         if _descriptor_is_weak(str(bundle.get("base_garment_prompt") or ""), garment_type=garment_type):
@@ -3816,6 +4021,20 @@ def _describe_garment_prompt_bundle_with_backend(
                     detail_bundle,
                     garment_type=garment_type,
                 )
+            elif str(detail_bundle.get("base_garment_prompt") or "").strip():
+                logger.warning(
+                    "MiniCPM garment detail retry stayed non-JSON; repairing locally (format=%s)",
+                    detail_bundle.get("source_format"),
+                )
+                bundle = _choose_better_garment_prompt_bundle(
+                    bundle,
+                    _repair_non_json_garment_prompt_bundle(detail_bundle, garment_type=garment_type),
+                    garment_type=garment_type,
+                )
+        if not str(bundle.get("base_garment_prompt") or "").strip():
+            raise RuntimeError("MiniCPM garment response did not contain a usable base_garment_prompt")
+        if not str(bundle.get("extraction_avoid_clause") or "").strip():
+            bundle = _ensure_garment_prompt_bundle_avoid_clause(bundle, garment_type=garment_type)
         return bundle
 
     if resolved == "minicpm_service":
@@ -3927,7 +4146,11 @@ def _describe_user_image_for_flux2(
             engine.florence.run_task(
                 image=user_img,
                 task_prompt="<DETAILED_CAPTION>",
-                text_input=" Describe identity traits (face, hair, skin) and posture. List worn garments briefly. Do not describe background.",
+                text_input=(
+                    " Describe only the human subject for identity-preserving virtual try-on. "
+                    "Focus on face, hair, skin tone, body shape, pose, framing, lighting, and occlusions. "
+                    "Do not describe background or current clothing."
+                ),
                 max_new_tokens=engine.florence.detailed_max_tokens,
                 num_beams=engine.florence.detailed_num_beams,
                 use_cache_generate=False,
@@ -4432,6 +4655,68 @@ def _score_identity_face_preservation(
     except Exception:
         return 0.0
 
+def _score_visible_limb_preservation(
+    reference_image: Image.Image,
+    output_image: Image.Image,
+) -> float:
+    """
+    Penalize extra exposed arm/hand-like regions in the output.
+    """
+    try:
+        if engine.parser is None:
+            return 0.0
+
+        ref = reference_image.convert("RGB").resize((256, 384), Image.BICUBIC)
+        out = output_image.convert("RGB").resize((256, 384), Image.BICUBIC)
+        ref_parse = engine.parser.parse(ref)
+        out_parse = engine.parser.parse(out)
+
+        arm_ids = _parser_alias_ids(["arms", "arm", "left_arm", "right_arm"], [14, 15])
+        if not arm_ids:
+            return 0.0
+
+        ref_rgb = np.asarray(ref, dtype=np.uint8)
+        out_rgb = np.asarray(out, dtype=np.uint8)
+        ref_arm = np.isin(ref_parse, arm_ids)
+        out_arm = np.isin(out_parse, arm_ids)
+        ref_skin = _skin_like_mask(ref_rgb)
+        out_skin = _skin_like_mask(out_rgb)
+        ref_visible = ref_arm & ref_skin
+        out_visible = out_arm & out_skin
+        if int(np.sum(ref_visible)) < 12:
+            ref_visible = ref_arm
+        if int(np.sum(out_visible)) < 12:
+            out_visible = out_arm
+
+        h, w = ref_visible.shape[:2]
+        roi = np.zeros((h, w), dtype=bool)
+        roi[int(h * 0.18): int(h * 0.95), :] = True
+        ref_visible &= roi
+        out_visible &= roi
+
+        total_pixels = max(1.0, float(h * w))
+        min_pixels = max(24, int(total_pixels * 0.0012))
+        ref_components = _mask_connected_components(ref_visible, min_pixels=min_pixels)
+        out_components = _mask_connected_components(out_visible, min_pixels=min_pixels)
+
+        ref_area = float(np.sum(ref_visible)) / total_pixels
+        out_area = float(np.sum(out_visible)) / total_pixels
+        if ref_area < 0.002 and out_area < 0.002:
+            return 1.0
+
+        count_penalty = abs(len(out_components) - len(ref_components)) / float(max(1, len(ref_components) + 1))
+        area_penalty = abs(out_area - ref_area) / float(max(ref_area, 0.01))
+        extra_area_penalty = max(0.0, out_area - ref_area) / float(max(ref_area, 0.01))
+
+        score = 1.0 - (
+            (0.42 * min(1.0, count_penalty))
+            + (0.28 * min(1.0, area_penalty))
+            + (0.30 * min(1.0, extra_area_penalty))
+        )
+        return float(max(0.0, min(1.0, score)))
+    except Exception:
+        return 0.0
+
 def _focus_score(image: Image.Image) -> float:
     """
     Lightweight blur metric: higher score means sharper image.
@@ -4530,6 +4815,69 @@ def _parser_ids_for_aliases(aliases: List[str], fallback: Optional[List[int]] = 
         return sorted(set(ids))
     return [int(v) for v in (fallback or [])]
 
+def _user_prep_bbox_from_mask(mask: Optional[np.ndarray]) -> Optional[list[int]]:
+    if not isinstance(mask, np.ndarray) or mask.size == 0:
+        return None
+    ys, xs = np.where(mask.astype(bool))
+    if ys.size == 0 or xs.size == 0:
+        return None
+    return [int(xs.min()), int(ys.min()), int(xs.max() + 1), int(ys.max() + 1)]
+
+def _score_user_prep_face_candidate(candidate: dict, image: Image.Image, person_bbox: Optional[list[int]] = None) -> float:
+    bbox = [int(v) for v in (candidate.get("bbox") or [0, 0, 0, 0])]
+    x0, y0, x1, y1 = bbox
+    fw = max(1, x1 - x0)
+    fh = max(1, y1 - y0)
+    cx = (x0 + x1) / 2.0
+    cy = (y0 + y1) / 2.0
+    area_ratio = float(candidate.get("area_ratio", 0.0))
+    aspect_score = min(fw, fh) / float(max(fw, fh))
+
+    if person_bbox:
+        px0, py0, px1, py1 = [int(v) for v in person_bbox]
+        ph = max(1, py1 - py0)
+        rel_cy = (cy - py0) / float(ph)
+    else:
+        rel_cy = cy / float(max(1, image.height))
+
+    top_prior = max(0.0, 1.0 - rel_cy)
+    source_bonus = 0.12 if str(candidate.get("source") or "") == "parser_face" else 0.0
+    return (0.55 * area_ratio) + (0.25 * top_prior) + (0.20 * aspect_score) + source_bonus
+
+def _select_best_user_prep_face_candidate(
+    candidates: list[dict],
+    image: Image.Image,
+    person_bbox: Optional[list[int]] = None,
+) -> Optional[dict]:
+    if not candidates:
+        return None
+
+    filtered: list[dict] = []
+    for candidate in candidates:
+        bbox = [int(v) for v in (candidate.get("bbox") or [0, 0, 0, 0])]
+        x0, y0, x1, y1 = bbox
+        cx = (x0 + x1) / 2.0
+        cy = (y0 + y1) / 2.0
+        if person_bbox:
+            px0, py0, px1, py1 = [int(v) for v in person_bbox]
+            ph = max(1, py1 - py0)
+            pw = max(1, px1 - px0)
+            rel_cy = (cy - py0) / float(ph)
+            rel_cx = (cx - px0) / float(pw)
+            if rel_cy > 0.62:
+                continue
+            if rel_cx < -0.15 or rel_cx > 1.15:
+                continue
+        filtered.append(candidate)
+
+    ranked = filtered or candidates
+    ranked = sorted(
+        ranked,
+        key=lambda c: _score_user_prep_face_candidate(c, image=image, person_bbox=person_bbox),
+        reverse=True,
+    )
+    return ranked[0] if ranked else None
+
 def _user_prep_face_component_from_parsing(
     parsing: np.ndarray,
     person_component_mask: Optional[np.ndarray] = None,
@@ -4625,7 +4973,10 @@ def _user_prep_validate_face(
     if not candidates:
         return False, {"reason": "face_not_detected"}
 
-    best = sorted(candidates, key=lambda c: float(c.get("area", 0)), reverse=True)[0]
+    person_bbox = _user_prep_bbox_from_mask(person_component_mask)
+    best = _select_best_user_prep_face_candidate(candidates, image=image, person_bbox=person_bbox)
+    if not best:
+        return False, {"reason": "face_not_detected"}
     x0, y0, x1, y1 = [int(v) for v in (best.get("bbox") or [0, 0, 0, 0])]
     fw = max(1, x1 - x0)
     fh = max(1, y1 - y0)
@@ -4666,6 +5017,7 @@ def _user_prep_validate_face(
         "face_area": int(area),
         "face_area_ratio": float(area_ratio),
         "face_focus": float(focus),
+        "person_bbox": person_bbox,
     }
 
 def _user_prep_crop_main_person(image: Image.Image, bbox: list[int]) -> tuple[Image.Image, list[int]]:
@@ -4743,10 +5095,34 @@ def _remove_user_background(image_bytes: bytes) -> tuple[Optional[bytes], dict]:
         )
     return None, {"errors": errors}
 
-def _describe_user_image_for_prepare(user_img: Image.Image, image_url: str) -> str:
+def _describe_user_image_for_prepare(user_img: Image.Image, image_url: Optional[str]) -> str:
+    return _normalize_user_prepare_prompt_description(
+        _describe_user_image_for_prepare_candidate(user_img=user_img, image_url=image_url)
+    )
+
+_USER_PREP_IDENTITY_TERMS = (
+    "identity", "face", "facial", "hair", "skin", "complexion", "body", "build", "shape",
+    "pose", "posture", "standing", "sitting", "hand", "arm", "leg", "eyes", "nose", "mouth",
+    "jaw", "lighting", "framing", "crop", "camera", "angle", "occlusion", "silhouette",
+)
+_USER_PREP_BACKGROUND_TERMS = (
+    "background", "backdrop", "wall", "door", "floor", "room", "studio", "field", "flowers",
+    "street", "outdoor", "indoor", "furniture", "chair", "sofa", "window",
+)
+_USER_PREP_APPAREL_TERMS = (
+    "wearing", "wears", "outfit", "clothing", "garment", "dress", "gown", "top", "shirt",
+    "blouse", "jacket", "coat", "pants", "trousers", "jeans", "skirt", "shorts", "shoe",
+    "footwear", "sleeve", "bodice",
+)
+
+def _describe_user_image_for_prepare_candidate(
+    *,
+    user_img: Image.Image,
+    image_url: Optional[str],
+) -> str:
     candidates: List[str] = []
-    requested = _normalize_descriptor_backend(USER_PREP_DESCRIPTION_BACKEND)
-    for item in [requested, "minicpm", "minicpm_service", "florence"]:
+    requested = _normalize_prompt_descriptor_backend(USER_PREP_DESCRIPTION_BACKEND)
+    for item in [requested, "minicpm", "minicpm_service"]:
         if item and item not in candidates:
             candidates.append(item)
 
@@ -4765,6 +5141,86 @@ def _describe_user_image_for_prepare(user_img: Image.Image, image_url: str) -> s
         except Exception as desc_err:
             logger.warning(f"User prep description failed backend={backend}: {desc_err}")
     return ""
+
+def _normalize_user_prepare_prompt_description(raw_text: str) -> str:
+    text = " ".join(str(raw_text or "").split()).strip()
+    if not text:
+        return ""
+
+    fields = _parse_structured_descriptor(text)
+    if fields:
+        identity = fields.get("identity", "")
+        pose = fields.get("body_pose", "") or fields.get("by_pose", "")
+        framing = fields.get("framing_lighting", "")
+        occlusion = fields.get("occlusion", "")
+        preserve = fields.get("preserve", "")
+        parts: List[str] = []
+        if identity:
+            parts.append(f"identity: {identity}")
+        if pose:
+            parts.append(f"pose: {pose}")
+        if framing:
+            parts.append(f"framing/lighting: {framing}")
+        if occlusion and occlusion.lower() not in {"none", "no", "n/a"}:
+            parts.append(f"occlusion: {occlusion}")
+        if preserve:
+            parts.append(f"preserve: {preserve}")
+        cleaned = ". ".join(parts).strip(" .")
+        if cleaned:
+            return cleaned
+
+    text = re.sub(
+        r"\b(?:current\s*outfit|outfit|clothing|garments?)\b\s*(?:=|:)\s*[^;|.]+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"\b(?:background|scene)\b\s*(?:=|:)\s*[^;|.]+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    fragments = [frag.strip(" ,.") for frag in re.split(r"[.;|]\s*", text) if frag.strip()]
+    kept: List[str] = []
+    for frag in fragments:
+        low = frag.lower()
+        has_identity = any(term in low for term in _USER_PREP_IDENTITY_TERMS)
+        has_background = any(term in low for term in _USER_PREP_BACKGROUND_TERMS)
+        has_apparel = any(term in low for term in _USER_PREP_APPAREL_TERMS)
+        if has_background:
+            continue
+        if has_identity and not has_apparel:
+            kept.append(frag)
+
+    cleaned = ". ".join(kept[:4]).strip(" .")
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,.")
+    if cleaned:
+        return cleaned
+
+    fallback = _identity_only_user_context(text)
+    fallback_fragments = [frag.strip(" ,.") for frag in re.split(r"[.;|]\s*", fallback) if frag.strip()]
+    fallback_clean = ". ".join(
+        frag for frag in fallback_fragments
+        if not any(term in frag.lower() for term in _USER_PREP_BACKGROUND_TERMS)
+    ).strip(" .")
+    fallback_clean = re.sub(r"\s{2,}", " ", fallback_clean).strip(" ,.")
+    return fallback_clean or text
+
+def _score_user_prepare_prompt_description(text: str) -> float:
+    normalized = " ".join(str(text or "").split()).strip()
+    if not normalized:
+        return -1e6
+
+    low = normalized.lower()
+    score = float(len(normalized.split()))
+    score += 4.0 * sum(1 for term in _USER_PREP_IDENTITY_TERMS if term in low)
+    score -= 6.0 * sum(1 for term in _USER_PREP_BACKGROUND_TERMS if term in low)
+    score -= 3.0 * sum(1 for term in _USER_PREP_APPAREL_TERMS if term in low)
+    if len(normalized.split()) < USER_PREP_MIN_PROMPT_WORDS:
+        score -= 20.0
+    return score
 
 def _bbox_prior(bbox: list[int], width: int, height: int) -> float:
     x0, y0, x1, y1 = bbox
@@ -8912,10 +9368,10 @@ def _run_flux2_cloth_only_extract(
     if source_image is None:
         raise RuntimeError("source image is required for flux2 extract")
 
-    requested_backend = _normalize_descriptor_backend(
+    requested_backend = _normalize_prompt_descriptor_backend(
         str(description_backend or FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND)
     )
-    allowed_extract_backends = {"florence", "joycaption", "minicpm", "minicpm_service"}
+    allowed_extract_backends = {"minicpm", "minicpm_service"}
     resolved_backend = requested_backend if requested_backend in allowed_extract_backends else "minicpm"
     analyze_service_url = str(ANALYZE_MINICPM_SERVICE_URL or MINICPM_SERVICE_URL or "").strip().rstrip("/")
     run_steps = int(steps if isinstance(steps, int) and steps >= 4 else FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS)
@@ -9089,11 +9545,7 @@ def _run_flux2_cloth_only_extract(
                 prompt_bundle["base_garment_prompt"] = garment_desc
                 prompt_bundle["serialized_sections"] = (
                     f"BASE_GARMENT_PROMPT: {garment_desc}"
-                    + (
-                        f"\nEXTRACTION_AVOID_CLAUSE: {prompt_bundle.get('extraction_avoid_clause')}"
-                        if str(prompt_bundle.get("extraction_avoid_clause") or "").strip()
-                        else ""
-                    )
+                    + f"\nEXTRACTION_AVOID_CLAUSE: {prompt_bundle.get('extraction_avoid_clause') or ''}"
                 )
                 prompt_source = f"{prompt_source}+selection_fallback_enrich"
                 helper_warnings.append("descriptor_enriched_from_selection_fallback")
@@ -9162,11 +9614,7 @@ def _run_flux2_cloth_only_extract(
     prompt_bundle["base_garment_prompt"] = garment_desc
     prompt_bundle["serialized_sections"] = (
         f"BASE_GARMENT_PROMPT: {garment_desc}"
-        + (
-            f"\nEXTRACTION_AVOID_CLAUSE: {prompt_bundle.get('extraction_avoid_clause')}"
-            if str(prompt_bundle.get("extraction_avoid_clause") or "").strip()
-            else ""
-        )
+        + f"\nEXTRACTION_AVOID_CLAUSE: {prompt_bundle.get('extraction_avoid_clause') or ''}"
     )
 
     t_stage = time.time()
@@ -10081,7 +10529,7 @@ async def flux2_extract_single_garment(
             ) from decode_err
 
         desc_backend_raw = str(description_backend or descriptionBackend or FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND).strip()
-        requested_backend = _normalize_descriptor_backend(desc_backend_raw)
+        requested_backend = _normalize_prompt_descriptor_backend(desc_backend_raw)
         # This endpoint is MiniCPM-first by design.
         resolved_backend = requested_backend if requested_backend in {"minicpm", "minicpm_service"} else "minicpm"
 
@@ -10543,28 +10991,6 @@ async def prepare_user_image_for_tryon(
                     message="Could not identify the main person in the image.",
                 )
             )
-        if float(selected.get("area_ratio", 0.0)) < USER_PREP_MAIN_PERSON_MIN_AREA_RATIO:
-            return _json_response(
-                _build_user_prepare_payload(
-                    status_code=400,
-                    message="Person is too small in frame. Upload a closer full-person image.",
-                )
-            )
-        if USER_PREP_REQUIRE_FACE:
-            face_ok, face_meta = _user_prep_validate_face(
-                src_img,
-                parsing=parsing,
-                person_component_mask=selected.get("mask") if isinstance(selected.get("mask"), np.ndarray) else None,
-            )
-            if not face_ok:
-                logger.info(f"user_image_prepare rejected: face validation failed meta={face_meta}")
-                return _json_response(
-                    _build_user_prepare_payload(
-                        status_code=400,
-                        message="No clear face detected. Upload a front-facing image with visible face.",
-                    )
-                )
-
         t_stage = time.time()
         person_crop, crop_bbox = _user_prep_crop_main_person(src_img, [int(v) for v in selected.get("bbox", [])])
         stage["crop_s"] = round(time.time() - t_stage, 4)
@@ -10575,6 +11001,38 @@ async def prepare_user_image_for_tryon(
                     message="Detected person crop is too small for try-on.",
                 )
             )
+        if float(selected.get("area_ratio", 0.0)) < USER_PREP_MAIN_PERSON_MIN_AREA_RATIO and min(person_crop.size) < int(USER_PREP_MIN_CROP_SIDE_PX * 1.5):
+            return _json_response(
+                _build_user_prepare_payload(
+                    status_code=400,
+                    message="Person is too small in frame. Upload a closer full-person image.",
+                )
+            )
+
+        if USER_PREP_REQUIRE_FACE:
+            face_ok, face_meta = _user_prep_validate_face(
+                src_img,
+                parsing=parsing,
+                person_component_mask=selected.get("mask") if isinstance(selected.get("mask"), np.ndarray) else None,
+            )
+            if not face_ok:
+                crop_face_ok, crop_face_meta = _user_prep_validate_face(person_crop)
+                if crop_face_ok:
+                    face_ok = True
+                    face_meta = {
+                        "source": "crop_retry",
+                        "original": face_meta,
+                        "crop": crop_face_meta,
+                        "crop_bbox": crop_bbox,
+                    }
+            if not face_ok:
+                logger.info(f"user_image_prepare rejected: face validation failed meta={face_meta}")
+                return _json_response(
+                    _build_user_prepare_payload(
+                        status_code=400,
+                        message="No clear face detected. Upload a front-facing image with visible face.",
+                    )
+                )
 
         if USER_PREP_BLUR_CHECK_ENABLED:
             crop_focus = _focus_score(person_crop)
@@ -10618,6 +11076,9 @@ async def prepare_user_image_for_tryon(
                 )
             )
 
+        # Keep prompt generation on the original person crop to preserve pose/identity details.
+        prompt_source_img = person_crop.convert("RGB")
+
         # Convert to RGB, using white background if isolated to avoid VLM black-background hallucinations
         processed_img_raw = Image.open(io.BytesIO(processed_bytes))
         if bg_meta.get("applied") and processed_img_raw.mode == "RGBA":
@@ -10626,7 +11087,11 @@ async def prepare_user_image_for_tryon(
         else:
             processed_img = processed_img_raw.convert("RGB")
         t_stage = time.time()
-        prompt_description = _describe_user_image_for_prepare(processed_img, output_url)
+        prompt_description = _describe_user_image_for_prepare(prompt_source_img, None)
+        if bg_meta.get("applied") or not prompt_description:
+            isolated_prompt_description = _describe_user_image_for_prepare(processed_img, output_url)
+            if _score_user_prepare_prompt_description(isolated_prompt_description) > _score_user_prepare_prompt_description(prompt_description):
+                prompt_description = isolated_prompt_description
         stage["describe_s"] = round(time.time() - t_stage, 4)
         if not prompt_description:
             return _json_response(
@@ -10943,7 +11408,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
     """
     t0 = time.time()
     request_id = str(uuid.uuid4())
-    descriptor_backend = _normalize_descriptor_backend(request.description_backend)
+    descriptor_backend = _normalize_prompt_descriptor_backend(request.description_backend)
     descriptor_service_url = str(ANALYZE_MINICPM_SERVICE_URL or MINICPM_SERVICE_URL or "").strip().rstrip("/")
     request_disable_neutral_calibration = bool(request.disable_neutral_calibration)
     stage_timings = {
@@ -11077,9 +11542,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                 ]
             )
         descriptor_compare_enabled = bool(request.description_compare or FLUX2_DESCRIPTOR_COMPARE)
-        compare_candidates = ["florence", "joycaption", "minicpm", "minicpm_service"]
-        if FLUX2_ALLOW_QWEN_BACKEND:
-            compare_candidates.append("qwen2_5_vl")
+        compare_candidates = ["minicpm", "minicpm_service"]
         compare_candidates.append(descriptor_backend)
         compare_backends: tuple[str, ...] = tuple(dict.fromkeys(compare_candidates))
         descriptor_comparisons = {"products": [], "user_image": {}} if descriptor_compare_enabled else None
@@ -11244,7 +11707,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
             elif descriptor_compare_enabled:
                 descriptor_comparisons["user_image"] = {"provided": user_prompt_raw}
 
-            user_prompt_description = user_prompt_raw
+            user_prompt_description = _normalize_user_prepare_prompt_description(user_prompt_raw)
             user_prompt_description = _augment_identity_lock(user_prompt_description)
 
             # Keep Qwen warm by default to avoid per-request cold starts.
@@ -11353,6 +11816,10 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                         reference_image=user_img,
                         output_image=candidate_result["image"],
                     )
+                    limb_score = _score_visible_limb_preservation(
+                        reference_image=user_img,
+                        output_image=candidate_result["image"],
+                    )
                     color_fidelity = _score_color_fidelity(
                         output_image=candidate_result["image"],
                         input_palettes=visual_locks.get("color_palettes", []),
@@ -11363,6 +11830,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                     fidelity_score, output_desc = 0.0, ""
                     preservation_score = 0.0
                     identity_score = 0.0
+                    limb_score = 0.0
                     color_fidelity = {"status": "skipped_runtime_scoring"}
                 stage_timings["candidate_scoring_sum_s"] += (time.time() - score_t0)
                 
@@ -11402,6 +11870,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                     "fidelity_score": float(fidelity_score),
                     "preservation_score": float(preservation_score),
                     "identity_score": float(identity_score),
+                    "limb_preservation_score": float(limb_score),
                     "color_fidelity_score": float(color_score),
                     "color_drift": raw_drift,
                     "color_details": color_fidelity,
@@ -11425,6 +11894,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                 + " Source product image may include mannequin/body; transfer only the garment piece, never mannequin skin/body parts."
                 + " Keep exact same face identity and skin-tone continuity across face, neck, arms, and hands from image 1."
                 + " Never alter facial proportions, expression, or hairstyle."
+                + " Never synthesize any extra arm, elbow, wrist, palm, or fingers from image 2 drape geometry."
                 + " Match exact neckline, bodice shape, and ruffle distribution from the source garment."
                 + " Lock lower section fidelity: preserve exact hemline shape, flare profile, skirt volume, "
                 + "and bottom-edge asymmetry/high-low geometry from image 2."
@@ -11477,19 +11947,20 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                 fid = float(run.get("fidelity_score", 0.0))
                 preserve = float(run.get("preservation_score", 0.0))
                 identity = float(run.get("identity_score", 0.0))
+                limb = float(run.get("limb_preservation_score", 0.0))
                 cfid = float(run.get("color_fidelity_score", 0.0))
                 neutral_tone_lock = bool(visual_locks.get("neutral_tone_lock"))
                 
                 # Composite Score: Fidelity (Structure) + Preserve (Background) + Color
                 if is_single_top_or_bottom:
                     if neutral_tone_lock:
-                        base_score = (0.22 * fid) + (0.22 * preserve) + (0.38 * cfid) + (0.18 * identity)
+                        base_score = (0.20 * fid) + (0.20 * preserve) + (0.34 * cfid) + (0.16 * identity) + (0.10 * limb)
                     else:
-                        base_score = (0.33 * fid) + (0.33 * preserve) + (0.14 * cfid) + (0.20 * identity)
+                        base_score = (0.30 * fid) + (0.30 * preserve) + (0.12 * cfid) + (0.18 * identity) + (0.10 * limb)
                 elif neutral_tone_lock:
-                    base_score = (0.40 * fid) + (0.35 * cfid) + (0.25 * identity)
+                    base_score = (0.36 * fid) + (0.30 * cfid) + (0.20 * identity) + (0.14 * limb)
                 else:
-                    base_score = (0.50 * fid) + (0.25 * cfid) + (0.25 * identity)
+                    base_score = (0.44 * fid) + (0.22 * cfid) + (0.20 * identity) + (0.14 * limb)
 
                 if not FLUX2_COLOR_FIRST_GATE_ENABLED:
                     return base_score

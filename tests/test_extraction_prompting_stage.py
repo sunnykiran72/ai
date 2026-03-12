@@ -343,6 +343,42 @@ class PromptingStageTests(unittest.TestCase):
         self.assertIn("crossover front", bundle["base_garment_prompt"])
         self.assertIn("white pants", bundle["extraction_avoid_clause"])
 
+    def test_local_minicpm_prompt_bundle_repairs_non_json_response_without_raising(self):
+        captured = {"calls": 0, "prompts": []}
+
+        class _MiniCPM:
+            def describe_garment(self, image, prompt_override=None):
+                captured["calls"] += 1
+                captured["prompts"].append(prompt_override)
+                if captured["calls"] == 1:
+                    return "Beige long-sleeve top with a draped V-neckline and loose fit."
+                if captured["calls"] == 2:
+                    return "Beige long-sleeve blouse with crossover drape and soft fabric."
+                return (
+                    "Beige long-sleeve wrap blouse with a crossover front, softly draped neckline, "
+                    "and blouson waist sitting below the waist."
+                )
+
+        original_engine = main_mod.engine
+        main_mod.engine = types.SimpleNamespace(minicpm=_MiniCPM(), florence=None)
+        try:
+            image = Image.new("RGB", (320, 480), "white")
+            bundle = main_mod._describe_garment_prompt_bundle_with_backend(
+                image=image,
+                backend="minicpm",
+                garment_type="top",
+                dominant_color_hexes=["#CDB9A6"],
+                color_hints=["beige"],
+            )
+        finally:
+            main_mod.engine = original_engine
+
+        self.assertEqual(captured["calls"], 3)
+        self.assertEqual(bundle["json_contract_valid"], "false")
+        self.assertEqual(bundle["source_format"], "freeform_repaired")
+        self.assertIn("crossover front", bundle["base_garment_prompt"])
+        self.assertIn("Ignore skin", bundle["extraction_avoid_clause"])
+
     def test_local_minicpm_uses_color_prompt_override_for_color_terms(self):
         captured = {}
 
@@ -368,6 +404,127 @@ class PromptingStageTests(unittest.TestCase):
         self.assertEqual(captured["image_size"], (320, 480))
         self.assertIn("Look only at the requested bottom.", captured["prompt_override"])
         self.assertIn("Return only 1 to 3 short garment fabric color words", captured["prompt_override"])
+
+    def test_normalize_user_prepare_prompt_description_keeps_identity_pose_only(self):
+        raw = (
+            "identity=oval face, fair skin, straight black hair; "
+            "body_pose=front-facing standing pose with arms relaxed; "
+            "current_outfit=pink satin bra top and matching skirt; "
+            "framing_lighting=mid-length crop with soft studio lighting; "
+            "occlusion=large tinted visor covering the eyes; "
+            "preserve=face identity, pose, body proportions, and lighting"
+        )
+
+        cleaned = main_mod._normalize_user_prepare_prompt_description(raw)
+
+        self.assertIn("identity: oval face, fair skin, straight black hair", cleaned)
+        self.assertIn("pose: front-facing standing pose with arms relaxed", cleaned)
+        self.assertIn("framing/lighting: mid-length crop with soft studio lighting", cleaned)
+        self.assertIn("occlusion: large tinted visor covering the eyes", cleaned)
+        self.assertIn("preserve: face identity, pose, body proportions, and lighting", cleaned)
+        self.assertNotIn("current outfit", cleaned.lower())
+        self.assertNotIn("matching skirt", cleaned.lower())
+
+    def test_build_flux2_targeted_prompt_uses_identity_reference_not_outfit_reference(self):
+        prompt = main_mod._build_flux2_targeted_prompt(
+            garment_descriptions=["category=top garment, type crop top."],
+            user_description=(
+                "identity: oval face, fair skin, straight black hair. "
+                "pose: front-facing standing pose. "
+                "framing/lighting: mid-length crop with soft studio lighting. "
+                "current outfit: pink satin bra top and matching skirt."
+            ),
+            target_types=["top"],
+            board_mode="single",
+        )
+
+        self.assertIn("Person identity reference from image 1:", prompt)
+        self.assertNotIn("Person and current outfit reference", prompt)
+        self.assertNotIn("pink satin bra top", prompt.lower())
+
+    def test_normalize_prompt_descriptor_backend_forces_minicpm_family(self):
+        self.assertEqual(main_mod._normalize_prompt_descriptor_backend("qwen2_5_vl"), "minicpm")
+        self.assertEqual(main_mod._normalize_prompt_descriptor_backend("florence"), "minicpm")
+        self.assertEqual(main_mod._normalize_prompt_descriptor_backend("minicpm"), "minicpm")
+        self.assertEqual(main_mod._normalize_prompt_descriptor_backend("minicpm_service"), "minicpm_service")
+
+    def test_build_flux2_targeted_prompt_adds_saree_limb_guard(self):
+        prompt = main_mod._build_flux2_targeted_prompt(
+            garment_descriptions=["category=dress garment, type=saree, details=black draped saree with red border."],
+            user_description="identity: woman. pose: standing.",
+            target_types=["dress"],
+            board_mode="single",
+        )
+
+        self.assertIn("This is a saree transfer.", prompt)
+        self.assertIn("Use arm and hand geometry only from image 1.", prompt)
+
+    def test_visible_limb_preservation_penalizes_extra_arm_region(self):
+        ref_parse = np.zeros((384, 256), dtype=np.uint8)
+        out_parse = np.zeros((384, 256), dtype=np.uint8)
+        ref_parse[120:264, 28:68] = 14
+        ref_parse[120:264, 188:228] = 15
+        out_parse[:, :] = ref_parse
+        out_parse[180:288, 108:140] = 14
+
+        ref_img = Image.new("RGB", (64, 64), "white")
+        out_img = Image.new("RGB", (64, 64), "white")
+        skin_rgb = np.array([220, 170, 145], dtype=np.uint8)
+        for img, extra in ((ref_img, False), (out_img, True)):
+            arr = np.asarray(img.resize((256, 384), Image.BICUBIC)).copy()
+            arr[120:264, 28:68] = skin_rgb
+            arr[120:264, 188:228] = skin_rgb
+            if extra:
+                arr[180:288, 108:140] = skin_rgb
+            resized = Image.fromarray(arr).resize((64, 64), Image.BICUBIC)
+            img.paste(resized)
+
+        class _Parser:
+            def __init__(self, parses):
+                self._parses = list(parses)
+
+            def parse(self, _image):
+                return self._parses.pop(0)
+
+            def category_ids(self, category):
+                if category in {"arms", "arm", "left_arm", "right_arm"}:
+                    return [14, 15]
+                return []
+
+        original_parser = main_mod.engine.parser
+        try:
+            main_mod.engine.parser = _Parser([ref_parse.copy(), ref_parse.copy()])
+            same_score = main_mod._score_visible_limb_preservation(ref_img, ref_img)
+            main_mod.engine.parser = _Parser([ref_parse.copy(), out_parse.copy()])
+            extra_score = main_mod._score_visible_limb_preservation(ref_img, out_img)
+        finally:
+            main_mod.engine.parser = original_parser
+
+        self.assertGreater(same_score, extra_score)
+
+    def test_select_best_user_prep_face_candidate_prefers_upper_face_region(self):
+        image = Image.new("RGB", (638, 938), "white")
+        person_bbox = [220, 0, 562, 938]
+        top_face = {
+            "source": "haar_face",
+            "bbox": [286, 32, 466, 212],
+            "area": 32400,
+            "area_ratio": 32400 / float(638 * 938),
+        }
+        torso_false_positive = {
+            "source": "haar_face",
+            "bbox": [235, 508, 550, 823],
+            "area": 99225,
+            "area_ratio": 99225 / float(638 * 938),
+        }
+
+        best = main_mod._select_best_user_prep_face_candidate(
+            [top_face, torso_false_positive],
+            image=image,
+            person_bbox=person_bbox,
+        )
+
+        self.assertEqual(best["bbox"], top_face["bbox"])
 
 
 if __name__ == "__main__":
