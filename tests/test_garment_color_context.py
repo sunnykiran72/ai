@@ -54,6 +54,28 @@ class TestGarmentColorContext(unittest.TestCase):
         self.assertIn(_nearest_color_label((184, 144, 108)), {"tan", "beige"})
         self.assertIn(_nearest_color_label((158, 116, 80)), {"tan", "brown"})
 
+    def test_near_white_context_prefers_white_over_silver(self):
+        arr = np.zeros((160, 120, 4), dtype=np.uint8)
+        arr[15:145, 20:100, 3] = 255
+        arr[15:145, 20:100, 0:3] = (196, 198, 201)
+        arr[30:135, 30:90, 0:3] = (225, 227, 230)
+        image = Image.fromarray(arr, mode="RGBA")
+
+        ctx = build_single_image_color_context(
+            image=image,
+            description="white trousers",
+            settings=GarmentColorContextSettings(
+                top_k=3,
+                palette_top_k=6,
+                palette_min_area_percent=5.0,
+            ),
+        )
+
+        color_hints = [str(v) for v in (ctx.get("colorHints") or [])]
+        self.assertTrue(color_hints)
+        self.assertEqual(color_hints[0], "white")
+        self.assertNotEqual(color_hints[0], "silver")
+
     def test_single_image_context_merges_shadow_variants_of_same_color(self):
         arr = np.zeros((120, 120, 4), dtype=np.uint8)
         arr[10:110, 15:105, 3] = 255

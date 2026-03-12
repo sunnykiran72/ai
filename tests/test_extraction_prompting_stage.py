@@ -38,6 +38,20 @@ class PromptingStageTests(unittest.TestCase):
         )
         self.assertIn("BASE_GARMENT_PROMPT", bundle["serialized_sections"])
         self.assertIn("EXTRACTION_AVOID_CLAUSE", bundle["serialized_sections"])
+        self.assertEqual(bundle["json_contract_valid"], "true")
+        self.assertEqual(bundle["source_format"], "json")
+
+    def test_parse_garment_prompt_sections_marks_freeform_as_non_json_contract(self):
+        bundle = _parse_garment_prompt_sections(
+            "Long-sleeve top in beige with draped V-neckline.",
+            garment_type="top",
+        )
+
+        self.assertEqual(bundle["base_garment_prompt"], "Long-sleeve top in beige with draped V-neckline.")
+        self.assertEqual(bundle["extraction_avoid_clause"], "")
+        self.assertEqual(bundle["json_contract_valid"], "false")
+        self.assertEqual(bundle["source_format"], "freeform")
+        self.assertIn("EXTRACTION_AVOID_CLAUSE:", bundle["serialized_sections"])
 
     def test_apply_prompting_strips_descriptor_color_before_assembly(self):
         calls = {}
@@ -216,6 +230,76 @@ class PromptingStageTests(unittest.TestCase):
         self.assertIn("\"extraction_avoid_clause\"", captured["prompt_override"])
         self.assertIn("The required garment category is top.", captured["prompt_override"])
         self.assertIn("#88937B", captured["prompt_override"])
+
+    def test_local_minicpm_prompt_bundle_preserves_json_avoid_clause(self):
+        captured = {"calls": 0}
+
+        class _MiniCPM:
+            def describe_garment(self, image, prompt_override=None):
+                captured["calls"] += 1
+                captured["prompt_override"] = prompt_override
+                captured["image_size"] = tuple(image.size)
+                return (
+                    '{"base_garment_prompt":"Long-sleeve wrap blouse in beige with a crossover draped front and blouson waist.",'
+                    '"extraction_avoid_clause":"ignore face, hair, skin, background, and white pants; do not simplify the wrap front into a plain cowl-neck top."}'
+                )
+
+        original_engine = main_mod.engine
+        main_mod.engine = types.SimpleNamespace(minicpm=_MiniCPM(), florence=None)
+        try:
+            image = Image.new("RGB", (320, 480), "white")
+            bundle = main_mod._describe_garment_prompt_bundle_with_backend(
+                image=image,
+                backend="minicpm",
+                garment_type="top",
+                dominant_color_hexes=["#CDB9A6"],
+                color_hints=["beige"],
+            )
+        finally:
+            main_mod.engine = original_engine
+
+        self.assertEqual(captured["calls"], 1)
+        self.assertEqual(captured["image_size"], (320, 480))
+        self.assertEqual(
+            bundle["base_garment_prompt"],
+            "Long-sleeve wrap blouse in beige with a crossover draped front and blouson waist.",
+        )
+        self.assertIn("white pants", bundle["extraction_avoid_clause"])
+        self.assertEqual(bundle["json_contract_valid"], "true")
+
+    def test_local_minicpm_prompt_bundle_retries_until_json_contract_valid(self):
+        captured = {"calls": 0, "prompts": []}
+
+        class _MiniCPM:
+            def describe_garment(self, image, prompt_override=None):
+                captured["calls"] += 1
+                captured["prompts"].append(prompt_override)
+                if captured["calls"] == 1:
+                    return "Long-sleeve top in beige with a draped V-neckline."
+                return (
+                    '{"base_garment_prompt":"Long-sleeve wrap blouse in beige with a crossover draped front and blouson waist.",'
+                    '"extraction_avoid_clause":"ignore face, hair, skin, background, and white pants."}'
+                )
+
+        original_engine = main_mod.engine
+        main_mod.engine = types.SimpleNamespace(minicpm=_MiniCPM(), florence=None)
+        try:
+            image = Image.new("RGB", (320, 480), "white")
+            bundle = main_mod._describe_garment_prompt_bundle_with_backend(
+                image=image,
+                backend="minicpm",
+                garment_type="top",
+                dominant_color_hexes=["#CDB9A6"],
+                color_hints=["beige"],
+            )
+        finally:
+            main_mod.engine = original_engine
+
+        self.assertEqual(captured["calls"], 2)
+        self.assertIn("must always be present", captured["prompts"][0])
+        self.assertIn("Schema reminder", captured["prompts"][1])
+        self.assertEqual(bundle["json_contract_valid"], "true")
+        self.assertIn("white pants", bundle["extraction_avoid_clause"])
 
     def test_local_minicpm_uses_color_prompt_override_for_color_terms(self):
         captured = {}

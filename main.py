@@ -951,9 +951,19 @@ def _parse_garment_prompt_sections(
     normalized_text = " ".join(text.split()).strip()
     base_prompt = ""
     avoid_clause = ""
+    json_contract_valid = False
+    source_format = "freeform"
 
     parsed_json = _extract_json_object_from_text(text)
     if isinstance(parsed_json, dict):
+        base_key_present = any(
+            key in parsed_json
+            for key in ("base_garment_prompt", "BASE_GARMENT_PROMPT")
+        )
+        avoid_key_present = any(
+            key in parsed_json
+            for key in ("extraction_avoid_clause", "EXTRACTION_AVOID_CLAUSE")
+        )
         base_prompt = _clean_prompt_section_text(
             str(
                 parsed_json.get("base_garment_prompt")
@@ -968,6 +978,8 @@ def _parse_garment_prompt_sections(
                 or ""
             )
         )
+        json_contract_valid = bool(base_key_present and avoid_key_present)
+        source_format = "json"
 
     if not base_prompt:
         base_match = re.search(
@@ -977,6 +989,8 @@ def _parse_garment_prompt_sections(
         )
         if base_match:
             base_prompt = _clean_prompt_section_text(base_match.group(1))
+            if source_format == "freeform":
+                source_format = "tagged_text"
     if not avoid_clause:
         avoid_match = re.search(
             r"EXTRACTION_AVOID_CLAUSE\s*:\s*(.*)$",
@@ -985,6 +999,8 @@ def _parse_garment_prompt_sections(
         )
         if avoid_match:
             avoid_clause = _clean_prompt_section_text(avoid_match.group(1))
+            if source_format == "freeform":
+                source_format = "tagged_text"
 
     if not base_prompt:
         base_prompt = _normalize_minicpm_descriptor_text(text, kind="garment")
@@ -999,14 +1015,15 @@ def _parse_garment_prompt_sections(
         avoid_clause = f"{avoid_clause}."
 
     serialized_sections = f"BASE_GARMENT_PROMPT: {base_prompt or 'Garment.'}"
-    if avoid_clause:
-        serialized_sections += f"\nEXTRACTION_AVOID_CLAUSE: {avoid_clause}"
+    serialized_sections += f"\nEXTRACTION_AVOID_CLAUSE: {avoid_clause}"
 
     return {
         "raw_text": normalized_text,
         "base_garment_prompt": base_prompt or "Garment.",
         "extraction_avoid_clause": avoid_clause,
         "serialized_sections": serialized_sections,
+        "json_contract_valid": "true" if json_contract_valid else "false",
+        "source_format": source_format,
     }
 
 
@@ -1225,6 +1242,8 @@ def _resolve_garment_color_truth(
     color_profile: Optional[Dict[str, object]] = None,
     color_mask_source: str = "",
 ) -> Dict[str, object]:
+    structured_prompt_fields = dict(_parse_structured_descriptor(base_garment_prompt))
+
     def _extract_color_terms(text: str) -> List[str]:
         prompt_fields_local = dict(_parse_structured_descriptor(text))
         prompt_fields_local.update(_extract_prompt_fact_segments(text))
@@ -1247,7 +1266,7 @@ def _resolve_garment_color_truth(
             ]
         return list(dict.fromkeys(terms))
 
-    prompt_fields = dict(_parse_structured_descriptor(base_garment_prompt))
+    prompt_fields = dict(structured_prompt_fields)
     prompt_fields.update(_extract_prompt_fact_segments(base_garment_prompt))
     prompt_color_terms = _extract_color_terms(base_garment_prompt)
     descriptor_color_terms = _extract_color_terms(descriptor_raw_text)
@@ -1361,13 +1380,23 @@ def _resolve_garment_color_truth(
         ordered = list(dict.fromkeys(str(v).strip().lower() for v in (hints or []) if str(v).strip()))
         if not ordered:
             return []
+        mean_b = profile.get("meanB") if isinstance(profile, dict) else None
+        if _profile_is_near_white(profile if isinstance(profile, dict) else {}):
+            white_label = "ivory" if isinstance(mean_b, (int, float)) and float(mean_b) >= 4.0 else "white"
+            remapped: List[str] = []
+            for term in ordered:
+                candidate = white_label if term in {"silver", "gray", "off-white"} else term
+                if candidate not in remapped:
+                    remapped.append(candidate)
+            if white_label not in remapped:
+                remapped.insert(0, white_label)
+            return remapped
         non_neutral = [term for term in ordered if _color_family(term) not in {"neutral_dark", "neutral_mid", "neutral_light", "brown"}]
         if not non_neutral:
             return ordered
 
         dominant_family = _color_family(non_neutral[0])
         mean_chroma = profile.get("meanChroma") if isinstance(profile, dict) else None
-        mean_b = profile.get("meanB") if isinstance(profile, dict) else None
         median_l = profile.get("medianL") if isinstance(profile, dict) else None
         soft_warm_neutrals = {"beige", "champagne", "tan", "nude", "khaki"}
         neutral_mid = {"gray", "silver", "charcoal"}
@@ -1410,16 +1439,32 @@ def _resolve_garment_color_truth(
     resolved_hexes = resolved_hexes[: max(2, FLUX2_COLOR_LOCK_TOP_K + 1)]
     resolved_color_text = ", ".join(resolved_hints)
 
-    reconciled_fields = dict(prompt_fields)
-    if resolved_color_text:
-        reconciled_fields["colors"] = resolved_color_text
-    reconciled_fields = _sanitize_prompt_fact_fields(
-        reconciled_fields,
-        target_type=target_type,
+    rebuild_signal_labels = {
+        "category",
+        "type",
+        "pattern",
+        "material",
+        "silhouette",
+        "construction",
+        "details",
+        "preserve",
+    }
+    can_rebuild_prompt = bool(
+        structured_prompt_fields
+        or any(str(prompt_fields.get(label) or "").strip() for label in rebuild_signal_labels)
     )
-    reconciled_prompt = _serialize_prompt_fact_segments(reconciled_fields)
-    if reconciled_prompt:
-        reconciled_prompt = f"{reconciled_prompt}."
+    reconciled_prompt = ""
+    if can_rebuild_prompt:
+        reconciled_fields = dict(prompt_fields)
+        if resolved_color_text:
+            reconciled_fields["colors"] = resolved_color_text
+        reconciled_fields = _sanitize_prompt_fact_fields(
+            reconciled_fields,
+            target_type=target_type,
+        )
+        reconciled_prompt = _serialize_prompt_fact_segments(reconciled_fields)
+        if reconciled_prompt:
+            reconciled_prompt = f"{reconciled_prompt}."
 
     return {
         "base_garment_prompt": reconciled_prompt or " ".join(str(base_garment_prompt or "").split()).strip(),
@@ -2073,6 +2118,8 @@ def _augment_pixel_hints_with_muted_hue_family(
     mean_a = float(profile.get("meanA") or 0.0)
     mean_b = float(profile.get("meanB") or 0.0)
     median_l = float(profile.get("medianL") or 0.0)
+    near_white = _profile_is_near_white(profile)
+    soft_warm_neutrals = {"beige", "champagne", "tan", "nude", "ivory", "cream", "off-white", "white"}
     promoted: Optional[str] = None
 
     if mean_chroma <= 18.0:
@@ -2081,7 +2128,13 @@ def _augment_pixel_hints_with_muted_hue_family(
         elif (float(hue) >= 320.0 or float(hue) <= 25.0) and mean_a >= 4.0 and median_l >= 52.0:
             promoted = "pink"
         elif 35.0 <= float(hue) <= 80.0 and mean_b >= 8.0:
-            promoted = "yellow"
+            if near_white:
+                promoted = None
+            elif any(term in soft_warm_neutrals for term in ordered):
+                if mean_chroma >= 18.0 and mean_b >= 16.0 and median_l < 72.0:
+                    promoted = "yellow"
+            elif mean_chroma >= 12.0 and mean_b >= 10.0:
+                promoted = "yellow"
         elif 170.0 <= float(hue) <= 255.0 and mean_b <= -2.0:
             promoted = "blue"
 
@@ -3584,6 +3637,40 @@ def _describe_garment_with_backend(
     return str(engine.florence.describe_garment(image)).strip()
 
 
+def _minicpm_bundle_has_valid_json_contract(bundle: Optional[Dict[str, str]]) -> bool:
+    if not isinstance(bundle, dict):
+        return False
+    base_prompt = " ".join(str(bundle.get("base_garment_prompt") or "").split()).strip()
+    return bool(
+        str(bundle.get("json_contract_valid") or "").strip().lower() == "true"
+        and base_prompt
+    )
+
+
+def _build_minicpm_garment_retry_prompt(
+    *,
+    garment_type: str,
+    dominant_color_hexes: Optional[List[str]] = None,
+    color_hints: Optional[List[str]] = None,
+) -> str:
+    skeleton = (
+        '{"base_garment_prompt":"<garment-only visible details>",'
+        '"extraction_avoid_clause":"<visible contamination or generation mistakes to avoid, or empty string>"}'
+    )
+    return (
+        _build_minicpm_garment_prompt(
+            garment_type=garment_type,
+            dominant_color_hexes=dominant_color_hexes,
+            color_hints=color_hints,
+        )
+        + " Schema reminder: both JSON keys must always be present, even when the avoid value is empty. "
+        + "If there is nothing specific to avoid, set "
+        + "\"extraction_avoid_clause\" to the empty string \"\". "
+        + "Example response shape: "
+        + skeleton
+    )
+
+
 def _describe_garment_prompt_bundle_with_backend(
     image: Image.Image,
     backend: str,
@@ -3594,6 +3681,33 @@ def _describe_garment_prompt_bundle_with_backend(
     color_hints: Optional[List[str]] = None,
 ) -> Dict[str, str]:
     resolved = _normalize_descriptor_backend(backend)
+
+    def _parse_minicpm_bundle_or_retry(fetch_raw_text) -> Dict[str, str]:
+        primary_prompt = _build_minicpm_garment_prompt(
+            garment_type=str(garment_type or ""),
+            dominant_color_hexes=dominant_color_hexes,
+            color_hints=color_hints,
+        )
+        raw_text = str(fetch_raw_text(primary_prompt) or "").strip()
+        bundle = _parse_garment_prompt_sections(raw_text, garment_type=garment_type)
+        if _minicpm_bundle_has_valid_json_contract(bundle):
+            return bundle
+
+        retry_prompt = _build_minicpm_garment_retry_prompt(
+            garment_type=str(garment_type or ""),
+            dominant_color_hexes=dominant_color_hexes,
+            color_hints=color_hints,
+        )
+        retry_text = str(fetch_raw_text(retry_prompt) or "").strip()
+        retry_bundle = _parse_garment_prompt_sections(retry_text, garment_type=garment_type)
+        if _minicpm_bundle_has_valid_json_contract(retry_bundle):
+            return retry_bundle
+
+        raise RuntimeError(
+            "MiniCPM garment response did not satisfy JSON prompt contract "
+            f"(first_format={bundle.get('source_format')}, retry_format={retry_bundle.get('source_format')})"
+        )
+
     if resolved == "minicpm_service":
         try:
             if not image_url:
@@ -3604,21 +3718,35 @@ def _describe_garment_prompt_bundle_with_backend(
                 min_side=FLUX2_MINICPM_PRODUCT_CAPTION_MIN_SIDE,
             )
             image_signature = _image_signature_for_cache(cache_img)
-            raw_text = _describe_with_minicpm_service(
-                image_url=image_url,
-                kind="garment",
-                image_signature=image_signature,
-                service_url=service_url,
-                prompt_override=_build_minicpm_garment_prompt(
-                    garment_type=str(garment_type or ""),
-                    dominant_color_hexes=dominant_color_hexes,
-                    color_hints=color_hints,
-                ),
-                return_raw=True,
+            return _parse_minicpm_bundle_or_retry(
+                lambda prompt_override: _describe_with_minicpm_service(
+                    image_url=image_url,
+                    kind="garment",
+                    image_signature=image_signature,
+                    service_url=service_url,
+                    prompt_override=prompt_override,
+                    return_raw=True,
+                )
             )
-            return _parse_garment_prompt_sections(raw_text, garment_type=garment_type)
         except Exception as err:
             raise RuntimeError(f"MiniCPM service garment description failed: {err}") from err
+    if resolved == "minicpm":
+        try:
+            minicpm_img = _resize_for_qwen_caption(
+                image=image,
+                max_side=FLUX2_MINICPM_PRODUCT_CAPTION_MAX_SIDE,
+                min_side=FLUX2_MINICPM_PRODUCT_CAPTION_MIN_SIDE,
+            )
+            return _parse_minicpm_bundle_or_retry(
+                lambda prompt_override: str(
+                    engine.minicpm.describe_garment(
+                        minicpm_img,
+                        prompt_override=prompt_override,
+                    )
+                ).strip()
+            )
+        except Exception as err:
+            raise RuntimeError(f"MiniCPM garment description failed: {err}") from err
 
     desc = _describe_garment_with_backend(
         image=image,
@@ -6742,12 +6870,15 @@ def _build_minicpm_garment_prompt(
         "\"base_garment_prompt\" and \"extraction_avoid_clause\". "
         "\"base_garment_prompt\" must contain only garment facts for the requested garment. "
         "\"extraction_avoid_clause\" must contain only extraction-specific exclusions, contamination to ignore, or generation mistakes to avoid. "
+        "\"extraction_avoid_clause\" must always be present. If there is nothing specific to avoid, return it as an empty string. "
         "If multiple garments or visible non-garment regions appear, mention them only inside \"extraction_avoid_clause\", never inside \"base_garment_prompt\". "
         "If visible contamination exists from skin, tattoo, hair, face, lips, background, or another garment, explicitly include it in \"extraction_avoid_clause\". "
         "Do not put avoid words, negatives, or exclusion phrases inside \"base_garment_prompt\". "
         "Report garment colors using plain color words only; never output hex codes. "
         "Do not use skin tone, gloves, jewelry, mannequin color, or background color as garment color. "
         "Do not invent metallic, gold, silver, or hardware colors unless they are clearly visible on the garment itself. "
+        "For simple garments, still include garment type, neckline, sleeve length, fit, hem, closure, and front-visible structure when visible. "
+        "For complex garments, also include visible pattern, motif colors, placket, button count, cuff style, waist treatment, ties, drape, paneling, and length when visible. "
         "For one-shoulder or crop tops, clearly state sleeve count, exposed shoulder side, and cropped hem geometry in \"base_garment_prompt\". "
         "If visible, explicitly preserve and report front placket shape, button or snap count, button spacing, button size, and button placement. "
         "Return category and type for the requested garment only."
@@ -9109,6 +9240,8 @@ def _run_flux2_cloth_only_extract(
             "base_garment_prompt": garment_desc,
             "extraction_avoid_clause": str(prompt_bundle.get("extraction_avoid_clause") or ""),
             "prompt_sections_raw": str(prompt_bundle.get("serialized_sections") or ""),
+            "json_contract_valid": str(prompt_bundle.get("json_contract_valid") or ""),
+            "source_format": str(prompt_bundle.get("source_format") or ""),
             "descriptor_raw_text": str(prompt_bundle.get("raw_text") or ""),
             "dominant_hexes": dominant_hexes,
             "accent_hexes": [str(v) for v in (input_color_ctx.get("accentHexes") or []) if str(v).strip()],

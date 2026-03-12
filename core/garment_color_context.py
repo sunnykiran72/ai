@@ -818,6 +818,12 @@ def build_single_image_color_context(
 
     profile_mean_b = float(profile.get("meanB")) if isinstance(profile.get("meanB"), (int, float)) else None
     profile_median_l = float(profile.get("medianL")) if isinstance(profile.get("medianL"), (int, float)) else None
+    if _profile_is_near_white(profile):
+        white_label = "ivory" if profile_mean_b is not None and profile_mean_b >= 4.0 else "white"
+        hints = [white_label] + [
+            token for token in hints
+            if token not in {"silver", "gray", "off-white", white_label}
+        ]
     if (
         hints
         and (not profile_is_neutral)

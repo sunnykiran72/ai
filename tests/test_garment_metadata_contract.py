@@ -185,6 +185,67 @@ class GarmentMetadataContractTests(unittest.TestCase):
         self.assertEqual(metadata["color"]["resolved_source"], "pixel")
         self.assertEqual(metadata["details"]["colors"], "light blue, unknown")
 
+    def test_build_garment_metadata_does_not_promote_muted_beige_to_yellow(self):
+        metadata = _build_garment_metadata(
+            base_garment_prompt="Beige long-sleeve top with a deep V-neckline and loose fit. The fabric appears to have a subtle sheen.",
+            descriptor_raw_text="Beige long-sleeve top with a deep V-neckline and loose fit. The fabric appears to have a subtle sheen.",
+            prompt_description="Beige long-sleeve top with a deep V-neckline and loose fit. The fabric appears to have a subtle sheen.",
+            prompt_source="flux2_extract_descriptor",
+            target_type="top",
+            backend_target_type="top",
+            style="blouse",
+            primary_category_key="tops",
+            category_key="blouses",
+            dominant_hexes=["#A99E8C", "#A09381", "#B6AA98", "#968674"],
+            color_hints=["beige", "tan"],
+            color_profile={"medianL": 65.88, "meanChroma": 11.71, "meanA": 1.63, "meanB": 11.55, "isNeutral": True},
+            color_mask_source="parser_strict_runtime",
+        )
+
+        self.assertEqual(metadata["color"]["color_hints"][:2], ["beige", "tan"])
+        self.assertNotIn("yellow", metadata["color"]["color_hints"])
+        self.assertIn("deep V-neckline", metadata["prompt"]["base_garment_prompt"])
+
+    def test_build_garment_metadata_preserves_freeform_structure_when_reconciling_color(self):
+        metadata = _build_garment_metadata(
+            base_garment_prompt="Long-sleeve top in beige, featuring a deep V-neckline and loose fit. The fabric appears lightweight and slightly sheer, featuring subtle draping at the front.",
+            descriptor_raw_text="Long-sleeve top in beige, featuring a deep V-neckline and loose fit. The fabric appears lightweight and slightly sheer, featuring subtle draping at the front.",
+            prompt_description="Long-sleeve top in beige, featuring a deep V-neckline and loose fit. The fabric appears lightweight and slightly sheer, featuring subtle draping at the front.",
+            prompt_source="flux2_extract_descriptor",
+            target_type="top",
+            backend_target_type="top",
+            style="blouse",
+            primary_category_key="tops",
+            category_key="blouses",
+            dominant_hexes=["#A99E8C", "#A09381", "#B6AA98", "#968674"],
+            color_hints=["beige", "tan"],
+            color_profile={"medianL": 65.88, "meanChroma": 11.71, "meanA": 1.63, "meanB": 11.55, "isNeutral": True},
+            color_mask_source="parser_strict_runtime",
+        )
+
+        self.assertIn("deep V-neckline", metadata["prompt"]["base_garment_prompt"])
+        self.assertNotEqual(metadata["prompt"]["base_garment_prompt"], "colors=beige, tan; coverage=upper body.")
+
+    def test_build_garment_metadata_near_white_neutral_prefers_white_over_silver(self):
+        metadata = _build_garment_metadata(
+            base_garment_prompt="White pants with a high waist and belt loops, featuring front pockets. The fabric appears smooth and fitted through the legs.",
+            descriptor_raw_text="White pants with a high waist and belt loops, featuring front pockets. The fabric appears smooth and fitted through the legs.",
+            prompt_description="White pants with a high waist and belt loops, featuring front pockets. The fabric appears smooth and fitted through the legs.",
+            prompt_source="flux2_extract_descriptor",
+            target_type="bottom",
+            backend_target_type="bottom",
+            style="trousers",
+            primary_category_key="bottoms",
+            category_key="trousers",
+            dominant_hexes=["#B9B9B9", "#C4C5C7"],
+            color_hints=["silver", "white"],
+            color_profile={"medianL": 77.65, "p90L": 84.31, "meanChroma": 2.17, "meanA": 0.44, "meanB": 0.16, "isNeutral": True},
+            color_mask_source="parser_strict_runtime",
+        )
+
+        self.assertEqual(metadata["color"]["color_hints"][0], "white")
+        self.assertNotIn("silver", metadata["color"]["color_hints"][:1])
+
     def test_build_garment_metadata_prunes_warm_pixel_drift_when_descriptor_is_pink(self):
         original = main_mod.GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED
         main_mod.GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED = True
