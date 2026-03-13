@@ -240,6 +240,10 @@ FLUX2_NEGATIVE_PROMPT_RUNTIME_MODE = os.getenv(
 ).strip().lower()
 if FLUX2_NEGATIVE_PROMPT_RUNTIME_MODE not in {"disabled", "request_only", "request_or_auto", "auto_only"}:
     FLUX2_NEGATIVE_PROMPT_RUNTIME_MODE = "request_or_auto"
+FLUX2_TRYON_DISABLE_RUNTIME_NEGATIVE_PROMPT = os.getenv(
+    "FLUX2_TRYON_DISABLE_RUNTIME_NEGATIVE_PROMPT",
+    "1",
+) == "1"
 FLUX2_COLOR_LOCK_ENABLED = os.getenv("FLUX2_COLOR_LOCK_ENABLED", "1") == "1"
 FLUX2_COLOR_LOCK_TOP_K = min(5, max(1, _env_int("FLUX2_COLOR_LOCK_TOP_K", 3)))
 FLUX2_COLOR_DECONTAMINATION_ENABLED = os.getenv("FLUX2_COLOR_DECONTAMINATION_ENABLED", "1") == "1"
@@ -477,6 +481,7 @@ USER_PREP_MAIN_PERSON_MIN_AREA_RATIO = min(
 )
 USER_PREP_MAIN_PERSON_PAD_RATIO = min(0.5, max(0.0, _env_float("USER_PREP_MAIN_PERSON_PAD_RATIO", 0.08)))
 USER_PREP_MIN_CROP_SIDE_PX = max(64, _env_int("USER_PREP_MIN_CROP_SIDE_PX", 192))
+USER_PREP_ENFORCE_PERSON_CHECKS = os.getenv("USER_PREP_ENFORCE_PERSON_CHECKS", "0") == "1"
 USER_PREP_REQUIRE_FACE = os.getenv("USER_PREP_REQUIRE_FACE", "1") == "1"
 USER_PREP_FACE_MIN_PIXELS = max(64, _env_int("USER_PREP_FACE_MIN_PIXELS", 520))
 USER_PREP_FACE_MIN_AREA_RATIO = min(
@@ -485,7 +490,7 @@ USER_PREP_FACE_MIN_AREA_RATIO = min(
 )
 USER_PREP_FACE_MIN_SIDE_PX = max(16, _env_int("USER_PREP_FACE_MIN_SIDE_PX", 28))
 USER_PREP_FACE_MIN_FOCUS_SCORE = _env_float("USER_PREP_FACE_MIN_FOCUS_SCORE", 16.0)
-USER_PREP_REQUIRE_BG_REMOVAL = os.getenv("USER_PREP_REQUIRE_BG_REMOVAL", "1") == "1"
+USER_PREP_REQUIRE_BG_REMOVAL = os.getenv("USER_PREP_REQUIRE_BG_REMOVAL", "0") == "1"
 USER_PREP_BG_BACKEND = os.getenv("USER_PREP_BG_BACKEND", "birefnet").strip().lower()
 if USER_PREP_BG_BACKEND not in {"birefnet", "rembg", "auto"}:
     USER_PREP_BG_BACKEND = "birefnet"
@@ -917,6 +922,109 @@ def _clean_prompt_section_text(text: str) -> str:
     return cleaned.strip(" -")
 
 
+def _join_avoid_terms(terms: List[str]) -> str:
+    ordered = [str(term).strip() for term in terms if str(term).strip()]
+    if not ordered:
+        return ""
+    if len(ordered) == 1:
+        return ordered[0]
+    if len(ordered) == 2:
+        return f"{ordered[0]} and {ordered[1]}"
+    return ", ".join(ordered[:-1]) + f", and {ordered[-1]}"
+
+
+def _extract_generation_only_avoid_directives(text: str) -> List[str]:
+    raw = " ".join(str(text or "").split()).strip()
+    if not raw:
+        return []
+    directives: List[str] = []
+    for segment in re.split(r"(?<=[.!?])\s+", raw):
+        clean = segment.strip(" ,.")
+        low = clean.lower()
+        if not clean:
+            continue
+        if low.startswith("do not ") or low.startswith("don't ") or low.startswith("never "):
+            directives.append(clean if clean.endswith(".") else f"{clean}.")
+    return directives
+
+
+def _build_florence_contamination_avoid_clause(
+    caption: str,
+    *,
+    garment_type: Optional[str] = None,
+) -> str:
+    text = " ".join(str(caption or "").split()).strip().lower()
+    if not text:
+        return ""
+
+    terms: List[str] = []
+
+    def add(term: str) -> None:
+        if term and term not in terms:
+            terms.append(term)
+
+    person_markers = (
+        "woman", "man", "girl", "boy", "person", "model", "wearing", "selfie",
+        "standing", "holding", "posing",
+    )
+    if any(marker in text for marker in person_markers):
+        for term in ("skin", "hair", "face", "hands"):
+            add(term)
+
+    for needle, label in (
+        ("phone", "phone"),
+        ("mirror", "mirror"),
+        ("bed", "bed"),
+        ("pillow", "bed"),
+        ("bag", "bag"),
+        ("purse", "bag"),
+        ("handbag", "bag"),
+        ("cup", "drink"),
+        ("drink", "drink"),
+        ("coffee", "drink"),
+        ("sunglasses", "sunglasses"),
+        ("glasses", "glasses"),
+        ("earring", "earrings"),
+        ("necklace", "necklace"),
+    ):
+        if needle in text:
+            add(label)
+
+    gtype = _normalize_garment_type(garment_type) or "garment"
+    if gtype == "top":
+        for marker in ("pants", "trousers", "jeans", "leggings", "skirt", "shorts", "dress", "gown"):
+            if marker in text:
+                add("lower-body garments")
+                break
+    elif gtype == "bottom":
+        for marker in ("shirt", "top", "blouse", "jacket", "coat", "sweater", "crop top", "bralette"):
+            if marker in text:
+                add("upper-body garments")
+                break
+
+    if terms:
+        add("background")
+
+    joined = _join_avoid_terms(terms)
+    return f"Ignore {joined}." if joined else ""
+
+
+def _merge_avoid_clause_sentences(*clauses: str) -> str:
+    seen: List[str] = []
+    for clause in clauses:
+        raw = " ".join(str(clause or "").split()).strip()
+        if not raw:
+            continue
+        for segment in re.split(r"(?<=[.!?])\s+", raw):
+            clean = segment.strip(" ,.")
+            if not clean:
+                continue
+            sentence = clean if clean.endswith(".") else f"{clean}."
+            if sentence not in seen:
+                seen.append(sentence)
+    return " ".join(seen).strip()
+
+
 def _extract_json_object_from_text(text: str) -> Optional[Dict[str, object]]:
     raw = str(text or "").strip()
     if not raw:
@@ -1343,6 +1451,22 @@ def _resolve_garment_color_truth(
             or all(_is_neutral_color_token(term) for term in pixel_hints[: max(1, len(pixel_hints))])
         )
     )
+    weak_mask_non_neutral_rescue = bool(
+        GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED
+        and weak_mask_source
+        and semantic_non_neutral
+        and not pixel_non_neutral
+        and pixel_hints
+        and all(_color_family(term) in {"neutral_dark", "neutral_mid", "neutral_light", "brown"} for term in pixel_hints)
+        and (
+            not isinstance(color_profile, dict)
+            or not bool(color_profile.get("isNeutral"))
+            or (
+                isinstance(color_profile.get("medianL"), (int, float))
+                and float(color_profile.get("medianL")) <= 55.0
+            )
+        )
+    )
     strong_light_neutral_semantic_override = bool(
         GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED
         and weak_mask_source
@@ -1364,6 +1488,20 @@ def _resolve_garment_color_truth(
                     semantic_hexes.append(semantic_hex)
         resolved_hints = list(dict.fromkeys(light_neutral_semantic_terms[: max(2, FLUX2_COLOR_LOCK_TOP_K)]))
         resolved_source = semantic_override_source
+        if semantic_hexes:
+            resolved_hexes = list(semantic_hexes)
+    elif weak_mask_non_neutral_rescue:
+        semantic_hexes: List[str] = []
+        rescued_terms = list(dict.fromkeys(semantic_terms[: max(2, FLUX2_COLOR_LOCK_TOP_K)]))
+        for term in rescued_terms:
+            rgb = _COLOR_LABEL_RGB_MAP.get(term)
+            if rgb:
+                semantic_hex = "#{:02X}{:02X}{:02X}".format(*rgb)
+                if semantic_hex not in semantic_hexes:
+                    semantic_hexes.append(semantic_hex)
+        if rescued_terms:
+            resolved_hints = rescued_terms
+            resolved_source = semantic_override_source + "_weak_mask_rescue"
         if semantic_hexes:
             resolved_hexes = list(semantic_hexes)
     elif strong_semantic_override:
@@ -1451,6 +1589,44 @@ def _resolve_garment_color_truth(
                     remapped.append(candidate)
             if light_label not in remapped:
                 remapped.insert(0, light_label)
+            return remapped
+        p90_l = profile.get("p90L") if isinstance(profile, dict) else None
+        shadowed_light_neutral_terms = {
+            "brown",
+            "tan",
+            "beige",
+            "champagne",
+            "silver",
+            "gray",
+            "off-white",
+            "white",
+            "ivory",
+            "cream",
+        }
+        if (
+            str(color_mask_source or "").strip().lower().startswith("parser_strict_runtime")
+            and str(target_type or "").strip().lower() in {"top", "outer"}
+            and all(term in shadowed_light_neutral_terms for term in ordered[:4])
+            and isinstance(mean_chroma, (int, float))
+            and isinstance(median_l, (int, float))
+            and isinstance(p90_l, (int, float))
+            and isinstance(mean_b, (int, float))
+            and bool(profile.get("isNeutral"))
+            and float(median_l) >= 58.0
+            and float(p90_l) >= 80.0
+            and float(mean_chroma) <= 11.5
+            and 1.5 <= float(mean_b) <= 8.5
+        ):
+            light_label = "ivory" if float(mean_b) >= 4.0 else "off-white"
+            remapped: List[str] = [light_label]
+            for term in ordered:
+                if term in {"brown", "tan", "gray", "silver"}:
+                    continue
+                candidate = light_label if term in {"off-white", "white", "cream"} else term
+                if candidate not in remapped:
+                    remapped.append(candidate)
+            if len(remapped) == 1:
+                remapped.append("cream" if float(mean_b) >= 5.5 else "off-white")
             return remapped
         non_neutral = [term for term in ordered if _color_family(term) not in {"neutral_dark", "neutral_mid", "neutral_light", "brown"}]
         if not non_neutral:
@@ -3545,6 +3721,27 @@ def _build_flux2_runtime_negative_prompt(
 
     return ", ".join(dict.fromkeys(base_terms))
 
+
+def _resolve_tryon_runtime_negative_prompt(
+    *,
+    target_types: List[str],
+    board_mode: str,
+    custom_negative_prompt: str = "",
+) -> Tuple[str, str]:
+    if FLUX2_TRYON_DISABLE_RUNTIME_NEGATIVE_PROMPT:
+        return "", "disabled"
+
+    runtime_negative_prompt = _build_flux2_runtime_negative_prompt(
+        target_types=target_types,
+        board_mode=board_mode,
+        custom_negative_prompt=custom_negative_prompt,
+    )
+    if custom_negative_prompt and runtime_negative_prompt:
+        return runtime_negative_prompt, "request"
+    if runtime_negative_prompt:
+        return runtime_negative_prompt, "auto"
+    return "", "none"
+
 def _normalize_descriptor_backend(raw: Optional[str]) -> str:
     value = str(raw or FLUX2_DESCRIPTOR_BACKEND).strip().lower()
     if value not in {"florence", "qwen2_5_vl", "joycaption", "minicpm", "minicpm_service"}:
@@ -3884,6 +4081,50 @@ def _ensure_garment_prompt_bundle_avoid_clause(
     return ensured
 
 
+def _apply_florence_top_avoid_clause(
+    bundle: Dict[str, str],
+    *,
+    image: Image.Image,
+    garment_type: Optional[str] = None,
+) -> Dict[str, str]:
+    gtype = _normalize_garment_type(garment_type) or ""
+    if gtype != "top":
+        return bundle
+    try:
+        florence = getattr(engine, "florence", None)
+        if florence is None:
+            return bundle
+        florence_caption = " ".join(str(florence.describe_garment_short(image) or "").split()).strip()
+    except Exception as err:
+        logger.warning("Florence top avoid-clause support failed: %s", err)
+        return bundle
+
+    florence_clause = _build_florence_contamination_avoid_clause(
+        florence_caption,
+        garment_type=gtype,
+    )
+    if not florence_clause:
+        return bundle
+
+    existing_clause = str(bundle.get("extraction_avoid_clause") or "").strip()
+    generation_directives = _extract_generation_only_avoid_directives(existing_clause)
+    merged_clause = _merge_avoid_clause_sentences(
+        florence_clause,
+        " ".join(generation_directives),
+    )
+    if not merged_clause:
+        return bundle
+
+    updated = dict(bundle)
+    updated["extraction_avoid_clause"] = merged_clause
+    updated["serialized_sections"] = (
+        f"BASE_GARMENT_PROMPT: {updated.get('base_garment_prompt') or 'Garment.'}\n"
+        f"EXTRACTION_AVOID_CLAUSE: {merged_clause}"
+    )
+    updated["avoid_clause_source"] = "florence_top_support"
+    return updated
+
+
 def _build_minicpm_garment_retry_prompt(
     *,
     garment_type: str,
@@ -4035,6 +4276,11 @@ def _describe_garment_prompt_bundle_with_backend(
             raise RuntimeError("MiniCPM garment response did not contain a usable base_garment_prompt")
         if not str(bundle.get("extraction_avoid_clause") or "").strip():
             bundle = _ensure_garment_prompt_bundle_avoid_clause(bundle, garment_type=garment_type)
+        bundle = _apply_florence_top_avoid_clause(
+            bundle,
+            image=image,
+            garment_type=garment_type,
+        )
         return bundle
 
     if resolved == "minicpm_service":
@@ -5030,6 +5276,62 @@ def _user_prep_crop_main_person(image: Image.Image, bbox: list[int]) -> tuple[Im
     crop = image.crop((ex0, ey0, ex1, ey1)).convert("RGB")
     return crop, [ex0, ey0, ex1, ey1]
 
+def _user_prep_clamp_alpha_to_person_component(
+    image_bytes: bytes,
+    *,
+    person_component_mask: Optional[np.ndarray],
+    crop_bbox: Optional[list[int]],
+) -> tuple[Optional[bytes], dict]:
+    if not image_bytes:
+        return None, {"applied": False, "reason": "empty_image"}
+    if not isinstance(person_component_mask, np.ndarray) or person_component_mask.size == 0:
+        return None, {"applied": False, "reason": "missing_person_mask"}
+    if not isinstance(crop_bbox, (list, tuple)) or len(crop_bbox) != 4:
+        return None, {"applied": False, "reason": "missing_crop_bbox"}
+
+    try:
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
+        x0, y0, x1, y1 = [int(v) for v in crop_bbox]
+        full_mask = np.asarray(person_component_mask).astype(bool)
+        if full_mask.ndim != 2:
+            return None, {"applied": False, "reason": "bad_person_mask"}
+        crop_mask = full_mask[max(0, y0):max(0, y1), max(0, x0):max(0, x1)]
+        if crop_mask.size == 0:
+            return None, {"applied": False, "reason": "empty_crop_mask"}
+        if crop_mask.shape[:2] != (img.height, img.width):
+            crop_mask = np.array(
+                Image.fromarray((crop_mask.astype(np.uint8) * 255), mode="L").resize(
+                    (img.width, img.height), Image.NEAREST
+                )
+            ) > 0
+
+        # Keep soft hair/edge pixels by slightly expanding the parser-selected person support.
+        try:
+            import cv2
+
+            kernel = np.ones((7, 7), np.uint8)
+            support = cv2.dilate((crop_mask.astype(np.uint8) * 255), kernel, iterations=2) > 0
+        except Exception:
+            support = np.array(
+                Image.fromarray((crop_mask.astype(np.uint8) * 255), mode="L").filter(ImageFilter.MaxFilter(7))
+            ) > 0
+
+        arr = np.asarray(img).copy()
+        alpha = arr[:, :, 3]
+        alpha[~support] = 0
+        arr[:, :, 3] = alpha
+
+        out = io.BytesIO()
+        Image.fromarray(arr, mode="RGBA").save(out, format="PNG")
+        return out.getvalue(), {
+            "applied": True,
+            "reason": "person_component_alpha_clamp",
+            "support_pixels": int(np.sum(support)),
+            "transparent_pixels": int(np.sum(alpha <= 4)),
+        }
+    except Exception as clamp_err:
+        return None, {"applied": False, "reason": f"error:{clamp_err}"}
+
 def _user_prep_alpha_stats(image_bytes: bytes) -> dict:
     img = Image.open(io.BytesIO(image_bytes)).convert("RGBA")
     arr = np.asarray(img)
@@ -6019,7 +6321,29 @@ def _suppress_auxiliary_instances(instances: list[dict], image_width: int, image
     return kept if kept else [max(scored, key=lambda x: x[0])[1]]
 
 def _to_public_item(item: dict) -> dict:
-    return {k: v for k, v in item.items() if not str(k).startswith("_")}
+    public = {k: v for k, v in item.items() if not str(k).startswith("_")}
+
+    # Backward-compatible response block for clients that still read nested
+    # selected_item.metadata.* instead of the flatter selected_item fields.
+    compat_metadata: Dict[str, object] = {}
+    extraction = public.get("extraction")
+    if isinstance(extraction, dict) and extraction:
+        compat_metadata["garmentExtractionMeta"] = extraction
+    garment_metadata = public.get("garmentMetadata")
+    if isinstance(garment_metadata, dict) and garment_metadata:
+        compat_metadata["garmentMetadata"] = garment_metadata
+    progress_sync = public.get("progress_sync")
+    if isinstance(progress_sync, dict) and progress_sync:
+        compat_metadata["progressSync"] = progress_sync
+    if compat_metadata and not isinstance(public.get("metadata"), dict):
+        public["metadata"] = compat_metadata
+
+    output_url = str(public.get("output_image_url") or public.get("url") or "").strip()
+    if output_url:
+        public.setdefault("imageUrl", output_url)
+        public.setdefault("outputImage", output_url)
+
+    return public
 
 def _prepare_extract_source_image(
     full_image: Image.Image,
@@ -9960,6 +10284,7 @@ class VTORequest(BaseModel):
     user_top_description: Optional[str] = None 
     steps: int = Field(default=6, ge=4, le=30)
     seed: int = Field(default=23, ge=0, le=2147483647)
+    true_cfg_scale: Optional[float] = None
 
 class Flux2TryonProduct(BaseModel):
     image: str
@@ -9980,6 +10305,7 @@ class Flux2TryonRequest(BaseModel):
     disable_neutral_calibration: bool = False
     steps: int = Field(default=6, ge=4, le=30)
     seed: int = Field(default=23, ge=0, le=2147483647)
+    true_cfg_scale: Optional[float] = None
 
 class ParserJoyCaptionAnalyzeRequest(BaseModel):
     image_url: str
@@ -10741,6 +11067,7 @@ async def flux2_extract_single_garment(
 
             t_stage = time.time()
             extraction_mode = "background_removal_only"
+            extraction_warning = ""
             extraction_meta = {
                 "path": extraction_mode,
                 "parserSkipped": True,
@@ -10975,24 +11302,13 @@ async def prepare_user_image_for_tryon(
         t_stage = time.time()
         parsing, _, components, parser_meta = _user_prep_person_components(src_img)
         stage["parser_s"] = round(time.time() - t_stage, 4)
-        if not components:
-            return _json_response(
-                _build_user_prepare_payload(
-                    status_code=400,
-                    message="No clear person detected in the image.",
-                )
-            )
-
-        selected = _user_prep_select_main_component(components, src_img.width, src_img.height)
-        if not selected:
-            return _json_response(
-                _build_user_prepare_payload(
-                    status_code=400,
-                    message="Could not identify the main person in the image.",
-                )
-            )
+        selected = _user_prep_select_main_component(components, src_img.width, src_img.height) if components else None
         t_stage = time.time()
-        person_crop, crop_bbox = _user_prep_crop_main_person(src_img, [int(v) for v in selected.get("bbox", [])])
+        if selected:
+            person_crop, crop_bbox = _user_prep_crop_main_person(src_img, [int(v) for v in selected.get("bbox", [])])
+        else:
+            person_crop = src_img.copy()
+            crop_bbox = [0, 0, int(src_img.width), int(src_img.height)]
         stage["crop_s"] = round(time.time() - t_stage, 4)
         if min(person_crop.width, person_crop.height) < USER_PREP_MIN_CROP_SIDE_PX:
             return _json_response(
@@ -11001,7 +11317,12 @@ async def prepare_user_image_for_tryon(
                     message="Detected person crop is too small for try-on.",
                 )
             )
-        if float(selected.get("area_ratio", 0.0)) < USER_PREP_MAIN_PERSON_MIN_AREA_RATIO and min(person_crop.size) < int(USER_PREP_MIN_CROP_SIDE_PX * 1.5):
+        if (
+            USER_PREP_ENFORCE_PERSON_CHECKS
+            and selected
+            and float(selected.get("area_ratio", 0.0)) < USER_PREP_MAIN_PERSON_MIN_AREA_RATIO
+            and min(person_crop.size) < int(USER_PREP_MIN_CROP_SIDE_PX * 1.5)
+        ):
             return _json_response(
                 _build_user_prepare_payload(
                     status_code=400,
@@ -11009,7 +11330,7 @@ async def prepare_user_image_for_tryon(
                 )
             )
 
-        if USER_PREP_REQUIRE_FACE:
+        if USER_PREP_ENFORCE_PERSON_CHECKS and USER_PREP_REQUIRE_FACE and selected:
             face_ok, face_meta = _user_prep_validate_face(
                 src_img,
                 parsing=parsing,
@@ -11055,6 +11376,15 @@ async def prepare_user_image_for_tryon(
         if removed_bytes:
             processed_bytes = removed_bytes
             bg_meta = {"applied": True, **(remove_meta or {})}
+            if USER_PREP_ENFORCE_PERSON_CHECKS and selected:
+                clamped_bytes, clamp_meta = _user_prep_clamp_alpha_to_person_component(
+                    processed_bytes,
+                    person_component_mask=selected.get("mask") if isinstance(selected.get("mask"), np.ndarray) else None,
+                    crop_bbox=crop_bbox,
+                )
+                if clamped_bytes:
+                    processed_bytes = clamped_bytes
+                    bg_meta["person_component_clamp"] = clamp_meta
         elif USER_PREP_REQUIRE_BG_REMOVAL:
             logger.warning(f"User prep background removal failed meta={remove_meta}")
             return _json_response(
@@ -11757,17 +12087,11 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                 board_mode=board_mode,
                 custom_negative_prompt=custom_negative_prompt,
             )
-            runtime_negative_prompt = _build_flux2_runtime_negative_prompt(
+            runtime_negative_prompt, runtime_negative_prompt_source = _resolve_tryon_runtime_negative_prompt(
                 target_types=product_target_types,
                 board_mode=board_mode,
                 custom_negative_prompt=custom_negative_prompt,
             )
-            if custom_negative_prompt and runtime_negative_prompt:
-                runtime_negative_prompt_source = "request"
-            elif runtime_negative_prompt:
-                runtime_negative_prompt_source = "auto"
-            else:
-                runtime_negative_prompt_source = "none"
 
             # 5. Build flux2-only target-aware prompt (dress = replacement, not layering)
             t_stage = time.time()
@@ -11799,6 +12123,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                     steps=candidate_steps,
                     seed=candidate_seed,
                     negative_prompt=runtime_negative_prompt,
+                    true_cfg_scale=request.true_cfg_scale,
                 )
                 score_t0 = time.time()
                 if compute_runtime_scores:
@@ -11877,6 +12202,15 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                     "output_description": output_desc,
                     "negativePromptMode": str(candidate_result.get("metadata", {}).get("negative_prompt_mode", "unknown")),
                     "negativePromptSupported": bool(candidate_result.get("metadata", {}).get("negative_prompt_supported", False)),
+                    "negativePromptArgumentSupported": bool(
+                        candidate_result.get("metadata", {}).get("negative_prompt_argument_supported", False)
+                    ),
+                    "negativePromptTrueCfgSupported": bool(
+                        candidate_result.get("metadata", {}).get("negative_prompt_true_cfg_supported", False)
+                    ),
+                    "negativePromptTrueCfgScale": float(
+                        candidate_result.get("metadata", {}).get("negative_prompt_true_cfg_scale", 1.0)
+                    ),
                 })
                 return candidate_result
 
@@ -12322,8 +12656,12 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
             "negativePromptRuntimeSource": runtime_negative_prompt_source,
             "negativePromptRuntimeInput": runtime_negative_prompt,
             "negativePromptRuntimeMode": FLUX2_NEGATIVE_PROMPT_RUNTIME_MODE,
+            "negativePromptRuntimeDisabledForTryon": bool(FLUX2_TRYON_DISABLE_RUNTIME_NEGATIVE_PROMPT),
             "negativePromptAppliedMode": str(result.get("metadata", {}).get("negative_prompt_mode", "unknown")),
             "negativePromptPipelineSupported": bool(result.get("metadata", {}).get("negative_prompt_supported", False)),
+            "negativePromptArgumentSupported": bool(result.get("metadata", {}).get("negative_prompt_argument_supported", False)),
+            "negativePromptTrueCfgSupported": bool(result.get("metadata", {}).get("negative_prompt_true_cfg_supported", False)),
+            "negativePromptTrueCfgScale": float(result.get("metadata", {}).get("negative_prompt_true_cfg_scale", 1.0)),
             "collageItemMapping": collage_item_clause,
             "latency": result["latency"],
             "total_latency": total_latency,
@@ -12376,8 +12714,12 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                     "runtimeMode": FLUX2_NEGATIVE_PROMPT_RUNTIME_MODE,
                     "runtimeSource": runtime_negative_prompt_source,
                     "runtimeInput": runtime_negative_prompt,
+                    "tryonRuntimeDisabled": bool(FLUX2_TRYON_DISABLE_RUNTIME_NEGATIVE_PROMPT),
                     "appliedMode": str(result.get("metadata", {}).get("negative_prompt_mode", "unknown")),
                     "pipelineSupported": bool(result.get("metadata", {}).get("negative_prompt_supported", False)),
+                    "argumentSupported": bool(result.get("metadata", {}).get("negative_prompt_argument_supported", False)),
+                    "trueCfgSupported": bool(result.get("metadata", {}).get("negative_prompt_true_cfg_supported", False)),
+                    "trueCfgScale": float(result.get("metadata", {}).get("negative_prompt_true_cfg_scale", 1.0)),
                 },
             },
             "timings": stage_timings,
@@ -12443,7 +12785,8 @@ async def vto_tryon_flux(request: VTORequest):
                 board_image=board,
                 prompt=prompt,
                 steps=request.steps,
-                seed=request.seed
+                seed=request.seed,
+                true_cfg_scale=request.true_cfg_scale
             )
 
             # 6. Upload Result

@@ -210,6 +210,10 @@ class Flux2CVTONRunner:
         self.width = int(cfg.get("width") or os.getenv("FLUX2_WIDTH", "512"))
         self.height = int(cfg.get("height") or os.getenv("FLUX2_HEIGHT", "768"))
         self.guidance_scale = float(cfg.get("guidance_scale") or os.getenv("FLUX2_GUIDANCE_SCALE", "3.5"))
+        self.true_cfg_scale = float(
+            cfg["true_cfg_scale"] if ("true_cfg_scale" in cfg and cfg.get("true_cfg_scale") is not None)
+            else os.getenv("FLUX2_TRUE_CFG_SCALE", "1.0")
+        )
         self.seed = int(cfg.get("seed") or os.getenv("FLUX2_SEED", "23"))
         self.lora_scale = float(
             cfg["lora_scale"] if ("lora_scale" in cfg and cfg.get("lora_scale") is not None) else os.getenv("FLUX2_LORA_SCALE", "1.0")
@@ -269,6 +273,7 @@ class Flux2CVTONRunner:
         self._startup_metrics: Dict[str, Any] = {}
         self._did_warmup = False
         self._supports_negative_prompt: Optional[bool] = None
+        self._supports_true_cfg_scale: Optional[bool] = None
         self._warned_negative_prompt_unsupported = False
         self._lora_loaded = False
         self._lora_fused = False
@@ -607,6 +612,20 @@ class Flux2CVTONRunner:
         self._supports_negative_prompt = supported
         return supported
 
+    def _pipeline_accepts_true_cfg_scale(self) -> bool:
+        if self._supports_true_cfg_scale is not None:
+            return bool(self._supports_true_cfg_scale)
+
+        supported = False
+        try:
+            if self._pipeline is not None:
+                call_sig = inspect.signature(self._pipeline.__call__)
+                supported = "true_cfg_scale" in call_sig.parameters
+        except Exception:
+            supported = False
+        self._supports_true_cfg_scale = supported
+        return supported
+
     def _negative_prompt_to_prompt_suffix(self, negative_prompt: str) -> str:
         raw = " ".join(str(negative_prompt or "").split()).strip()
         if not raw:
@@ -649,6 +668,7 @@ class Flux2CVTONRunner:
         seed: Optional[int] = None,
         negative_prompt: Optional[str] = None,
         use_lora: Optional[bool] = None,
+        true_cfg_scale: Optional[float] = None,
     ) -> Dict[str, Any]:
         self.ensure_ready()
 
@@ -661,12 +681,18 @@ class Flux2CVTONRunner:
         board = board_image.convert("RGB")
         resolved_negative_prompt = str(negative_prompt or "").strip()
         requested_lora = self.enable_lora if use_lora is None else bool(use_lora)
+        
+        # Determine the CFG scale to use for this run
+        effective_true_cfg_scale = float(true_cfg_scale if true_cfg_scale is not None else self.true_cfg_scale)
+        
         supports_negative_prompt = self._pipeline_accepts_negative_prompt()
+        supports_true_cfg_scale = self._pipeline_accepts_true_cfg_scale()
+        supports_native_negative_prompt = bool(supports_negative_prompt and supports_true_cfg_scale)
         effective_prompt = prompt
         negative_prompt_mode = "none"
         if resolved_negative_prompt:
-            if supports_negative_prompt:
-                negative_prompt_mode = "native"
+            if supports_native_negative_prompt and effective_true_cfg_scale > 1.0:
+                negative_prompt_mode = "native_true_cfg"
             elif self.negative_prompt_fallback_mode == "append_prompt":
                 suffix = self._negative_prompt_to_prompt_suffix(resolved_negative_prompt)
                 if suffix:
@@ -688,10 +714,21 @@ class Flux2CVTONRunner:
                 "generator": generator,
             }
             if resolved_negative_prompt:
-                if supports_negative_prompt:
+                if negative_prompt_mode == "native_true_cfg":
                     call_kwargs["negative_prompt"] = resolved_negative_prompt
+                    call_kwargs["true_cfg_scale"] = effective_true_cfg_scale
                 elif negative_prompt_mode == "ignored" and not self._warned_negative_prompt_unsupported:
-                    logger.warning("Flux2 pipeline does not expose `negative_prompt`; ignoring provided negative prompt.")
+                    logger.warning("Flux2 pipeline cannot apply native negative prompts; ignoring provided negative prompt.")
+                    self._warned_negative_prompt_unsupported = True
+                elif (
+                    supports_native_negative_prompt
+                    and effective_true_cfg_scale <= 1.0
+                    and not self._warned_negative_prompt_unsupported
+                ):
+                    logger.warning(
+                        "Flux2 pipeline exposes native negative prompt inputs, but effective_true_cfg_scale<=1 keeps them inactive; "
+                        "using prompt fallback instead."
+                    )
                     self._warned_negative_prompt_unsupported = True
             return self._pipeline(**call_kwargs).images[0]
 
@@ -717,11 +754,16 @@ class Flux2CVTONRunner:
                 "resolution": (self.width, self.height),
                 "warmup_seconds": warmup_seconds,
                 "request_total_seconds": time.time() - run_t0,
-                "negative_prompt_used": bool(resolved_negative_prompt and negative_prompt_mode in {"native", "prompt_fallback"}),
-                "negative_prompt_supported": bool(supports_negative_prompt),
+                "negative_prompt_used": bool(
+                    resolved_negative_prompt and negative_prompt_mode in {"native_true_cfg", "prompt_fallback"}
+                ),
+                "negative_prompt_supported": bool(supports_native_negative_prompt),
+                "negative_prompt_argument_supported": bool(supports_negative_prompt),
+                "negative_prompt_true_cfg_supported": bool(supports_true_cfg_scale),
                 "negative_prompt_mode": negative_prompt_mode,
                 "negative_prompt_requested": bool(resolved_negative_prompt),
                 "negative_prompt_fallback_mode": self.negative_prompt_fallback_mode,
+                "negative_prompt_true_cfg_scale": float(effective_true_cfg_scale),
                 "lora_requested": bool(requested_lora),
                 "lora_effective": bool(effective_lora),
                 "runtime_lora_toggle": bool(self.runtime_lora_toggle),

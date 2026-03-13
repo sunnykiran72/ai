@@ -279,6 +279,24 @@ class TestAnalyzeSelectionFlow(unittest.TestCase):
             self.assertEqual(data.get("total_garments_found"), 2)
             self.assertEqual(len(data.get("item_breakdown", [])), 2)
 
+    def test_requested_type_auto_select_prefers_best_geometry_match_not_first_match(self):
+        bboxes = [
+            [8, 82, 86, 150],
+            [8, 12, 86, 88],
+        ]
+        with _AnalyzePatchContext(crop_count=2, labels=["top", "top"], bboxes=bboxes):
+            resp = self.client.post(
+                "/analyze",
+                files={"image": ("multi.png", self.file_bytes, "image/png")},
+                data={"type": "top"},
+                headers=self.headers,
+            )
+            self.assertEqual(resp.status_code, 200)
+            parts = _parse_multipart_response(resp)
+            metadata = json.loads(parts["metadata"]["bytes"].decode("utf-8"))
+            selected_item = metadata.get("data", {}).get("selected_item", {})
+            self.assertEqual(selected_item.get("bbox"), bboxes[1])
+
 
 if __name__ == "__main__":
     unittest.main()

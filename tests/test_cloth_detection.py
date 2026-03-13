@@ -122,6 +122,21 @@ class TestClothDetector(unittest.TestCase):
         self.assertEqual({item["type"] for item in candidates}, {"top", "bottom"})
         self.assertTrue(all(item["source"] == "fashion_object_detection" for item in candidates))
 
+    def test_composite_bottom_label_is_not_retyped_to_requested_top(self):
+        image = Image.new("RGB", (100, 100), "white")
+        detector = ClothDetector(
+            fashion_detector=_FakeFashionDetector([
+                {"bbox": [18, 40, 72, 96], "score": 0.91, "label": "wide leg trousers", "source": "fashion_object_detection"},
+            ]),
+            legacy_detector=None,
+        )
+
+        candidates = detector.detect_fashion_candidates(image, requested_type="top")
+        self.assertEqual(len(candidates), 1)
+        self.assertEqual(candidates[0]["label"], "wide leg trousers")
+        self.assertEqual(candidates[0]["type"], "bottom")
+        self.assertEqual(candidates[0]["type_source"], "detector")
+
 
 if __name__ == "__main__":
     unittest.main()

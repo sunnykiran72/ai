@@ -9,10 +9,34 @@ from ai.main import (
     _extract_garment_metadata_color_payload,
     _extract_garment_metadata_prompt,
     _extract_garment_metadata_target_type,
+    _to_public_item,
 )
 
 
 class GarmentMetadataContractTests(unittest.TestCase):
+    def test_to_public_item_restores_nested_metadata_compatibility(self):
+        public = _to_public_item(
+            {
+                "type": "top",
+                "url": "https://example.com/out.png",
+                "output_image_url": "https://example.com/out.png",
+                "extraction": {"path": "flux2_extract", "colorHints": ["ivory"]},
+                "garmentMetadata": {"prompt": {"base_garment_prompt": "white crop top"}},
+                "progress_sync": {"id": "abc123"},
+                "_extracted_image_bytes": b"ignore",
+            }
+        )
+
+        self.assertEqual(public["imageUrl"], "https://example.com/out.png")
+        self.assertEqual(public["outputImage"], "https://example.com/out.png")
+        self.assertEqual(public["metadata"]["garmentExtractionMeta"]["path"], "flux2_extract")
+        self.assertEqual(
+            public["metadata"]["garmentMetadata"]["prompt"]["base_garment_prompt"],
+            "white crop top",
+        )
+        self.assertEqual(public["metadata"]["progressSync"]["id"], "abc123")
+        self.assertNotIn("_extracted_image_bytes", public)
+
     def test_build_garment_metadata_keeps_prompt_classification_and_color(self):
         metadata = _build_garment_metadata(
             base_garment_prompt=(

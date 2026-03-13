@@ -5,7 +5,8 @@ import numpy as np
 from PIL import Image
 
 import ai.main as main_mod
-from ai.main import _parse_garment_prompt_sections
+from ai.core.flux2_cvton_runner import Flux2CVTONRunner
+from ai.main import _build_florence_contamination_avoid_clause, _parse_garment_prompt_sections
 from ai.modules.wardrobe.extraction.generation_stage import run_selected_item_extraction_or_response
 from ai.modules.wardrobe.extraction.prompting_stage import apply_selected_item_prompting
 
@@ -21,6 +22,129 @@ class _Plan:
 
 
 class PromptingStageTests(unittest.TestCase):
+    def test_build_florence_contamination_avoid_clause_for_top(self):
+        clause = _build_florence_contamination_avoid_clause(
+            "a woman taking a mirror selfie in a white crop top and leggings while holding a phone",
+            garment_type="top",
+        )
+
+        self.assertIn("skin", clause.lower())
+        self.assertIn("mirror", clause.lower())
+        self.assertIn("phone", clause.lower())
+        self.assertIn("lower-body garments", clause.lower())
+
+    def test_flux2_runner_falls_back_when_pipeline_only_accepts_negative_prompt_arg(self):
+        class _Pipeline:
+            def __init__(self):
+                self.kwargs = None
+
+            def __call__(
+                self,
+                image,
+                prompt,
+                num_inference_steps,
+                guidance_scale,
+                width,
+                height,
+                generator,
+                negative_prompt=None,
+            ):
+                self.kwargs = {
+                    "image": image,
+                    "prompt": prompt,
+                    "num_inference_steps": num_inference_steps,
+                    "guidance_scale": guidance_scale,
+                    "width": width,
+                    "height": height,
+                    "generator": generator,
+                    "negative_prompt": negative_prompt,
+                }
+                return types.SimpleNamespace(images=[Image.new("RGB", (width, height), "white")])
+
+        runner = Flux2CVTONRunner(
+            {
+                "device": "cpu",
+                "width": 16,
+                "height": 16,
+                "enable_lora": False,
+                "require_lora": False,
+            }
+        )
+        runner._pipeline = _Pipeline()
+        runner._set_runtime_lora_state = lambda enabled: False
+
+        result = runner.run_tryon(
+            person_image=Image.new("RGB", (16, 16), "white"),
+            board_image=Image.new("RGB", (16, 16), "white"),
+            prompt="transfer garment",
+            negative_prompt="extra hand",
+        )
+
+        self.assertEqual(result["metadata"]["negative_prompt_mode"], "prompt_fallback")
+        self.assertFalse(result["metadata"]["negative_prompt_supported"])
+        self.assertTrue(result["metadata"]["negative_prompt_argument_supported"])
+        self.assertFalse(result["metadata"]["negative_prompt_true_cfg_supported"])
+        self.assertIsNone(runner._pipeline.kwargs["negative_prompt"])
+        self.assertIn("Hard constraints:", runner._pipeline.kwargs["prompt"])
+
+    def test_flux2_runner_uses_true_cfg_for_native_negative_prompt(self):
+        class _Pipeline:
+            def __init__(self):
+                self.kwargs = None
+
+            def __call__(
+                self,
+                image,
+                prompt,
+                num_inference_steps,
+                guidance_scale,
+                width,
+                height,
+                generator,
+                negative_prompt=None,
+                true_cfg_scale=1.0,
+            ):
+                self.kwargs = {
+                    "image": image,
+                    "prompt": prompt,
+                    "num_inference_steps": num_inference_steps,
+                    "guidance_scale": guidance_scale,
+                    "width": width,
+                    "height": height,
+                    "generator": generator,
+                    "negative_prompt": negative_prompt,
+                    "true_cfg_scale": true_cfg_scale,
+                }
+                return types.SimpleNamespace(images=[Image.new("RGB", (width, height), "white")])
+
+        runner = Flux2CVTONRunner(
+            {
+                "device": "cpu",
+                "width": 16,
+                "height": 16,
+                "enable_lora": False,
+                "require_lora": False,
+                "true_cfg_scale": 2.25,
+            }
+        )
+        runner._pipeline = _Pipeline()
+        runner._set_runtime_lora_state = lambda enabled: False
+
+        result = runner.run_tryon(
+            person_image=Image.new("RGB", (16, 16), "white"),
+            board_image=Image.new("RGB", (16, 16), "white"),
+            prompt="transfer garment",
+            negative_prompt="extra hand",
+        )
+
+        self.assertEqual(result["metadata"]["negative_prompt_mode"], "native_true_cfg")
+        self.assertTrue(result["metadata"]["negative_prompt_supported"])
+        self.assertTrue(result["metadata"]["negative_prompt_argument_supported"])
+        self.assertTrue(result["metadata"]["negative_prompt_true_cfg_supported"])
+        self.assertEqual(result["metadata"]["negative_prompt_true_cfg_scale"], 2.25)
+        self.assertEqual(runner._pipeline.kwargs["negative_prompt"], "extra hand")
+        self.assertEqual(runner._pipeline.kwargs["true_cfg_scale"], 2.25)
+
     def test_parse_garment_prompt_sections_accepts_json_object(self):
         bundle = _parse_garment_prompt_sections(
             '{"base_garment_prompt":"type=one-shoulder crop top; construction=one long sleeve only.",'
@@ -189,7 +313,96 @@ class PromptingStageTests(unittest.TestCase):
         self.assertEqual(captured["garment_type"], "dress")
         self.assertTrue(captured["apply_type_color_mask"])
         self.assertEqual(captured["reference_mask_shape"], (78, 49))
-        self.assertEqual(captured["color_reference_image_size"], (100, 120))
+        self.assertEqual(captured["color_reference_image_size"], (49, 78))
+        self.assertEqual(captured["descriptor_source_image_size"], (49, 78))
+        self.assertEqual(updated_item["url"], "https://example.com/out.png")
+
+    def test_generation_keeps_full_extract_color_reference_when_reference_mask_matches_extract_crop(self):
+        captured = {}
+
+        def run_flux2_cloth_only_extract(**kwargs):
+            captured["reference_mask_shape"] = None if kwargs.get("reference_mask") is None else tuple(kwargs["reference_mask"].shape)
+            color_ref = kwargs.get("color_reference_image")
+            captured["color_reference_image_size"] = None if color_ref is None else tuple(color_ref.size)
+            descriptor_ref = kwargs.get("descriptor_source_image")
+            captured["descriptor_source_image_size"] = None if descriptor_ref is None else tuple(descriptor_ref.size)
+            return {
+                "url": "https://example.com/out.png",
+                "_processed_image_bytes": b"png",
+                "meta": {
+                    "prompt_description": "",
+                    "base_garment_prompt": "category=dress; type=maxi dress; details=pleated.",
+                    "extraction_avoid_clause": "",
+                    "prompt_sections_raw": "",
+                },
+            }
+
+        class _Florence:
+            def describe_garment(self, *_args, **_kwargs):
+                raise AssertionError("Florence fallback should not run in extracted prompting path")
+
+            def describe_garment_short(self, *_args, **_kwargs):
+                raise AssertionError("Florence fallback should not run in extracted prompting path")
+
+        engine = types.SimpleNamespace(florence=_Florence())
+        full_image = Image.new("RGB", (100, 120), "white")
+        extract_image = Image.new("RGB", (60, 90), "white")
+        detector_crop = Image.new("RGB", (49, 78), "white")
+        selected_item = {
+            "type": "dress",
+            "bbox": [10, 15, 59, 93],
+            "extract_crop_bbox": [20, 25, 80, 115],
+            "_image_obj": detector_crop,
+            "_mask_obj": np.ones((120, 100), dtype=bool),
+            "promptDescription": "",
+            "description": "",
+        }
+
+        class _Plan:
+            def __init__(self):
+                self.anchor_bbox = [10, 15, 59, 93]
+                self.geometry_source = "detector"
+                self.mask_bbox = None
+                self.extract_bbox = [20, 25, 80, 115]
+                self.crop_mode = "expanded"
+                self.image = extract_image
+
+        updated_item, response = run_selected_item_extraction_or_response(
+            selected_item=selected_item,
+            requested_type=None,
+            direct_requested_type_mode=False,
+            full_image=full_image,
+            all_items_count=1,
+            stage_timings={},
+            engine=engine,
+            logger=types.SimpleNamespace(error=lambda *args, **kwargs: None, warning=lambda *args, **kwargs: None),
+            analyze_extract_cloth=True,
+            analyze_prompt_from_extracted=True,
+            analyze_require_extracted_prompt=False,
+            analyze_caption_mode="short",
+            flux2_single_garment_extract_default_steps=12,
+            flux2_single_garment_extract_default_seed=7,
+            normalize_garment_type=lambda raw: raw,
+            prepare_extract_source_image=lambda **kwargs: _Plan(),
+            build_error_payload=lambda **kwargs: kwargs,
+            multipart_form_response=lambda payload: payload,
+            run_flux2_cloth_only_extract=run_flux2_cloth_only_extract,
+            descriptor_is_weak=lambda text: not bool(text.strip()),
+            caption_non_garment_signal=lambda _text: False,
+            download_image=lambda _url: full_image,
+            flatten_rgba_on_white=lambda img: img,
+            sanitize_garment_description=lambda text: text,
+            infer_style_from_text=lambda *_args, **_kwargs: "evening",
+            wardrobe_category_from_garment_type=lambda *_args, **_kwargs: {
+                "style": "evening",
+                "primary_category_key": "dresses",
+                "category_key": "maxi_dress",
+            },
+        )
+
+        self.assertIsNone(response)
+        self.assertEqual(captured["reference_mask_shape"], (90, 60))
+        self.assertEqual(captured["color_reference_image_size"], (60, 90))
         self.assertEqual(captured["descriptor_source_image_size"], (49, 78))
         self.assertEqual(updated_item["url"], "https://example.com/out.png")
 
@@ -266,6 +479,37 @@ class PromptingStageTests(unittest.TestCase):
         )
         self.assertIn("white pants", bundle["extraction_avoid_clause"])
         self.assertEqual(bundle["json_contract_valid"], "true")
+
+    def test_top_bundle_uses_florence_for_contamination_avoid_clause(self):
+        class _MiniCPM:
+            def describe_garment(self, image, prompt_override=None):
+                return (
+                    '{"base_garment_prompt":"White halter crop top with gathered neckline and pearl trim.",'
+                    '"extraction_avoid_clause":"ignore background only. Do not simplify the gathered halter neckline."}'
+                )
+
+        class _Florence:
+            def describe_garment_short(self, image):
+                return "a woman taking a mirror selfie in a white halter top and skirt while holding a phone"
+
+        original_engine = main_mod.engine
+        main_mod.engine = types.SimpleNamespace(minicpm=_MiniCPM(), florence=_Florence())
+        try:
+            image = Image.new("RGB", (320, 480), "white")
+            bundle = main_mod._describe_garment_prompt_bundle_with_backend(
+                image=image,
+                backend="minicpm",
+                garment_type="top",
+                dominant_color_hexes=["#F5F5F5"],
+                color_hints=["white"],
+            )
+        finally:
+            main_mod.engine = original_engine
+
+        self.assertIn("mirror", bundle["extraction_avoid_clause"].lower())
+        self.assertIn("phone", bundle["extraction_avoid_clause"].lower())
+        self.assertIn("lower-body garments", bundle["extraction_avoid_clause"].lower())
+        self.assertIn("do not simplify the gathered halter neckline", bundle["extraction_avoid_clause"].lower())
 
     def test_local_minicpm_prompt_bundle_retries_until_json_contract_valid(self):
         captured = {"calls": 0, "prompts": []}
@@ -447,6 +691,36 @@ class PromptingStageTests(unittest.TestCase):
         self.assertEqual(main_mod._normalize_prompt_descriptor_backend("florence"), "minicpm")
         self.assertEqual(main_mod._normalize_prompt_descriptor_backend("minicpm"), "minicpm")
         self.assertEqual(main_mod._normalize_prompt_descriptor_backend("minicpm_service"), "minicpm_service")
+
+    def test_resolve_tryon_runtime_negative_prompt_can_disable_tryon_only(self):
+        original_flag = main_mod.FLUX2_TRYON_DISABLE_RUNTIME_NEGATIVE_PROMPT
+        try:
+            main_mod.FLUX2_TRYON_DISABLE_RUNTIME_NEGATIVE_PROMPT = True
+            prompt, source = main_mod._resolve_tryon_runtime_negative_prompt(
+                target_types=["dress"],
+                board_mode="single",
+                custom_negative_prompt="extra hand",
+            )
+        finally:
+            main_mod.FLUX2_TRYON_DISABLE_RUNTIME_NEGATIVE_PROMPT = original_flag
+
+        self.assertEqual(prompt, "")
+        self.assertEqual(source, "disabled")
+
+    def test_resolve_tryon_runtime_negative_prompt_uses_runtime_builder_when_enabled(self):
+        original_flag = main_mod.FLUX2_TRYON_DISABLE_RUNTIME_NEGATIVE_PROMPT
+        try:
+            main_mod.FLUX2_TRYON_DISABLE_RUNTIME_NEGATIVE_PROMPT = False
+            prompt, source = main_mod._resolve_tryon_runtime_negative_prompt(
+                target_types=["dress"],
+                board_mode="single",
+                custom_negative_prompt="extra hand",
+            )
+        finally:
+            main_mod.FLUX2_TRYON_DISABLE_RUNTIME_NEGATIVE_PROMPT = original_flag
+
+        self.assertEqual(prompt, "extra hand")
+        self.assertEqual(source, "request")
 
     def test_build_flux2_targeted_prompt_adds_saree_limb_guard(self):
         prompt = main_mod._build_flux2_targeted_prompt(

@@ -150,7 +150,21 @@ class ClothDetector:
         text = str(raw).strip().lower()
         text = text.replace("garment", "").replace("wear", "").replace("clothing", "")
         text = " ".join(text.split())
-        for token in ("top", "bottom", "dress", "outer", "outerwear", "coat", "jacket", "blazer", "pants", "skirt"):
+        for token in (
+            "top",
+            "bottom",
+            "dress",
+            "outer",
+            "outerwear",
+            "coat",
+            "jacket",
+            "blazer",
+            "pants",
+            "trousers",
+            "jeans",
+            "shorts",
+            "skirt",
+        ):
             if token in text:
                 return ClothDetector._normalize_type(token)
         return ClothDetector._normalize_type(text)

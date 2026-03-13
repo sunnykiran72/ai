@@ -85,6 +85,34 @@ class GarmentColorMaskerTests(unittest.TestCase):
         self.assertTrue(bool(mask[80, 60]))
         self.assertFalse(bool(mask[95, 110]))
 
+    def test_parser_mask_still_removes_skin_when_overlap_is_large_but_garment_remains(self):
+        w, h = 180, 220
+        img = Image.new("RGB", (w, h), color=(245, 242, 238))
+        parsing = np.zeros((h, w), dtype=np.uint8)
+        parsing[28:170, 25:155] = 4
+        parser = _FakeParser(parsing)
+
+        def _skin_mask(rgb: np.ndarray) -> np.ndarray:
+            mask = np.zeros((h, w), dtype=bool)
+            mask[40:130, 52:128] = True
+            return mask
+
+        masker = GarmentColorMasker(
+            parser=parser,
+            base_mask_fn=lambda image: np.ones((h, w), dtype=bool),
+            skin_mask_fn=_skin_mask,
+        )
+        mask, meta = masker.estimate_mask(img, "top", "")
+
+        self.assertIsNotNone(mask)
+        self.assertTrue(bool(meta.get("used")))
+        self.assertEqual(meta.get("source"), "parser_strict_runtime")
+        self.assertGreater(int(meta.get("skin_pixels_removed", 0)), 0)
+        mask = np.asarray(mask).astype(bool)
+        self.assertFalse(bool(mask[80, 90]))
+        self.assertTrue(bool(mask[150, 40]))
+        self.assertTrue(bool(mask[150, 140]))
+
     def test_heuristic_bottom_mask_keeps_light_neutral_trousers(self):
         w, h = 220, 300
         img = Image.new("RGB", (w, h), color=(246, 243, 239))

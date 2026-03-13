@@ -51,6 +51,30 @@ def run_selected_item_extraction_or_response(
         )
         return None, multipart_form_response(payload)
 
+    original_selected_type = normalize_garment_type(str(selected_item.get("type")))
+    if (
+        forced_type
+        and original_selected_type not in {None, "", forced_type}
+        and original_selected_type in {"top", "bottom", "dress", "outer"}
+    ):
+        selected_item["requested_type_mismatch"] = {
+            "requested_type": forced_type,
+            "detected_type": original_selected_type,
+            "detector_label": str(selected_item.get("detector_label") or ""),
+        }
+        payload = build_error_payload(
+            title="Requested Garment Not Found",
+            description=f"Could not find a clear {forced_type} in this image. The detected garment looks like {original_selected_type}.",
+            reason_codes=["REQUESTED_TYPE_NOT_FOUND"],
+            status_code=400,
+        )
+        payload.setdefault("data", {})["selected_item"] = {
+            "type": original_selected_type,
+            "detector_label": str(selected_item.get("detector_label") or ""),
+            "bbox": list(selected_item.get("bbox") or []),
+        }
+        return None, multipart_form_response(payload)
+
     if forced_type and str(selected_item.get("type")) != forced_type:
         selected_item["type_original"] = selected_item.get("type")
         selected_item["type"] = forced_type
@@ -102,6 +126,7 @@ def run_selected_item_extraction_or_response(
     extracted_image_bytes = b""
     fallback: Dict[str, object] = {}
     reference_mask = None
+    color_reference_image = selected_item.get("_image_obj") or extract_source_image
     detector_mask_obj = selected_item.get("_mask_obj")
     if isinstance(detector_mask_obj, np.ndarray):
         try:
@@ -122,6 +147,16 @@ def run_selected_item_extraction_or_response(
                                 reference_mask = cropped_mask
         except Exception:
             reference_mask = None
+    if isinstance(reference_mask, np.ndarray):
+        color_ref_candidate = extract_source_image
+        if reference_mask.shape[:2] != (extract_source_image.height, extract_source_image.width):
+            detector_crop_candidate = selected_item.get("_image_obj")
+            if (
+                isinstance(detector_crop_candidate, Image.Image)
+                and reference_mask.shape[:2] == (detector_crop_candidate.height, detector_crop_candidate.width)
+            ):
+                color_ref_candidate = detector_crop_candidate
+        color_reference_image = color_ref_candidate
     t_extract = time.time()
     try:
         flux_fallback = run_flux2_cloth_only_extract(
@@ -133,7 +168,7 @@ def run_selected_item_extraction_or_response(
             steps=flux2_single_garment_extract_default_steps,
             seed=flux2_single_garment_extract_default_seed,
             descriptor_source_image=selected_item.get("_image_obj") or extract_source_image,
-            color_reference_image=extract_source_image,
+            color_reference_image=color_reference_image,
             reference_mask=reference_mask,
             apply_type_color_mask=bool(selected_type),
         )

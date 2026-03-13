@@ -14,6 +14,80 @@ def _build_detector_prompt_description(raw_label: str, garment_type: str) -> str
     return f"Detected {label} garment."
 
 
+def _candidate_to_item(
+    *,
+    inst: Dict[str, object],
+    idx: int,
+    image: Image.Image,
+    normalize_garment_type: Callable[[Optional[str]], Optional[str]],
+    infer_style_from_text: Callable[..., Optional[str]],
+    wardrobe_category_from_garment_type: Callable[..., Dict[str, str]],
+) -> Optional[Dict[str, object]]:
+    resolved_type = normalize_garment_type(str(inst.get("type") or inst.get("label") or ""))
+    if resolved_type not in {"top", "bottom", "dress", "outer"}:
+        return None
+
+    bbox = [int(v) for v in (inst.get("bbox") or [0, 0, image.width, image.height])]
+    x0, y0, x1, y1 = bbox
+    crop_w = max(1, x1 - x0)
+    crop_h = max(1, y1 - y0)
+    crop_area_ratio = min(1.0, float(crop_w * crop_h) / max(1.0, float(image.width * image.height)))
+    width_ratio = float(crop_w) / max(1.0, float(image.width))
+    height_ratio = float(crop_h) / max(1.0, float(image.height))
+    detector_label = str(inst.get("label") or resolved_type or "").strip()
+    prompt_desc = _build_detector_prompt_description(detector_label, resolved_type)
+    style_infer = infer_style_from_text(detector_label or prompt_desc, garment_type=resolved_type)
+    category_meta = wardrobe_category_from_garment_type(resolved_type, style=style_infer)
+    confidence = float(inst.get("confidence", 0.0) or 0.0)
+    detection_source = str(inst.get("source") or "cloth_detector")
+
+    # Parser assistance is helpful for typed requests, but occasionally it emits
+    # a near full-frame top/bottom box on person photos. Those candidates are not
+    # useful for selection and they poison downstream color/prompt extraction.
+    if (
+        detection_source == "human_parser"
+        and resolved_type in {"top", "bottom"}
+        and (
+            crop_area_ratio >= 0.82
+            or (width_ratio >= 0.92 and height_ratio >= 0.90)
+        )
+    ):
+        return None
+
+    item = {
+        "garment_id": idx,
+        "type": resolved_type,
+        "garment_type": resolved_type,
+        "type_source": str(inst.get("type_source") or "detector"),
+        "detection_source": detection_source,
+        "promptDescription": prompt_desc,
+        "description": prompt_desc,
+        "style": category_meta["style"],
+        "category_key": category_meta["category_key"],
+        "primary_category_key": category_meta["primary_category_key"],
+        "url": None,
+        "bbox": bbox,
+        "crop": {
+            "width": crop_w,
+            "height": crop_h,
+            "area_ratio": crop_area_ratio,
+        },
+        "confidence": {
+            "yolo": confidence,
+            "detector": confidence,
+        },
+        "_image_obj": inst.get("image") or image.crop(tuple(bbox)),
+        "_mask_obj": inst.get("mask"),
+        "detector_label": detector_label,
+        "detector_metrics": dict(inst.get("metrics") or {}),
+    }
+    if inst.get("tighten_reason"):
+        item["tighten_reason"] = str(inst.get("tighten_reason"))
+    if inst.get("parser_area_ratio") is not None:
+        item["parser_area_ratio"] = float(inst.get("parser_area_ratio") or 0.0)
+    return item
+
+
 def run_detection_stage_or_response(
     *,
     image: Image.Image,
@@ -89,51 +163,16 @@ def run_detection_stage_or_response(
     raw_detected_count = len(detector_candidates)
     items = []
     for idx, inst in enumerate(detector_candidates[:analyze_max_items]):
-        resolved_type = normalize_garment_type(str(inst.get("type") or ""))
-        if resolved_type not in {"top", "bottom", "dress", "outer"}:
-            continue
-
-        bbox = [int(v) for v in (inst.get("bbox") or [0, 0, image.width, image.height])]
-        x0, y0, x1, y1 = bbox
-        crop_w = max(1, x1 - x0)
-        crop_h = max(1, y1 - y0)
-        crop_area_ratio = min(1.0, float(crop_w * crop_h) / max(1.0, float(image.width * image.height)))
-        detector_label = str(inst.get("label") or resolved_type or "").strip()
-        prompt_desc = _build_detector_prompt_description(detector_label, resolved_type)
-        style_infer = infer_style_from_text(detector_label or prompt_desc, garment_type=resolved_type)
-        category_meta = wardrobe_category_from_garment_type(resolved_type, style=style_infer)
-        confidence = float(inst.get("confidence", 0.0) or 0.0)
-
-        item = {
-            "garment_id": idx,
-            "type": resolved_type,
-            "garment_type": resolved_type,
-            "type_source": str(inst.get("type_source") or "detector"),
-            "detection_source": str(inst.get("source") or "cloth_detector"),
-            "promptDescription": prompt_desc,
-            "description": prompt_desc,
-            "style": category_meta["style"],
-            "category_key": category_meta["category_key"],
-            "primary_category_key": category_meta["primary_category_key"],
-            "url": None,
-            "bbox": bbox,
-            "crop": {
-                "width": crop_w,
-                "height": crop_h,
-                "area_ratio": crop_area_ratio,
-            },
-            "confidence": {
-                "yolo": confidence,
-                "detector": confidence,
-            },
-            "_image_obj": inst.get("image") or image.crop(tuple(bbox)),
-            "_mask_obj": inst.get("mask"),
-            "detector_label": detector_label,
-            "detector_metrics": dict(inst.get("metrics") or {}),
-        }
-        if inst.get("tighten_reason"):
-            item["tighten_reason"] = str(inst.get("tighten_reason"))
-        items.append(item)
+        item = _candidate_to_item(
+            inst=inst,
+            idx=idx,
+            image=image,
+            normalize_garment_type=normalize_garment_type,
+            infer_style_from_text=infer_style_from_text,
+            wardrobe_category_from_garment_type=wardrobe_category_from_garment_type,
+        )
+        if item is not None:
+            items.append(item)
 
     if not items:
         payload = build_error_payload(
@@ -143,6 +182,89 @@ def run_detection_stage_or_response(
             status_code=400,
         )
         return None, multipart_form_response(payload)
+
+    normalized_requested = normalize_garment_type(requested_type)
+    # For explicit typed requests, always let parser prerouting challenge a bad detector pick.
+    # This stays narrow because we only keep parser candidates when they score materially better.
+    if normalized_requested in {"top", "bottom", "dress", "outer"}:
+        try:
+            parser_instances = parser_preroute_instances(image, requested_type=requested_type)
+        except Exception as parser_err:
+            logger.warning(f"Parser preroute failed during typed selection assist: {parser_err}")
+            parser_instances = []
+
+        parser_items: List[Dict[str, object]] = []
+        for parser_idx, inst in enumerate(parser_instances):
+            item = _candidate_to_item(
+                inst=inst,
+                idx=len(items) + parser_idx,
+                image=image,
+                normalize_garment_type=normalize_garment_type,
+                infer_style_from_text=infer_style_from_text,
+                wardrobe_category_from_garment_type=wardrobe_category_from_garment_type,
+            )
+            if item is not None:
+                parser_items.append(item)
+
+        if parser_items:
+            detector_same = [it for it in items if normalize_garment_type(str(it.get("type"))) == normalized_requested]
+            parser_same = [it for it in parser_items if normalize_garment_type(str(it.get("type"))) == normalized_requested]
+            if parser_same:
+                best_parser = max(
+                    parser_same,
+                    key=lambda it: requested_type_geometry_score(it, normalized_requested or "", image.height),
+                )
+                best_detector = max(
+                    detector_same,
+                    key=lambda it: requested_type_geometry_score(it, normalized_requested or "", image.height),
+                ) if detector_same else None
+                parser_score = requested_type_geometry_score(best_parser, normalized_requested or "", image.height)
+                detector_score = requested_type_geometry_score(best_detector, normalized_requested or "", image.height) if best_detector else float("-inf")
+                if (best_detector is None) or (parser_score > detector_score + 0.12):
+                    parser_split_used = True
+                    items.extend(parser_same)
+
+    if normalized_requested in {"top", "bottom"}:
+        same_type_items = [
+            it for it in items if normalize_garment_type(str(it.get("type"))) == normalized_requested
+        ]
+        if not same_type_items:
+            base_item = largest_instance(items) if items else None
+            if base_item is not None:
+                heuristic_base = {
+                    "bbox": [0, 0, image.width, image.height],
+                    "confidence": float(
+                        (base_item.get("confidence") or {}).get("detector")
+                        if isinstance(base_item.get("confidence"), dict)
+                        else 0.0
+                    ),
+                }
+                try:
+                    heuristic_instances = heuristic_split_candidates(image, heuristic_base)
+                except Exception as heuristic_err:
+                    logger.warning(f"Heuristic split failed during typed selection assist: {heuristic_err}")
+                    heuristic_instances = []
+
+                heuristic_items: List[Dict[str, object]] = []
+                for heuristic_idx, inst in enumerate(heuristic_instances):
+                    item = _candidate_to_item(
+                        inst=inst,
+                        idx=len(items) + heuristic_idx,
+                        image=image,
+                        normalize_garment_type=normalize_garment_type,
+                        infer_style_from_text=infer_style_from_text,
+                        wardrobe_category_from_garment_type=wardrobe_category_from_garment_type,
+                    )
+                    if item is not None:
+                        heuristic_items.append(item)
+
+                heuristic_same = [
+                    it for it in heuristic_items
+                    if normalize_garment_type(str(it.get("type"))) == normalized_requested
+                ]
+                if heuristic_same:
+                    heuristic_split_used = True
+                    items.extend(heuristic_same)
 
     items = dedupe_items(items, iou_threshold=0.60)
     unique_types = sorted({str(it.get("type")) for it in items if it.get("type")})
@@ -160,7 +282,10 @@ def run_detection_stage_or_response(
             if normalize_garment_type(str(item.get("type"))) == requested_type
         ]
         if len(matched) >= 1:
-            auto_selected_index = matched[0]
+            auto_selected_index = max(
+                matched,
+                key=lambda idx: requested_type_geometry_score(items[idx], requested_type, image.height),
+            )
         else:
             auto_selected_index = max(
                 range(len(items)),

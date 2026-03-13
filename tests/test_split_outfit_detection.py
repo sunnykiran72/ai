@@ -132,6 +132,48 @@ class SplitOutfitDetectionTests(unittest.TestCase):
 
         self.assertEqual((resolved.get("color_hints") or [None])[0], "ivory")
 
+    def test_parser_top_shadowed_light_neutral_avoids_brown_drift(self):
+        resolved = _resolve_garment_color_truth(
+            base_garment_prompt="crop top with scoop neckline and long sleeves",
+            target_type="top",
+            dominant_hexes=["#999D95", "#7E847F", "#AEB2AB", "#D4D8BF"],
+            color_hints=["silver", "brown", "tan"],
+            color_profile={
+                "medianL": 65.10,
+                "p90L": 83.92,
+                "meanChroma": 8.85,
+                "meanB": 5.91,
+                "isNeutral": True,
+            },
+            color_mask_source="parser_strict_runtime",
+        )
+
+        hints = resolved.get("color_hints") or []
+        self.assertTrue(hints)
+        self.assertEqual(hints[0], "ivory")
+        self.assertNotIn("brown", hints[:2])
+
+    def test_weak_mask_yellow_prompt_rescues_dark_neutral_pixel_drift(self):
+        resolved = _resolve_garment_color_truth(
+            base_garment_prompt="A long yellow dress with a high turtleneck and ruched detailing.",
+            descriptor_raw_text="A long yellow dress with a high turtleneck and ruched detailing.",
+            target_type="dress",
+            dominant_hexes=["#787B78", "#4B4E4A", "#686C69", "#3C403D"],
+            color_hints=["gray", "charcoal"],
+            color_profile={
+                "medianL": 41.57,
+                "meanChroma": 2.61,
+                "meanB": 2.09,
+                "isNeutral": True,
+            },
+            color_mask_source="heuristic",
+        )
+
+        hints = resolved.get("color_hints") or []
+        self.assertTrue(hints)
+        self.assertEqual(hints[0], "yellow")
+        self.assertEqual(resolved.get("color_source"), "semantic_prompt_override_weak_mask_rescue")
+
 
 if __name__ == "__main__":
     unittest.main()

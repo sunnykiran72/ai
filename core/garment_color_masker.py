@@ -92,9 +92,20 @@ class GarmentColorMasker:
                     skin = self._limit_skin_mask(skin=skin, garment_type=garment_type, shape=mask.shape[:2])
                     masked_skin = skin & mask
                     masked_skin_ratio = float(np.sum(masked_skin)) / float(max(1, np.sum(mask)))
-                    if masked_skin_ratio <= float(self.settings.parser_skin_max_strip_ratio):
-                        mask = mask & (~masked_skin)
-                        skin_pixels = int(np.sum(masked_skin))
+                    if int(np.sum(masked_skin)) > 0:
+                        candidate = mask & (~masked_skin)
+                        candidate_cleaned = self._cleanup_mask(candidate, keep_largest=True)
+                        if self._mask_shape_ok(
+                            candidate_cleaned,
+                            image.size,
+                            garment_type,
+                            min_area_ratio=self.settings.parser_min_area_ratio,
+                        ):
+                            mask = candidate
+                            skin_pixels = int(np.sum(masked_skin))
+                        elif masked_skin_ratio <= float(self.settings.parser_skin_max_strip_ratio):
+                            mask = candidate
+                            skin_pixels = int(np.sum(masked_skin))
                 except Exception:
                     skin_pixels = 0
             cleaned = self._cleanup_mask(mask, keep_largest=True)
