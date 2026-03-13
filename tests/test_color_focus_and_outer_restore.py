@@ -1,10 +1,16 @@
 import unittest
 from unittest.mock import patch
 
+import ai.main as main_mod
 import numpy as np
 from PIL import Image, ImageDraw
 
-from ai.main import _build_single_image_color_context, _estimate_type_focused_color_mask, _restore_outer_lower_body_from_reference
+from ai.main import (
+    _build_single_image_color_context,
+    _estimate_type_focused_color_mask,
+    _resolve_color_sampling_mask,
+    _restore_outer_lower_body_from_reference,
+)
 
 
 class ColorFocusAndOuterRestoreTests(unittest.TestCase):
@@ -23,7 +29,17 @@ class ColorFocusAndOuterRestoreTests(unittest.TestCase):
         draw.polygon([(170, 70), (220, 90), (215, 170), (170, 165)], fill=(235, 188, 206))
         draw.rectangle((112, 120, 178, 140), fill=(225, 175, 192))
 
-        mask = _estimate_type_focused_color_mask(img, "top", "pink satin bra with bow")
+        expected_mask = np.zeros((360, 240), dtype=bool)
+        expected_mask[78:170, 72:120] = True
+        expected_mask[78:170, 170:218] = True
+        expected_mask[118:142, 112:178] = True
+
+        class _StubMasker:
+            def estimate_mask(self, image, garment_type, description=""):
+                return expected_mask, {"source": "stub", "used": True, "reason": "unit_test"}
+
+        with patch.object(main_mod.engine, "garment_color_masker", _StubMasker()):
+            mask = _estimate_type_focused_color_mask(img, "top", "pink satin bra with bow")
 
         self.assertIsNotNone(mask)
         mask = np.asarray(mask).astype(bool)
@@ -85,6 +101,29 @@ class ColorFocusAndOuterRestoreTests(unittest.TestCase):
         self.assertEqual(unmasked.get("maskSource"), "disabled")
         self.assertNotEqual(masked.get("maskSource"), "disabled")
         self.assertIn("gray", [str(v) for v in (masked.get("colorHints") or [])])
+
+    def test_color_sampling_mask_prefers_parser_trimmed_region_over_detector_mask(self):
+        img = Image.new("RGB", (120, 160), color=(245, 242, 238))
+        detector_mask = np.zeros((160, 120), dtype=bool)
+        detector_mask[20:140, 15:105] = True
+        parser_mask = np.zeros((160, 120), dtype=bool)
+        parser_mask[32:118, 28:96] = True
+
+        with patch("ai.main._estimate_type_focused_color_mask", return_value=(parser_mask, {"source": "parser_strict_runtime", "used": True})):
+            mask, meta = _resolve_color_sampling_mask(
+                image=img,
+                garment_type="top",
+                description="light pale yellow camisole",
+                reference_mask=detector_mask,
+                apply_type_color_mask=True,
+            )
+
+        self.assertIsNotNone(mask)
+        mask = np.asarray(mask).astype(bool)
+        self.assertEqual(meta.get("source"), "detector_parser_intersection")
+        self.assertTrue(bool(mask[60, 60]))
+        self.assertFalse(bool(mask[24, 20]))
+        self.assertLess(int(meta.get("mask_pixels", 0)), int(np.sum(detector_mask)))
 
 
 if __name__ == "__main__":

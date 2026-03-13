@@ -1,6 +1,7 @@
 import unittest
 
 import numpy as np
+import ai.main as main_mod
 
 from ai.main import (
     _augment_pixel_hints_with_muted_hue_family,
@@ -173,6 +174,39 @@ class SplitOutfitDetectionTests(unittest.TestCase):
         self.assertTrue(hints)
         self.assertEqual(hints[0], "yellow")
         self.assertEqual(resolved.get("color_source"), "semantic_prompt_override_weak_mask_rescue")
+
+    def test_high_confidence_fashion_basecolour_blends_when_mask_is_weak(self):
+        original_threshold = main_mod.ANALYZE_FASHION_BASECOLOUR_APPLY_MIN_SCORE
+        main_mod.ANALYZE_FASHION_BASECOLOUR_APPLY_MIN_SCORE = 0.90
+        try:
+            resolved = _resolve_garment_color_truth(
+                base_garment_prompt="shirt",
+                target_type="top",
+                dominant_hexes=["#F1F0EC", "#E7E4DD", "#D4D0C6"],
+                color_hints=["gray", "silver"],
+                color_profile={
+                    "medianL": 60.0,
+                    "meanChroma": 3.2,
+                    "meanB": 1.2,
+                    "isNeutral": True,
+                },
+                color_mask_source="heuristic",
+                fashion_color_classifier={
+                    "applied": True,
+                    "top_label": "White",
+                    "top_score": 0.97,
+                    "predictions": [
+                        {"label": "White", "score": 0.97, "canonical_hint": "white"},
+                    ],
+                },
+            )
+        finally:
+            main_mod.ANALYZE_FASHION_BASECOLOUR_APPLY_MIN_SCORE = original_threshold
+
+        hints = resolved.get("color_hints") or []
+        self.assertTrue(hints)
+        self.assertEqual(hints[0], "white")
+        self.assertEqual(resolved.get("color_source"), "fashion_basecolour_blend")
 
 
 if __name__ == "__main__":

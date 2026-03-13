@@ -230,6 +230,80 @@ class GarmentMetadataContractTests(unittest.TestCase):
         self.assertNotIn("yellow", metadata["color"]["color_hints"])
         self.assertIn("deep V-neckline", metadata["prompt"]["base_garment_prompt"])
 
+    def test_build_garment_metadata_preserves_fashion_basecolour_payload(self):
+        metadata = _build_garment_metadata(
+            base_garment_prompt="White shirt with pointed collar and button placket.",
+            descriptor_raw_text="White shirt with pointed collar and button placket.",
+            prompt_description="White shirt with pointed collar and button placket.",
+            prompt_source="flux2_extract_descriptor",
+            target_type="top",
+            backend_target_type="top",
+            style="shirt",
+            primary_category_key="tops",
+            category_key="shirts",
+            dominant_hexes=["#F1F1EF", "#E7E6E2"],
+            accent_hexes=[],
+            color_hints=["white"],
+            color_profile={"medianL": 88.0, "meanChroma": 1.8, "meanB": 1.1, "isNeutral": True},
+            color_mask_source="reference_mask",
+            fashion_color_classifier={
+                "applied": True,
+                "top_label": "White",
+                "top_score": 0.97,
+                "predictions": [
+                    {"label": "White", "score": 0.97, "canonical_hint": "white"},
+                ],
+            },
+        )
+
+        self.assertEqual(metadata["color"]["fashion_basecolour"]["top_label"], "White")
+        self.assertTrue(metadata["color"]["fashion_basecolour"]["applied"])
+        self.assertEqual(metadata["color"]["primary_color_label"], "white")
+        self.assertEqual(metadata["color"]["primary_color_family"], "neutral_light")
+        self.assertEqual(metadata["color"]["primary_color_descriptor"], "bright white")
+
+    def test_build_garment_metadata_adds_rich_color_descriptors_and_sampling_meta(self):
+        metadata = _build_garment_metadata(
+            base_garment_prompt=(
+                "category=dress; type=gown; colors=yellow; pattern=solid; material=satin; "
+                "silhouette=column; construction=sleeveless; details=ruched; coverage=full body."
+            ),
+            descriptor_raw_text=(
+                "category=dress; type=gown; colors=yellow; pattern=solid; material=satin; "
+                "silhouette=column; construction=sleeveless; details=ruched; coverage=full body."
+            ),
+            prompt_description=(
+                "category=dress; type=gown; colors=yellow; pattern=solid; material=satin; "
+                "silhouette=column; construction=sleeveless; details=ruched; coverage=full body."
+            ),
+            prompt_source="flux2_extract_descriptor",
+            target_type="dress",
+            backend_target_type="dress",
+            style="gown",
+            primary_category_key="dresses",
+            category_key="gowns",
+            dominant_hexes=["#EAD97A", "#E5D16F"],
+            accent_hexes=[],
+            color_hints=["yellow"],
+            color_profile={"medianL": 82.3, "meanChroma": 10.4, "meanA": -1.2, "meanB": 24.7, "isNeutral": False},
+            color_mask_source="detector_parser_intersection",
+            color_sampling_mask_meta={
+                "source": "detector_parser_intersection",
+                "used": True,
+                "reason": "parser_trimmed_detector_context",
+                "mask_pixels": 5240,
+            },
+        )
+
+        self.assertEqual(metadata["color"]["primary_color_label"], "yellow")
+        self.assertEqual(metadata["color"]["primary_color_family"], "yellow")
+        self.assertEqual(metadata["color"]["brightness"], "light")
+        self.assertEqual(metadata["color"]["saturation"], "pale")
+        self.assertEqual(metadata["color"]["undertone"], "warm")
+        self.assertEqual(metadata["color"]["primary_color_descriptor"], "light pale yellow")
+        self.assertEqual(metadata["color"]["sampling_mask"]["source"], "detector_parser_intersection")
+        self.assertTrue(metadata["color"]["sampling_mask"]["used"])
+
     def test_build_garment_metadata_preserves_freeform_structure_when_reconciling_color(self):
         metadata = _build_garment_metadata(
             base_garment_prompt="Long-sleeve top in beige, featuring a deep V-neckline and loose fit. The fabric appears lightweight and slightly sheer, featuring subtle draping at the front.",

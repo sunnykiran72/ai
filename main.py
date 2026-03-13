@@ -84,6 +84,7 @@ from ai.core.fashion_detection_runner import FashionDetectionRunner
 from ai.core.yolo_runner import YoloPersonDetectorRunner, YoloRunner
 from ai.core.human_parser_runner import HumanParserRunner
 from ai.core.openclip_runner import OpenCLIPRunner
+from ai.core.fashion_color_classifier_runner import FashionColorClassifierRunner
 from ai.core.garment_extractor import (
     GarmentExtractionConfig,
     GarmentExtractionRequest,
@@ -246,6 +247,12 @@ FLUX2_TRYON_DISABLE_RUNTIME_NEGATIVE_PROMPT = os.getenv(
 ) == "1"
 FLUX2_COLOR_LOCK_ENABLED = os.getenv("FLUX2_COLOR_LOCK_ENABLED", "1") == "1"
 FLUX2_COLOR_LOCK_TOP_K = min(5, max(1, _env_int("FLUX2_COLOR_LOCK_TOP_K", 3)))
+ANALYZE_FASHION_BASECOLOUR_TRIAL_ENABLED = os.getenv("ANALYZE_FASHION_BASECOLOUR_TRIAL_ENABLED", "1") == "1"
+ANALYZE_COLOR_PARSER_SAMPLING_TRIAL_ENABLED = os.getenv("ANALYZE_COLOR_PARSER_SAMPLING_TRIAL_ENABLED", "1") == "1"
+ANALYZE_FASHION_BASECOLOUR_APPLY_MIN_SCORE = min(
+    0.99,
+    max(0.50, _env_float("ANALYZE_FASHION_BASECOLOUR_APPLY_MIN_SCORE", 0.90)),
+)
 FLUX2_COLOR_DECONTAMINATION_ENABLED = os.getenv("FLUX2_COLOR_DECONTAMINATION_ENABLED", "1") == "1"
 FLUX2_COLOR_DECONTAM_ALPHA_HIGH = max(1, min(255, _env_int("FLUX2_COLOR_DECONTAM_ALPHA_HIGH", 240)))
 FLUX2_COLOR_DECONTAM_ALPHA_LOW = max(1, min(255, _env_int("FLUX2_COLOR_DECONTAM_ALPHA_LOW", 200)))
@@ -624,6 +631,7 @@ class AIEngine:
         self.joycaption = JoyCaptionRunner()
         self.minicpm = MiniCPMVRunner()
         self.openclip = OpenCLIPRunner()
+        self.fashion_basecolour = FashionColorClassifierRunner()
         shared_flux2_config: Dict[str, object] = {}
         self._share_flux2_base_runner = bool(FLUX2_SHARE_BASE_RUNNER and ANALYZE_FLUX_DISABLE_LORA)
         if self._share_flux2_base_runner:
@@ -687,6 +695,8 @@ class AIEngine:
             self.florence._ensure_loaded()
         if ANALYZE_PRELOAD_FLUX_RUNNER:
             self.get_flux2_for_analyze().ensure_ready()
+        if ANALYZE_FASHION_BASECOLOUR_TRIAL_ENABLED:
+            self.fashion_basecolour.ensure_ready()
 
     def model_status(self):
         analyze_flux2 = self.flux2 if self._share_flux2_base_runner else self._analyze_flux2
@@ -710,6 +720,9 @@ class AIEngine:
             "minicpm_model_id": str(getattr(self.minicpm, "model_id", "")),
             "openclip_loaded": self.openclip.is_loaded,
             "openclip_available": self.openclip.is_available,
+            "fashion_basecolour_loaded": self.fashion_basecolour.is_loaded,
+            "fashion_basecolour_available": self.fashion_basecolour.is_available,
+            "fashion_basecolour_model_id": self.fashion_basecolour.model_id,
             "yolo_loaded": self.yolo_runner.is_loaded,
             "yolo_model_path": self.yolo_runner.model_path,
             "yolo_expected_label_family": self.yolo_runner.expected_label_family,
@@ -1365,6 +1378,7 @@ def _resolve_garment_color_truth(
     color_hints: Optional[List[str]] = None,
     color_profile: Optional[Dict[str, object]] = None,
     color_mask_source: str = "",
+    fashion_color_classifier: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     structured_prompt_fields = dict(_parse_structured_descriptor(base_garment_prompt))
 
@@ -1710,6 +1724,83 @@ def _resolve_garment_color_truth(
         return non_neutral_filtered + neutral_filtered
 
     resolved_hints = _normalize_resolved_color_hints(resolved_hints, color_profile)
+
+    def _apply_fashion_basecolour_signal(
+        hints: List[str],
+        source: str,
+    ) -> Tuple[List[str], str]:
+        signal = fashion_color_classifier if isinstance(fashion_color_classifier, dict) else {}
+        if not bool(signal.get("applied")):
+            return hints, source
+        predictions = signal.get("predictions") if isinstance(signal.get("predictions"), list) else []
+        top_prediction = predictions[0] if predictions and isinstance(predictions[0], dict) else {}
+        top_hint = _canonical_color_token(
+            str(
+                top_prediction.get("canonical_hint")
+                or signal.get("top_label")
+                or top_prediction.get("label")
+                or ""
+            )
+        )
+        if not top_hint or top_hint in {"multi", "unknown"}:
+            return hints, source
+        try:
+            top_score = float(top_prediction.get("score", signal.get("top_score", 0.0)) or 0.0)
+        except Exception:
+            top_score = 0.0
+        if top_score < float(ANALYZE_FASHION_BASECOLOUR_APPLY_MIN_SCORE):
+            return hints, source
+
+        top_family = _color_family(top_hint)
+        neutralish_families = {"neutral_dark", "neutral_mid", "neutral_light", "brown"}
+        palette_supported = (
+            top_family in neutralish_families
+            or _palette_supports_color_family(top_family, pixel_hexes, color_profile)
+        )
+        if not palette_supported:
+            return hints, source
+
+        existing = list(dict.fromkeys(str(v).strip().lower() for v in (hints or []) if str(v).strip()))
+        existing_families = {_color_family(term) for term in existing if term}
+        all_existing_neutralish = bool(
+            not existing
+            or all(_color_family(term) in neutralish_families for term in existing[:3])
+        )
+
+        should_apply = bool(
+            top_hint in existing
+            or (
+                weak_mask_source
+                and (
+                    not pixel_non_neutral
+                    or all_existing_neutralish
+                    or source.startswith("semantic_")
+                )
+            )
+            or (top_family in semantic_families and not pixel_families.intersection(semantic_families))
+            or (
+                top_family in {"neutral_dark", "neutral_light"}
+                and all_existing_neutralish
+            )
+        )
+        if not should_apply:
+            return existing, source
+
+        merged: List[str] = [top_hint]
+        for term in existing:
+            if term == top_hint:
+                continue
+            if _color_family(term) == top_family:
+                continue
+            merged.append(term)
+        new_source = (
+            "fashion_basecolour_blend"
+            if (not existing or existing[0] != top_hint or source.startswith("semantic_"))
+            else source
+        )
+        return merged, new_source
+
+    resolved_hints, resolved_source = _apply_fashion_basecolour_signal(resolved_hints, resolved_source)
     resolved_hints = resolved_hints[: max(2, FLUX2_COLOR_LOCK_TOP_K)]
     resolved_hexes = resolved_hexes[: max(2, FLUX2_COLOR_LOCK_TOP_K + 1)]
     resolved_color_text = ", ".join(resolved_hints)
@@ -1746,6 +1837,187 @@ def _resolve_garment_color_truth(
         "dominant_hexes": resolved_hexes,
         "color_hints": resolved_hints,
         "color_source": resolved_source,
+        "fashion_color_classifier": fashion_color_classifier if isinstance(fashion_color_classifier, dict) else {},
+    }
+
+
+def _hex_to_rgb_triplet_local(token: str) -> Optional[Tuple[int, int, int]]:
+    raw = str(token or "").strip().lstrip("#")
+    if not re.fullmatch(r"[0-9A-Fa-f]{6}", raw):
+        return None
+    return (int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16))
+
+
+def _bucket_color_brightness(profile: Optional[Dict[str, object]]) -> str:
+    median_l = profile.get("medianL") if isinstance(profile, dict) else None
+    if not isinstance(median_l, (int, float)):
+        return "unknown"
+    if float(median_l) >= 84.0:
+        return "very_light"
+    if float(median_l) >= 68.0:
+        return "light"
+    if float(median_l) >= 48.0:
+        return "mid"
+    if float(median_l) >= 30.0:
+        return "deep"
+    return "dark"
+
+
+def _bucket_color_saturation(profile: Optional[Dict[str, object]]) -> str:
+    mean_chroma = profile.get("meanChroma") if isinstance(profile, dict) else None
+    median_l = profile.get("medianL") if isinstance(profile, dict) else None
+    if not isinstance(mean_chroma, (int, float)):
+        return "unknown"
+    chroma = float(mean_chroma)
+    lightish = isinstance(median_l, (int, float)) and float(median_l) >= 70.0
+    if chroma < 6.0:
+        return "neutral"
+    if chroma < 12.0:
+        return "pale" if lightish else "muted"
+    if chroma < 20.0:
+        return "soft"
+    if chroma < 34.0:
+        return "balanced"
+    if chroma < 48.0:
+        return "rich"
+    return "vivid"
+
+
+def _bucket_color_undertone(profile: Optional[Dict[str, object]]) -> str:
+    if not isinstance(profile, dict):
+        return "unknown"
+    mean_a = profile.get("meanA")
+    mean_b = profile.get("meanB")
+    if not isinstance(mean_a, (int, float)) or not isinstance(mean_b, (int, float)):
+        return "unknown"
+    a_val = float(mean_a)
+    b_val = float(mean_b)
+    if abs(a_val) <= 4.0 and abs(b_val) <= 4.0:
+        return "neutral"
+    if b_val >= 6.0:
+        return "warm"
+    if b_val <= -6.0:
+        return "cool"
+    if a_val >= 7.0:
+        return "warm"
+    if a_val <= -7.0:
+        return "cool"
+    return "neutral"
+
+
+def _compose_color_descriptor_phrase(
+    primary_label: str,
+    brightness: str,
+    saturation: str,
+    undertone: str,
+) -> str:
+    label = str(primary_label or "").strip().lower()
+    if not label:
+        return ""
+    brightness_tokens = {
+        "very_light": "bright",
+        "light": "light",
+        "mid": "",
+        "deep": "deep",
+        "dark": "dark",
+        "unknown": "",
+    }
+    saturation_tokens = {
+        "neutral": "",
+        "pale": "pale",
+        "muted": "muted",
+        "soft": "soft",
+        "balanced": "",
+        "rich": "rich",
+        "vivid": "vivid",
+        "unknown": "",
+    }
+    tokens: List[str] = []
+    bright_token = brightness_tokens.get(brightness, "")
+    saturation_token = saturation_tokens.get(saturation, "")
+    if label in {"white", "off-white", "ivory", "cream"} and bright_token == "bright":
+        tokens.append(bright_token)
+        if undertone == "warm" and label in {"off-white", "ivory", "cream"}:
+            tokens.append("warm")
+        tokens.append(label)
+        return " ".join(tokens).strip()
+    if bright_token:
+        tokens.append(bright_token)
+    if saturation_token:
+        tokens.append(saturation_token)
+    if label in {"white", "off-white", "ivory", "cream", "beige", "tan", "champagne", "gray", "silver"} and undertone in {"warm", "cool"}:
+        tokens.append(undertone)
+    tokens.append(label)
+    return " ".join(token for token in tokens if token).strip()
+
+
+def _build_rich_color_metadata(
+    *,
+    dominant_hexes: Optional[List[str]] = None,
+    color_hints: Optional[List[str]] = None,
+    color_profile: Optional[Dict[str, object]] = None,
+    fashion_color_classifier: Optional[Dict[str, object]] = None,
+    color_sampling_mask_meta: Optional[Dict[str, object]] = None,
+) -> Dict[str, object]:
+    resolved_hints = [
+        str(v).strip().lower()
+        for v in (color_hints or [])
+        if str(v).strip()
+    ]
+    primary_label = resolved_hints[0] if resolved_hints else ""
+    secondary_label = resolved_hints[1] if len(resolved_hints) > 1 else ""
+
+    if not primary_label:
+        signal = fashion_color_classifier if isinstance(fashion_color_classifier, dict) else {}
+        primary_label = _canonical_color_token(
+            str(signal.get("top_label") or "")
+        )
+    if not primary_label:
+        rgb_triplet = _hex_to_rgb_triplet_local((dominant_hexes or [""])[0] if dominant_hexes else "")
+        if rgb_triplet is not None:
+            primary_label = _canonical_color_token(_nearest_color_label(rgb_triplet))
+    if not secondary_label and len(resolved_hints) > 1:
+        secondary_label = resolved_hints[1]
+
+    brightness = _bucket_color_brightness(color_profile)
+    saturation = _bucket_color_saturation(color_profile)
+    undertone = _bucket_color_undertone(color_profile)
+    primary_family = _color_family(primary_label) if primary_label else ""
+    secondary_family = _color_family(secondary_label) if secondary_label else ""
+    primary_descriptor = _compose_color_descriptor_phrase(
+        primary_label=primary_label,
+        brightness=brightness,
+        saturation=saturation,
+        undertone=undertone,
+    )
+    secondary_descriptor = ""
+    if secondary_label:
+        secondary_descriptor = f"{secondary_label} accent"
+
+    classifier_signal = fashion_color_classifier if isinstance(fashion_color_classifier, dict) else {}
+    classifier_top = ""
+    classifier_score = 0.0
+    if classifier_signal:
+        classifier_top = str(classifier_signal.get("top_label") or "").strip()
+        try:
+            classifier_score = float(classifier_signal.get("top_score", 0.0) or 0.0)
+        except Exception:
+            classifier_score = 0.0
+
+    return {
+        "primary_color_label": primary_label,
+        "primary_color_family": primary_family,
+        "secondary_color_label": secondary_label,
+        "secondary_color_family": secondary_family,
+        "primary_color_descriptor": primary_descriptor,
+        "secondary_color_descriptor": secondary_descriptor,
+        "brightness": brightness,
+        "saturation": saturation,
+        "undertone": undertone,
+        "descriptor_source": "profile_composition",
+        "classifier_top_label": classifier_top,
+        "classifier_top_score": round(classifier_score, 6) if classifier_signal else 0.0,
+        "sampling_mask": color_sampling_mask_meta if isinstance(color_sampling_mask_meta, dict) else {},
     }
 
 
@@ -1793,6 +2065,8 @@ def _build_garment_metadata(
     color_hints: Optional[List[str]] = None,
     color_profile: Optional[Dict[str, object]] = None,
     color_mask_source: str = "",
+    fashion_color_classifier: Optional[Dict[str, object]] = None,
+    color_sampling_mask_meta: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     base_prompt = " ".join(str(base_garment_prompt or "").split()).strip()
     avoid_clause = " ".join(str(extraction_avoid_clause or "").split()).strip()
@@ -1807,6 +2081,7 @@ def _build_garment_metadata(
         color_hints=color_hints,
         color_profile=color_profile if isinstance(color_profile, dict) else None,
         color_mask_source=color_mask_source,
+        fashion_color_classifier=fashion_color_classifier if isinstance(fashion_color_classifier, dict) else None,
     )
     resolved_base_prompt = str(reconciled_color.get("base_garment_prompt") or base_prompt).strip()
     resolved_prompt_description = " ".join(str(prompt_description or resolved_base_prompt).split()).strip()
@@ -1819,6 +2094,17 @@ def _build_garment_metadata(
             if rebuilt_prompt:
                 resolved_prompt_description = f"{rebuilt_prompt}."
 
+    rich_color = _build_rich_color_metadata(
+        dominant_hexes=reconciled_color.get("dominant_hexes") if isinstance(reconciled_color, dict) else dominant_hexes,
+        color_hints=reconciled_color.get("color_hints") if isinstance(reconciled_color, dict) else color_hints,
+        color_profile=color_profile if isinstance(color_profile, dict) else None,
+        fashion_color_classifier=(
+            reconciled_color.get("fashion_color_classifier")
+            if isinstance(reconciled_color.get("fashion_color_classifier"), dict)
+            else fashion_color_classifier
+        ),
+        color_sampling_mask_meta=color_sampling_mask_meta if isinstance(color_sampling_mask_meta, dict) else None,
+    )
 
     fact_fields = _extract_garment_descriptor_facts(
         base_garment_prompt=resolved_base_prompt,
@@ -1852,6 +2138,22 @@ def _build_garment_metadata(
             "profile": color_profile if isinstance(color_profile, dict) else {},
             "mask_source": str(color_mask_source or "").strip(),
             "resolved_source": str(reconciled_color.get("color_source") or "pixel"),
+            "fashion_basecolour": (
+                reconciled_color.get("fashion_color_classifier")
+                if isinstance(reconciled_color.get("fashion_color_classifier"), dict)
+                else {}
+            ),
+            "primary_color_label": str(rich_color.get("primary_color_label") or "").strip(),
+            "primary_color_family": str(rich_color.get("primary_color_family") or "").strip(),
+            "secondary_color_label": str(rich_color.get("secondary_color_label") or "").strip(),
+            "secondary_color_family": str(rich_color.get("secondary_color_family") or "").strip(),
+            "primary_color_descriptor": str(rich_color.get("primary_color_descriptor") or "").strip(),
+            "secondary_color_descriptor": str(rich_color.get("secondary_color_descriptor") or "").strip(),
+            "brightness": str(rich_color.get("brightness") or "").strip(),
+            "saturation": str(rich_color.get("saturation") or "").strip(),
+            "undertone": str(rich_color.get("undertone") or "").strip(),
+            "descriptor_source": str(rich_color.get("descriptor_source") or "").strip(),
+            "sampling_mask": rich_color.get("sampling_mask") if isinstance(rich_color.get("sampling_mask"), dict) else {},
         },
         "details": fact_fields,
     }
@@ -6571,6 +6873,146 @@ def _flatten_rgba_on_white(image: Image.Image) -> Image.Image:
     bg.paste(image, mask=image.split()[-1])
     return bg
 
+
+def _prepare_fashion_basecolour_trial_image(
+    image: Image.Image,
+    mask: Optional[np.ndarray] = None,
+) -> Image.Image:
+    rgb = image.convert("RGB")
+    if not isinstance(mask, np.ndarray):
+        return rgb
+
+    try:
+        bool_mask = np.asarray(mask).astype(bool)
+        if bool_mask.ndim != 2:
+            return rgb
+        if bool_mask.shape[:2] != (rgb.height, rgb.width):
+            return rgb
+
+        arr = np.asarray(rgb).copy()
+        arr[~bool_mask] = 255
+        return Image.fromarray(arr)
+    except Exception:
+        return rgb
+
+
+def _cleanup_color_sampling_mask(mask: np.ndarray) -> np.ndarray:
+    cleaned = np.asarray(mask).astype(bool)
+    if cleaned.ndim != 2 or cleaned.size == 0:
+        return cleaned
+    opened = binary_open(cleaned, 3)
+    closed = binary_close(opened, 3)
+    if int(np.sum(closed)) <= 0:
+        return cleaned
+    return np.asarray(closed).astype(bool)
+
+
+def _normalize_color_sampling_mask(
+    mask: Optional[np.ndarray],
+    image_size: Tuple[int, int],
+) -> Optional[np.ndarray]:
+    if not isinstance(mask, np.ndarray):
+        return None
+    bool_mask = np.asarray(mask).astype(bool)
+    width, height = image_size
+    if bool_mask.ndim != 2 or bool_mask.shape[:2] != (height, width):
+        return None
+    return _cleanup_color_sampling_mask(bool_mask)
+
+
+def _color_sampling_mask_is_usable(
+    mask: Optional[np.ndarray],
+    image_size: Tuple[int, int],
+    min_area_ratio: float = 0.006,
+) -> bool:
+    if not isinstance(mask, np.ndarray):
+        return False
+    width, height = image_size
+    bool_mask = np.asarray(mask).astype(bool)
+    if bool_mask.ndim != 2 or bool_mask.shape[:2] != (height, width):
+        return False
+    mask_pixels = int(np.sum(bool_mask))
+    if mask_pixels < 96:
+        return False
+    return (float(mask_pixels) / float(max(1, width * height))) >= float(min_area_ratio)
+
+
+def _resolve_color_sampling_mask(
+    *,
+    image: Image.Image,
+    garment_type: str,
+    description: str = "",
+    reference_mask: Optional[np.ndarray] = None,
+    apply_type_color_mask: bool = False,
+) -> Tuple[Optional[np.ndarray], Dict[str, object]]:
+    ref_mask = _normalize_color_sampling_mask(reference_mask, image.size)
+    ref_meta: Dict[str, object] = {}
+    if isinstance(ref_mask, np.ndarray):
+        ref_meta = {
+            "source": "detector_mask_runtime",
+            "used": True,
+            "reason": "provided_reference_mask",
+            "mask_pixels": int(np.sum(ref_mask)),
+            "area_ratio": round(float(np.mean(ref_mask)), 6),
+        }
+
+    parser_mask = None
+    parser_meta: Dict[str, object] = {"source": "disabled", "used": False, "reason": "type_mask_not_requested"}
+    if apply_type_color_mask:
+        parser_mask, parser_meta = _estimate_type_focused_color_mask(
+            image,
+            garment_type,
+            description,
+            return_meta=True,
+        )
+        parser_mask = _normalize_color_sampling_mask(parser_mask, image.size)
+        if isinstance(parser_mask, np.ndarray):
+            parser_meta = dict(parser_meta or {})
+            parser_meta["mask_pixels"] = int(np.sum(parser_mask))
+            parser_meta["area_ratio"] = round(float(np.mean(parser_mask)), 6)
+
+    if (
+        ANALYZE_COLOR_PARSER_SAMPLING_TRIAL_ENABLED
+        and isinstance(ref_mask, np.ndarray)
+        and isinstance(parser_mask, np.ndarray)
+    ):
+        intersection = _cleanup_color_sampling_mask(ref_mask & parser_mask)
+        intersection_pixels = int(np.sum(intersection))
+        parser_pixels = int(np.sum(parser_mask))
+        ref_pixels = int(np.sum(ref_mask))
+        parser_overlap_ratio = float(intersection_pixels) / float(max(1, parser_pixels))
+        ref_overlap_ratio = float(intersection_pixels) / float(max(1, ref_pixels))
+        if (
+            _color_sampling_mask_is_usable(intersection, image.size, min_area_ratio=0.004)
+            and parser_overlap_ratio >= 0.34
+            and ref_overlap_ratio >= 0.10
+        ):
+            return intersection, {
+                "source": "detector_parser_intersection",
+                "used": True,
+                "reason": "parser_trimmed_detector_context",
+                "mask_pixels": intersection_pixels,
+                "area_ratio": round(float(np.mean(intersection)), 6),
+                "parser_overlap_ratio": round(parser_overlap_ratio, 4),
+                "reference_overlap_ratio": round(ref_overlap_ratio, 4),
+                "reference_mask_pixels": ref_pixels,
+                "parser_mask_pixels": parser_pixels,
+            }
+        if bool(parser_meta.get("used")) and _color_sampling_mask_is_usable(parser_mask, image.size):
+            preferred_meta = dict(parser_meta or {})
+            preferred_meta["source"] = str(preferred_meta.get("source") or "parser").strip() or "parser"
+            preferred_meta["reason"] = "parser_preferred_for_color_sampling"
+            preferred_meta["reference_mask_pixels"] = ref_pixels
+            return parser_mask, preferred_meta
+
+    if isinstance(ref_mask, np.ndarray):
+        return ref_mask, ref_meta
+    if isinstance(parser_mask, np.ndarray):
+        return parser_mask, parser_meta
+    if apply_type_color_mask:
+        return None, parser_meta
+    return None, {"source": "disabled", "used": False, "reason": "no_color_mask"}
+
 def _content_bbox_from_image(image: Image.Image) -> tuple[int, int, int, int]:
     rgba = image.convert("RGBA")
     arr = np.asarray(rgba)
@@ -9909,20 +10351,13 @@ def _run_flux2_cloth_only_extract(
         for v in (prompt_description, fallback_prompt_description)
         if str(v).strip()
     ).strip()
-    descriptor_color_mask = None
-    descriptor_color_mask_meta = {"source": "disabled", "used": False, "reason": "type_mask_not_requested"}
-    if isinstance(reference_mask, np.ndarray):
-        mask_arr = np.asarray(reference_mask).astype(bool)
-        if mask_arr.ndim == 2 and mask_arr.shape[:2] == (descriptor_color_ctx_image.height, descriptor_color_ctx_image.width):
-            descriptor_color_mask = mask_arr
-            descriptor_color_mask_meta = {"source": "detector_mask_runtime", "used": True, "reason": "provided_reference_mask"}
-    if apply_type_color_mask and not isinstance(descriptor_color_mask, np.ndarray):
-        descriptor_color_mask, descriptor_color_mask_meta = _estimate_type_focused_color_mask(
-            descriptor_color_ctx_image,
-            resolved_type,
-            color_mask_description,
-            return_meta=True,
-        )
+    descriptor_color_mask, descriptor_color_mask_meta = _resolve_color_sampling_mask(
+        image=descriptor_color_ctx_image,
+        garment_type=resolved_type,
+        description=color_mask_description,
+        reference_mask=reference_mask if isinstance(reference_mask, np.ndarray) else None,
+        apply_type_color_mask=bool(apply_type_color_mask),
+    )
     descriptor_color_ctx = _build_single_image_color_context(
         image=descriptor_color_ctx_image,
         description="",
@@ -10096,6 +10531,35 @@ def _run_flux2_cloth_only_extract(
         or descriptor_color_ctx.get("maskSource")
         or "none"
     ).strip()
+    fashion_basecolour_trial: Dict[str, object] = {
+        "applied": False,
+        "reason": "disabled",
+        "model_id": getattr(engine.fashion_basecolour, "model_id", ""),
+        "predictions": [],
+    }
+    if ANALYZE_FASHION_BASECOLOUR_TRIAL_ENABLED:
+        try:
+            fashion_trial_image = _prepare_fashion_basecolour_trial_image(
+                color_ctx_image,
+                mask=descriptor_color_mask if isinstance(descriptor_color_mask, np.ndarray) else None,
+            )
+            fashion_basecolour_trial = engine.fashion_basecolour.predict_topk(
+                fashion_trial_image,
+                top_k=max(3, FLUX2_COLOR_LOCK_TOP_K),
+            )
+            fashion_basecolour_trial["image_source"] = "masked_color_reference"
+            fashion_basecolour_trial["image_size"] = {
+                "width": int(fashion_trial_image.width),
+                "height": int(fashion_trial_image.height),
+            }
+        except Exception as trial_err:
+            helper_warnings.append(f"fashion_basecolour_trial_failed:{trial_err}")
+            fashion_basecolour_trial = {
+                "applied": False,
+                "reason": f"error:{trial_err}",
+                "model_id": getattr(engine.fashion_basecolour, "model_id", ""),
+                "predictions": [],
+            }
     reconciled_color = _resolve_garment_color_truth(
         base_garment_prompt=garment_desc,
         descriptor_raw_text=str(prompt_bundle.get("raw_text") or garment_desc or ""),
@@ -10104,6 +10568,7 @@ def _run_flux2_cloth_only_extract(
         color_hints=color_hints,
         color_profile=color_profile if isinstance(color_profile, dict) else None,
         color_mask_source=color_mask_source,
+        fashion_color_classifier=fashion_basecolour_trial if isinstance(fashion_basecolour_trial, dict) else None,
     )
     resolved_garment_desc = " ".join(
         str(reconciled_color.get("base_garment_prompt") or garment_desc).split()
@@ -10318,7 +10783,9 @@ def _run_flux2_cloth_only_extract(
             "color_hints": color_hints,
             "color_profile": color_profile,
             "color_mask_source": color_mask_source or str(input_color_ctx.get("maskSource") or "none"),
+            "color_sampling_mask_meta": descriptor_color_mask_meta if isinstance(descriptor_color_mask_meta, dict) else {},
             "color_resolved_source": str(reconciled_color.get("color_source") or "pixel"),
+            "fashion_basecolour_trial": fashion_basecolour_trial,
             "flux_prompt": flux_prompt,
             "negative_prompt": built_negative_prompt,
             "warnings": helper_warnings,

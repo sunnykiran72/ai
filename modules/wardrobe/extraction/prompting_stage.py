@@ -101,6 +101,16 @@ def apply_selected_item_prompting(
             else {}
         ),
         color_mask_source=str(extraction_obj.get("color_mask_source") or ""),
+        fashion_color_classifier=(
+            extraction_obj.get("fashion_basecolour_trial")
+            if isinstance(extraction_obj.get("fashion_basecolour_trial"), dict)
+            else {}
+        ),
+        color_sampling_mask_meta=(
+            extraction_obj.get("color_sampling_mask_meta")
+            if isinstance(extraction_obj.get("color_sampling_mask_meta"), dict)
+            else {}
+        ),
     )
     selected_item["garmentMetadata"] = garment_metadata
 
