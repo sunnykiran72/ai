@@ -47,11 +47,14 @@ def image_to_base64(image: Image.Image, format: str = "PNG") -> str:
     image.save(buffered, format=format)
     return base64.b64encode(buffered.getvalue()).decode("utf-8")
 
-def download_image(url: str, timeout: int = 15) -> Image.Image:
+def download_image(url: str, timeout: int = 15, preserve_alpha: bool = False) -> Image.Image:
     import requests
     resp = requests.get(url, timeout=timeout)
     resp.raise_for_status()
-    return Image.open(io.BytesIO(resp.content)).convert("RGB")
+    image = Image.open(io.BytesIO(resp.content))
+    if preserve_alpha:
+        return image.convert("RGBA")
+    return image.convert("RGB")
 
 def bbox_iou(box_a: Tuple[int, int, int, int], box_b: Tuple[int, int, int, int]) -> float:
     ax0, ay0, ax1, ay1 = box_a

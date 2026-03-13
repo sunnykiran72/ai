@@ -204,19 +204,23 @@ class MiniCPMVRunner:
             max_new_tokens=self.garment_max_new_tokens,
         )
 
-    def describe_person_and_outfit(self, image: Image.Image) -> str:
+    def describe_person_and_outfit(self, image: Image.Image, prompt_override: Optional[str] = None) -> str:
         return self._run_prompt(
             image=image,
             instruction=(
-                "Describe only the human subject for virtual try-on identity preservation. "
-                "Return exactly one single line with this schema: "
-                "identity=<face shape/features, skin tone, hair style/color, age band>; "
-                "body_pose=<pose, camera angle, visible limbs>; "
-                "framing_lighting=<framing, crop, light direction/intensity>; "
-                "occlusion=<hair/hands/accessories/objects overlapping body regions>; "
-                "preserve=<face identity, skin tone, hair, body proportions, pose, framing, and lighting should remain unchanged>. "
-                "Do not describe background or current clothing unless it creates an occlusion. "
-                "Be factual from visible pixels only; use 'unknown' for hidden details."
+                str(prompt_override).strip()
+                if str(prompt_override or "").strip()
+                else (
+                    "Describe only the human subject for virtual try-on identity preservation. "
+                    "Return exactly one single line with this schema: "
+                    "identity=<face shape/features, skin tone, hair style/color, age band>; "
+                    "body_pose=<pose, camera angle, visible limbs>; "
+                    "framing_lighting=<framing, crop, light direction/intensity>; "
+                    "occlusion=<hair/hands/accessories/objects overlapping body regions>; "
+                    "preserve=<face identity, skin tone, hair, body proportions, pose, framing, and lighting should remain unchanged>. "
+                    "Do not describe background or current clothing unless it creates an occlusion. "
+                    "Be factual from visible pixels only; use 'unknown' for hidden details."
+                )
             ),
             max_new_tokens=self.user_max_new_tokens,
         )

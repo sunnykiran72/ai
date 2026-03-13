@@ -125,3 +125,42 @@ class YoloRunner:
     def predict(self, image_rgb: Any, conf: float, iou: float) -> Any:
         self.ensure_ready()
         return self._model(image_rgb, verbose=False, conf=conf, iou=iou)
+
+
+class YoloPersonDetectorRunner:
+    """
+    Dedicated YOLO detect runner for person detection on user-uploaded photos.
+    """
+
+    def __init__(self, model_path: Optional[str] = None, device: Optional[str] = None):
+        self.model_path = model_path or os.getenv("YOLO_PERSON_DETECT_MODEL_PATH", "yolov8m.pt")
+        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
+        self._model = None
+        self._class_names: Dict[int, str] = {}
+        self._load_lock = threading.Lock()
+
+    @property
+    def is_loaded(self) -> bool:
+        return self._model is not None
+
+    def ensure_ready(self) -> None:
+        if self._model is not None:
+            return
+
+        with self._load_lock:
+            if self._model is None:
+                logger.info(f"Loading YOLO detect model from {self.model_path} on {self.device}...")
+                model = YOLO(self.model_path, task="detect")
+                model.to(self.device)
+                self._model = model
+                names_obj = getattr(getattr(model, "model", None), "names", None)
+                if isinstance(names_obj, dict):
+                    self._class_names = {int(k): str(v) for k, v in names_obj.items()}
+                elif isinstance(names_obj, (list, tuple)):
+                    self._class_names = {idx: str(v) for idx, v in enumerate(names_obj)}
+                else:
+                    self._class_names = {}
+
+    def predict(self, image_rgb: Any, conf: float, iou: float) -> Any:
+        self.ensure_ready()
+        return self._model(image_rgb, verbose=False, conf=conf, iou=iou)

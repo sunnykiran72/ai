@@ -16,6 +16,15 @@ logger = logging.getLogger("glamify-ai")
 HF_TOKEN_ENV_KEYS: Tuple[str, ...] = ("HUGGING_FACE_KEY", "HF_TOKEN", "HUGGINGFACE_HUB_TOKEN")
 
 
+def _flatten_rgba_to_white_rgb(image: Image.Image) -> Image.Image:
+    if "A" not in image.getbands():
+        return image.convert("RGB")
+    rgba = image.convert("RGBA")
+    base = Image.new("RGB", rgba.size, (255, 255, 255))
+    base.paste(rgba, mask=rgba.getchannel("A"))
+    return base
+
+
 def _as_bool(raw: Optional[str], default: bool = False) -> bool:
     if raw is None:
         return bool(default)
@@ -677,8 +686,8 @@ class Flux2CVTONRunner:
         generator = torch.Generator(device=self.device).manual_seed(gen_seed)
         warmup_seconds = 0.0
 
-        person = person_image.convert("RGB")
-        board = board_image.convert("RGB")
+        person = _flatten_rgba_to_white_rgb(person_image)
+        board = _flatten_rgba_to_white_rgb(board_image)
         resolved_negative_prompt = str(negative_prompt or "").strip()
         requested_lora = self.enable_lora if use_lora is None else bool(use_lora)
         

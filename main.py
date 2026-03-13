@@ -12,7 +12,7 @@ import colorsys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
-from typing import Optional, List, Tuple, Dict
+from typing import Any, Optional, List, Tuple, Dict
 
 import numpy as np
 import requests
@@ -81,7 +81,7 @@ from ai.core.qwen25vl_runner import Qwen25VLRunner
 from ai.core.joycaption_runner import JoyCaptionRunner
 from ai.core.minicpm_runner import MiniCPMVRunner
 from ai.core.fashion_detection_runner import FashionDetectionRunner
-from ai.core.yolo_runner import YoloRunner
+from ai.core.yolo_runner import YoloPersonDetectorRunner, YoloRunner
 from ai.core.human_parser_runner import HumanParserRunner
 from ai.core.openclip_runner import OpenCLIPRunner
 from ai.core.garment_extractor import (
@@ -479,9 +479,16 @@ USER_PREP_MAIN_PERSON_MIN_AREA_RATIO = min(
     0.95,
     max(0.001, _env_float("USER_PREP_MAIN_PERSON_MIN_AREA_RATIO", 0.08)),
 )
-USER_PREP_MAIN_PERSON_PAD_RATIO = min(0.5, max(0.0, _env_float("USER_PREP_MAIN_PERSON_PAD_RATIO", 0.08)))
+USER_PREP_MAIN_PERSON_PAD_RATIO = min(0.5, max(0.0, _env_float("USER_PREP_MAIN_PERSON_PAD_RATIO", 0.15)))
 USER_PREP_MIN_CROP_SIDE_PX = max(64, _env_int("USER_PREP_MIN_CROP_SIDE_PX", 192))
-USER_PREP_ENFORCE_PERSON_CHECKS = os.getenv("USER_PREP_ENFORCE_PERSON_CHECKS", "0") == "1"
+USER_PREP_ENFORCE_PERSON_CHECKS = os.getenv("USER_PREP_ENFORCE_PERSON_CHECKS", "1") == "1"
+USER_PREP_PERSON_DETECT_CONF = max(0.05, min(0.95, _env_float("USER_PREP_PERSON_DETECT_CONF", 0.35)))
+USER_PREP_PERSON_DETECT_IOU = max(0.05, min(0.95, _env_float("USER_PREP_PERSON_DETECT_IOU", 0.45)))
+USER_PREP_PERSON_DETECT_PRIMARY_MIN_CONF = max(
+    0.10,
+    min(0.99, _env_float("USER_PREP_PERSON_DETECT_PRIMARY_MIN_CONF", 0.40)),
+)
+USER_PREP_REJECT_MULTI_PERSON = os.getenv("USER_PREP_REJECT_MULTI_PERSON", "1") == "1"
 USER_PREP_REQUIRE_FACE = os.getenv("USER_PREP_REQUIRE_FACE", "1") == "1"
 USER_PREP_FACE_MIN_PIXELS = max(64, _env_int("USER_PREP_FACE_MIN_PIXELS", 520))
 USER_PREP_FACE_MIN_AREA_RATIO = min(
@@ -490,10 +497,8 @@ USER_PREP_FACE_MIN_AREA_RATIO = min(
 )
 USER_PREP_FACE_MIN_SIDE_PX = max(16, _env_int("USER_PREP_FACE_MIN_SIDE_PX", 28))
 USER_PREP_FACE_MIN_FOCUS_SCORE = _env_float("USER_PREP_FACE_MIN_FOCUS_SCORE", 16.0)
-USER_PREP_REQUIRE_BG_REMOVAL = os.getenv("USER_PREP_REQUIRE_BG_REMOVAL", "0") == "1"
-USER_PREP_BG_BACKEND = os.getenv("USER_PREP_BG_BACKEND", "birefnet").strip().lower()
-if USER_PREP_BG_BACKEND not in {"birefnet", "rembg", "auto"}:
-    USER_PREP_BG_BACKEND = "birefnet"
+USER_PREP_REQUIRE_BG_REMOVAL = True
+USER_PREP_BG_BACKEND = "birefnet"
 USER_PREP_ALPHA_MIN_FOREGROUND_RATIO = min(
     0.99,
     max(0.01, _env_float("USER_PREP_ALPHA_MIN_FOREGROUND_RATIO", 0.05)),
@@ -507,6 +512,21 @@ if USER_PREP_DESCRIPTION_BACKEND not in {"minicpm", "minicpm_service"}:
     USER_PREP_DESCRIPTION_BACKEND = "minicpm"
 USER_PREP_MIN_PROMPT_WORDS = max(4, _env_int("USER_PREP_MIN_PROMPT_WORDS", 10))
 USER_PREP_UPLOAD_CONTAINER = os.getenv("USER_PREP_UPLOAD_CONTAINER", VTO_OUTPUT_CONTAINER).strip() or VTO_OUTPUT_CONTAINER
+USER_PREP_MINICPM_PERSON_PROMPT = os.getenv(
+    "USER_PREP_MINICPM_PERSON_PROMPT",
+    (
+        "Describe only the human subject for user-image preparation. "
+        "Ignore the background completely and do not mention room, wall, floor, furniture, scenery, studio setup, or any other background detail. "
+        "Return exactly one single line with this schema: "
+        "identity=<face traits, skin tone, hair style/color, age band>; "
+        "body_pose=<posture, visible limbs, standing/sitting, hand position>; "
+        "current_outfit=<visible clothing categories, colors, fit, and coverage only>; "
+        "framing_lighting=<framing/crop, camera angle, light direction/intensity>; "
+        "occlusion=<hair, hands, accessories, or objects overlapping body/clothing regions>; "
+        "preserve=<face identity, skin tone, hair, body proportions, pose, and visible clothing coverage>. "
+        "Do not mention the background at all. Use unknown when not visible."
+    ),
+).strip()
 gpu_semaphore = asyncio.Semaphore(GPU_CONCURRENCY)
 _WARDROBE_PROGRESS_EXECUTOR = ThreadPoolExecutor(max_workers=ANALYZE_PROGRESS_SYNC_MAX_WORKERS)
 _REMBG_SESSION = None
@@ -585,6 +605,7 @@ app = FastAPI(
 class AIEngine:
     def __init__(self):
         self.yolo_runner = YoloRunner()
+        self.person_detector = YoloPersonDetectorRunner()
         self.fashion_detection_runner = FashionDetectionRunner()
         self.parser_runner = HumanParserRunner() if ANALYZE_ENABLE_HUMAN_PARSER else None
         self.yolo = YoloCropper(predictor=self.yolo_runner.predict)
@@ -3405,6 +3426,7 @@ def _build_flux2_targeted_prompt(
     detail_lock_clause: str = "",
     transparency_lock_clause: str = "",
     collage_item_clause: str = "",
+    preserve_background: bool = True,
 ) -> str:
     target_hint = ", ".join(garment_descriptions)
     types = {t for t in target_types if t}
@@ -3416,9 +3438,15 @@ def _build_flux2_targeted_prompt(
     if not identity_context or re.search(r"\bis\s*\.\s*$", identity_context, flags=re.IGNORECASE):
         identity_context = "person in image 1"
 
-    prompt = (
-        "Identity-preserving photorealistic virtual try-on image edit, not a new photoshoot. "
-        "Keep the original camera framing, background, and lighting from image 1. "
+    prompt = "Identity-preserving photorealistic virtual try-on image edit, not a new photoshoot. "
+    if preserve_background:
+        prompt += "Keep the original camera framing, background, and lighting from image 1. "
+    else:
+        prompt += (
+            "Keep the original camera framing and subject lighting from image 1, but do not recreate or invent any room, wall, floor, "
+            "furniture, scenery, or scene background around the person. Treat image 1 as an isolated subject reference only. "
+        )
+    prompt += (
         "Use image 1 as strict identity source for face, body shape, skin tone, and pose. "
         f"TRANSFER the {target_hint} from image 2 onto the person in image 1. "
         "Match exact garment attributes from image 2: color tone, print/pattern, neckline, sleeve length, hem length, fit, and trims. "
@@ -4339,6 +4367,7 @@ def _describe_user_image_for_flux2(
     backend: str = "florence",
     image_url: Optional[str] = None,
     service_url: Optional[str] = None,
+    prompt_override: Optional[str] = None,
 ) -> str:
     """
     Ask selected descriptor model for a full-person detailed description.
@@ -4359,6 +4388,7 @@ def _describe_user_image_for_flux2(
                 kind="person",
                 image_signature=image_signature,
                 service_url=service_url,
+                prompt_override=prompt_override,
             )
         except Exception as err:
             raise RuntimeError(f"MiniCPM service user description failed: {err}") from err
@@ -4369,7 +4399,7 @@ def _describe_user_image_for_flux2(
                 max_side=FLUX2_MINICPM_USER_CAPTION_MAX_SIDE,
                 min_side=FLUX2_MINICPM_USER_CAPTION_MIN_SIDE,
             )
-            return str(engine.minicpm.describe_person_and_outfit(minicpm_img)).strip()
+            return str(engine.minicpm.describe_person_and_outfit(minicpm_img, prompt_override=prompt_override)).strip()
         except Exception as err:
             raise RuntimeError(f"MiniCPM user description failed: {err}") from err
     if resolved == "joycaption":
@@ -5002,6 +5032,97 @@ def _build_user_prepare_payload(
         }
     return payload
 
+
+def _yolo_value_to_numpy(value: Any) -> np.ndarray:
+    if hasattr(value, "cpu"):
+        value = value.cpu()
+    if hasattr(value, "numpy"):
+        value = value.numpy()
+    return np.asarray(value)
+
+
+def _normalize_user_prep_detector_label(label: str) -> str:
+    return " ".join(str(label or "").strip().lower().replace("_", " ").replace("-", " ").split())
+
+
+def _user_prep_detect_person_candidates(image: Image.Image) -> tuple[list[dict], dict]:
+    detector = getattr(engine, "person_detector", None)
+    if detector is None:
+        raise RuntimeError("Person detector is not available")
+
+    rgb = np.asarray(image.convert("RGB"))
+    prediction = detector.predict(
+        rgb,
+        USER_PREP_PERSON_DETECT_CONF,
+        USER_PREP_PERSON_DETECT_IOU,
+    )
+    result = prediction[0] if isinstance(prediction, (list, tuple)) else prediction
+    boxes = getattr(result, "boxes", None)
+    if boxes is None:
+        return [], {"count": 0, "reason": "no_boxes"}
+
+    box_data = _yolo_value_to_numpy(getattr(boxes, "data", []))
+    names = getattr(result, "names", {}) if result is not None else {}
+    total_pixels = max(1.0, float(image.width * image.height))
+    candidates: list[dict] = []
+
+    for row in box_data:
+        if len(row) < 6:
+            continue
+        x0, y0, x1, y1, conf, cls_id = row[:6]
+        label = ""
+        if isinstance(names, dict):
+            label = str(names.get(int(cls_id), ""))
+        elif isinstance(names, (list, tuple)) and int(cls_id) < len(names):
+            label = str(names[int(cls_id)])
+        label_norm = _normalize_user_prep_detector_label(label)
+        if label_norm != "person":
+            continue
+
+        bbox = [
+            max(0, min(int(round(x0)), image.width - 1)),
+            max(0, min(int(round(y0)), image.height - 1)),
+            max(1, min(int(round(x1)), image.width)),
+            max(1, min(int(round(y1)), image.height)),
+        ]
+        bw = max(1, bbox[2] - bbox[0])
+        bh = max(1, bbox[3] - bbox[1])
+        area = bw * bh
+        area_ratio = float(area) / total_pixels
+        center_prior = _bbox_prior(bbox, image.width, image.height)
+        confidence = float(conf)
+        score = (0.55 * area_ratio) + (0.25 * center_prior) + (0.20 * confidence)
+        candidates.append(
+            {
+                "bbox": bbox,
+                "confidence": confidence,
+                "class_id": int(cls_id),
+                "label": label_norm or "person",
+                "area": int(area),
+                "area_ratio": float(area_ratio),
+                "center_prior": float(center_prior),
+                "person_score": float(score),
+            }
+        )
+
+    candidates.sort(key=lambda item: float(item.get("person_score", 0.0)), reverse=True)
+    return candidates, {"count": len(candidates)}
+
+
+def _user_prep_has_multiple_prominent_people(candidates: list[dict]) -> bool:
+    if len(candidates) < 2:
+        return False
+    top = candidates[0]
+    second = candidates[1]
+    top_score = float(top.get("person_score", 0.0))
+    second_score = float(second.get("person_score", 0.0))
+    top_area = float(top.get("area_ratio", 0.0))
+    second_area = float(second.get("area_ratio", 0.0))
+    return (
+        second_score >= max(0.16, top_score * 0.82)
+        and second_area >= max(0.06, top_area * 0.58)
+    )
+
 def _user_prep_person_components(image: Image.Image) -> tuple[np.ndarray, np.ndarray, list[dict], dict]:
     if engine.parser is None:
         raise RuntimeError("Human parser is not available")
@@ -5397,8 +5518,28 @@ def _remove_user_background(image_bytes: bytes) -> tuple[Optional[bytes], dict]:
         )
     return None, {"errors": errors}
 
+
+def _remove_user_background_strict(image_bytes: bytes) -> tuple[Optional[bytes], dict]:
+    out_bytes, meta = _remove_background_with_birefnet(image_bytes)
+    if not out_bytes:
+        return None, {"backend": "birefnet", "error": meta}
+
+    alpha_stats = _user_prep_alpha_stats(out_bytes)
+    if not _user_prep_is_valid_alpha(alpha_stats):
+        return None, {
+            "backend": "birefnet",
+            "error": meta,
+            "alpha_stats": alpha_stats,
+            "reason": "invalid_alpha_coverage",
+        }
+    return out_bytes, {
+        "backend": "birefnet",
+        "removal": meta,
+        "alpha_stats": alpha_stats,
+    }
+
 def _describe_user_image_for_prepare(user_img: Image.Image, image_url: Optional[str]) -> str:
-    return _normalize_user_prepare_prompt_description(
+    return _normalize_user_prepare_api_prompt_description(
         _describe_user_image_for_prepare_candidate(user_img=user_img, image_url=image_url)
     )
 
@@ -5422,30 +5563,77 @@ def _describe_user_image_for_prepare_candidate(
     user_img: Image.Image,
     image_url: Optional[str],
 ) -> str:
-    candidates: List[str] = []
     requested = _normalize_prompt_descriptor_backend(USER_PREP_DESCRIPTION_BACKEND)
-    for item in [requested, "minicpm", "minicpm_service"]:
-        if item and item not in candidates:
-            candidates.append(item)
-
     service_url = ANALYZE_MINICPM_SERVICE_URL or MINICPM_SERVICE_URL
-    for backend in candidates:
-        try:
-            desc = _describe_user_image_for_flux2(
-                user_img=user_img,
-                backend=backend,
-                image_url=image_url,
-                service_url=service_url,
-            )
-            desc = " ".join(str(desc or "").split()).strip()
-            if len(desc.split()) >= USER_PREP_MIN_PROMPT_WORDS:
-                return desc
-        except Exception as desc_err:
-            logger.warning(f"User prep description failed backend={backend}: {desc_err}")
-    return ""
+    resolved_image_url = str(image_url or "").strip()
+    if requested == "minicpm_service" and not resolved_image_url:
+        crop_buf = io.BytesIO()
+        user_img.save(crop_buf, format="PNG")
+        resolved_image_url = _upload_or_raise(
+            crop_buf.getvalue(),
+            container=USER_PREP_UPLOAD_CONTAINER,
+        )
+    desc = _describe_user_image_for_flux2(
+        user_img=user_img,
+        backend=requested,
+        image_url=resolved_image_url,
+        service_url=service_url,
+        prompt_override=USER_PREP_MINICPM_PERSON_PROMPT,
+    )
+    desc = " ".join(str(desc or "").split()).strip()
+    return desc if len(desc.split()) >= USER_PREP_MIN_PROMPT_WORDS else ""
+
+
+def _image_has_meaningful_alpha(image: Optional[Image.Image], alpha_threshold: int = 250, min_fraction: float = 0.01) -> bool:
+    if image is None or "A" not in image.getbands():
+        return False
+    alpha = np.asarray(image.getchannel("A"), dtype=np.uint8)
+    if alpha.size == 0:
+        return False
+    return float(np.mean(alpha <= int(alpha_threshold))) >= float(min_fraction)
+
+
+def _normalize_user_prepare_api_prompt_description(raw_text: str) -> str:
+    text = re.sub(r"[<>]+", " ", " ".join(str(raw_text or "").split())).strip()
+    if not text:
+        return ""
+
+    fields = _parse_structured_descriptor(text)
+    if fields:
+        identity = fields.get("identity", "")
+        pose = fields.get("body_pose", "") or fields.get("by_pose", "")
+        outfit = fields.get("current_outfit", "") or fields.get("outfit", "") or fields.get("clothing", "")
+        framing = fields.get("framing_lighting", "")
+        occlusion = fields.get("occlusion", "")
+        preserve = fields.get("preserve", "")
+        parts: List[str] = []
+        if identity:
+            parts.append(f"identity: {identity}")
+        if pose:
+            parts.append(f"pose: {pose}")
+        if outfit:
+            parts.append(f"current outfit: {outfit}")
+        if framing:
+            parts.append(f"framing/lighting: {framing}")
+        if occlusion and occlusion.lower() not in {"none", "no", "n/a"}:
+            parts.append(f"occlusion: {occlusion}")
+        if preserve:
+            parts.append(f"preserve: {preserve}")
+        cleaned = ". ".join(parts).strip(" .>;,:")
+        if cleaned:
+            return cleaned
+
+    text = re.sub(
+        r"\b(?:background|backdrop|scene|room|wall|floor|studio|furniture)\b\s*(?:=|:)\s*[^;|.]+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(r"\s{2,}", " ", text).strip(" ,.;:>")
+    return text
 
 def _normalize_user_prepare_prompt_description(raw_text: str) -> str:
-    text = " ".join(str(raw_text or "").split()).strip()
+    text = re.sub(r"[<>]+", " ", " ".join(str(raw_text or "").split())).strip()
     if not text:
         return ""
 
@@ -11300,15 +11488,25 @@ async def prepare_user_image_for_tryon(
             )
 
         t_stage = time.time()
-        parsing, _, components, parser_meta = _user_prep_person_components(src_img)
+        detections, parser_meta = _user_prep_detect_person_candidates(src_img)
         stage["parser_s"] = round(time.time() - t_stage, 4)
-        selected = _user_prep_select_main_component(components, src_img.width, src_img.height) if components else None
+        selected = detections[0] if detections else None
+        if not selected or float(selected.get("confidence", 0.0)) < USER_PREP_PERSON_DETECT_PRIMARY_MIN_CONF:
+            return _json_response(
+                _build_user_prepare_payload(
+                    status_code=400,
+                    message="No clear person detected. Upload a single full-person image.",
+                )
+            )
+        if USER_PREP_REJECT_MULTI_PERSON and _user_prep_has_multiple_prominent_people(detections):
+            return _json_response(
+                _build_user_prepare_payload(
+                    status_code=400,
+                    message="Multiple prominent people detected. Upload a single-person image.",
+                )
+            )
         t_stage = time.time()
-        if selected:
-            person_crop, crop_bbox = _user_prep_crop_main_person(src_img, [int(v) for v in selected.get("bbox", [])])
-        else:
-            person_crop = src_img.copy()
-            crop_bbox = [0, 0, int(src_img.width), int(src_img.height)]
+        person_crop, crop_bbox = _user_prep_crop_main_person(src_img, [int(v) for v in selected.get("bbox", [])])
         stage["crop_s"] = round(time.time() - t_stage, 4)
         if min(person_crop.width, person_crop.height) < USER_PREP_MIN_CROP_SIDE_PX:
             return _json_response(
@@ -11319,7 +11517,6 @@ async def prepare_user_image_for_tryon(
             )
         if (
             USER_PREP_ENFORCE_PERSON_CHECKS
-            and selected
             and float(selected.get("area_ratio", 0.0)) < USER_PREP_MAIN_PERSON_MIN_AREA_RATIO
             and min(person_crop.size) < int(USER_PREP_MIN_CROP_SIDE_PX * 1.5)
         ):
@@ -11329,31 +11526,6 @@ async def prepare_user_image_for_tryon(
                     message="Person is too small in frame. Upload a closer full-person image.",
                 )
             )
-
-        if USER_PREP_ENFORCE_PERSON_CHECKS and USER_PREP_REQUIRE_FACE and selected:
-            face_ok, face_meta = _user_prep_validate_face(
-                src_img,
-                parsing=parsing,
-                person_component_mask=selected.get("mask") if isinstance(selected.get("mask"), np.ndarray) else None,
-            )
-            if not face_ok:
-                crop_face_ok, crop_face_meta = _user_prep_validate_face(person_crop)
-                if crop_face_ok:
-                    face_ok = True
-                    face_meta = {
-                        "source": "crop_retry",
-                        "original": face_meta,
-                        "crop": crop_face_meta,
-                        "crop_bbox": crop_bbox,
-                    }
-            if not face_ok:
-                logger.info(f"user_image_prepare rejected: face validation failed meta={face_meta}")
-                return _json_response(
-                    _build_user_prepare_payload(
-                        status_code=400,
-                        message="No clear face detected. Upload a front-facing image with visible face.",
-                    )
-                )
 
         if USER_PREP_BLUR_CHECK_ENABLED:
             crop_focus = _focus_score(person_crop)
@@ -11372,19 +11544,10 @@ async def prepare_user_image_for_tryon(
         t_stage = time.time()
         processed_bytes = crop_bytes
         bg_meta: dict = {"applied": False, "required": bool(USER_PREP_REQUIRE_BG_REMOVAL)}
-        removed_bytes, remove_meta = _remove_user_background(crop_bytes)
+        removed_bytes, remove_meta = _remove_user_background_strict(crop_bytes)
         if removed_bytes:
             processed_bytes = removed_bytes
             bg_meta = {"applied": True, **(remove_meta or {})}
-            if USER_PREP_ENFORCE_PERSON_CHECKS and selected:
-                clamped_bytes, clamp_meta = _user_prep_clamp_alpha_to_person_component(
-                    processed_bytes,
-                    person_component_mask=selected.get("mask") if isinstance(selected.get("mask"), np.ndarray) else None,
-                    crop_bbox=crop_bbox,
-                )
-                if clamped_bytes:
-                    processed_bytes = clamped_bytes
-                    bg_meta["person_component_clamp"] = clamp_meta
         elif USER_PREP_REQUIRE_BG_REMOVAL:
             logger.warning(f"User prep background removal failed meta={remove_meta}")
             return _json_response(
@@ -11408,20 +11571,8 @@ async def prepare_user_image_for_tryon(
 
         # Keep prompt generation on the original person crop to preserve pose/identity details.
         prompt_source_img = person_crop.convert("RGB")
-
-        # Convert to RGB, using white background if isolated to avoid VLM black-background hallucinations
-        processed_img_raw = Image.open(io.BytesIO(processed_bytes))
-        if bg_meta.get("applied") and processed_img_raw.mode == "RGBA":
-            processed_img = Image.new("RGB", processed_img_raw.size, (255, 255, 255))
-            processed_img.paste(processed_img_raw, mask=processed_img_raw.split()[3])
-        else:
-            processed_img = processed_img_raw.convert("RGB")
         t_stage = time.time()
         prompt_description = _describe_user_image_for_prepare(prompt_source_img, None)
-        if bg_meta.get("applied") or not prompt_description:
-            isolated_prompt_description = _describe_user_image_for_prepare(processed_img, output_url)
-            if _score_user_prepare_prompt_description(isolated_prompt_description) > _score_user_prepare_prompt_description(prompt_description):
-                prompt_description = isolated_prompt_description
         stage["describe_s"] = round(time.time() - t_stage, 4)
         if not prompt_description:
             return _json_response(
@@ -11435,7 +11586,7 @@ async def prepare_user_image_for_tryon(
         logger.info(
             "user_image_prepare success total=%.2fs components=%s selected_area=%.4f crop_bbox=%s bg=%s",
             stage["api_total_s"],
-            parser_meta.get("components", 0),
+            parser_meta.get("count", parser_meta.get("components", 0)),
             float(selected.get("area_ratio", 0.0)),
             crop_bbox,
             bg_meta,
@@ -11835,8 +11986,9 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
 
         # 1. Download Images
         t_stage = time.time()
-        user_img = download_image(user_image_url)
+        user_img = download_image(user_image_url, preserve_alpha=True)
         stage_timings["download_user_image_s"] = round(time.time() - t_stage, 4)
+        user_image_isolated = _image_has_meaningful_alpha(user_img)
 
         t_stage = time.time()
         product_imgs = [download_image(url) for url in product_urls]
@@ -12104,6 +12256,7 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
                 detail_lock_clause=str(visual_locks.get("detail_clause") or ""),
                 transparency_lock_clause=str(visual_locks.get("transparency_clause") or ""),
                 collage_item_clause=collage_item_clause,
+                preserve_background=not user_image_isolated,
             )
             stage_timings["prompt_build_s"] = round(time.time() - t_stage, 4)
             target_desc = " | ".join(product_descriptions)

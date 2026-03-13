@@ -1,10 +1,14 @@
+import io
 import types
 import unittest
+from unittest import mock
 
 import numpy as np
 from PIL import Image
+from fastapi.testclient import TestClient
 
 import ai.main as main_mod
+from ai.shared import image_ops as image_ops_mod
 from ai.core.flux2_cvton_runner import Flux2CVTONRunner
 from ai.main import _build_florence_contamination_avoid_clause, _parse_garment_prompt_sections
 from ai.modules.wardrobe.extraction.generation_stage import run_selected_item_extraction_or_response
@@ -144,6 +148,49 @@ class PromptingStageTests(unittest.TestCase):
         self.assertEqual(result["metadata"]["negative_prompt_true_cfg_scale"], 2.25)
         self.assertEqual(runner._pipeline.kwargs["negative_prompt"], "extra hand")
         self.assertEqual(runner._pipeline.kwargs["true_cfg_scale"], 2.25)
+
+    def test_flux2_runner_flattens_transparent_person_on_white(self):
+        class _Pipeline:
+            def __init__(self):
+                self.kwargs = None
+
+            def __call__(
+                self,
+                image,
+                prompt,
+                num_inference_steps,
+                guidance_scale,
+                width,
+                height,
+                generator,
+            ):
+                self.kwargs = {"image": image}
+                return types.SimpleNamespace(images=[Image.new("RGB", (width, height), "white")])
+
+        runner = Flux2CVTONRunner(
+            {
+                "device": "cpu",
+                "width": 2,
+                "height": 2,
+                "enable_lora": False,
+                "require_lora": False,
+            }
+        )
+        runner._pipeline = _Pipeline()
+        runner._set_runtime_lora_state = lambda enabled: False
+
+        person = Image.new("RGBA", (2, 2), (0, 0, 0, 0))
+        person.putpixel((0, 0), (255, 0, 0, 255))
+
+        runner.run_tryon(
+            person_image=person,
+            board_image=Image.new("RGB", (2, 2), "white"),
+            prompt="transfer garment",
+        )
+
+        pipeline_person = runner._pipeline.kwargs["image"][0]
+        self.assertEqual(pipeline_person.mode, "RGB")
+        self.assertEqual(pipeline_person.getpixel((1, 1)), (255, 255, 255))
 
     def test_parse_garment_prompt_sections_accepts_json_object(self):
         bundle = _parse_garment_prompt_sections(
@@ -669,6 +716,51 @@ class PromptingStageTests(unittest.TestCase):
         self.assertNotIn("current outfit", cleaned.lower())
         self.assertNotIn("matching skirt", cleaned.lower())
 
+    def test_normalize_user_prepare_api_prompt_description_keeps_outfit_but_strips_background(self):
+        raw = (
+            "identity=oval face, fair skin, straight black hair; "
+            "body_pose=front-facing standing pose with arms relaxed; "
+            "current_outfit=black maxi dress with long sleeves; "
+            "framing_lighting=full-body crop with soft indoor lighting; "
+            "background=white studio wall and floor; "
+            "preserve=face identity, pose, body proportions, and clothing coverage"
+        )
+
+        cleaned = main_mod._normalize_user_prepare_api_prompt_description(raw)
+
+        self.assertIn("identity: oval face, fair skin, straight black hair", cleaned)
+        self.assertIn("pose: front-facing standing pose with arms relaxed", cleaned)
+        self.assertIn("current outfit: black maxi dress with long sleeves", cleaned)
+        self.assertIn("framing/lighting: full-body crop with soft indoor lighting", cleaned)
+        self.assertNotIn("background", cleaned.lower())
+        self.assertNotIn("studio wall", cleaned.lower())
+
+    def test_normalize_user_prepare_api_prompt_description_strips_trailing_markup(self):
+        raw = (
+            "identity=light skin, blonde hair; "
+            "body_pose=standing with one hand on hip; "
+            "current_outfit=white crop top and pants; "
+            "preserve=face identity, pose, outfit coverage>"
+        )
+
+        cleaned = main_mod._normalize_user_prepare_api_prompt_description(raw)
+
+        self.assertTrue(cleaned.endswith("outfit coverage"))
+        self.assertNotIn(">", cleaned)
+
+    def test_user_prep_rejects_multiple_prominent_people(self):
+        candidates = [
+            {"person_score": 0.42, "area_ratio": 0.24},
+            {"person_score": 0.36, "area_ratio": 0.18},
+        ]
+        self.assertTrue(main_mod._user_prep_has_multiple_prominent_people(candidates))
+
+        single_dominant = [
+            {"person_score": 0.42, "area_ratio": 0.24},
+            {"person_score": 0.18, "area_ratio": 0.05},
+        ]
+        self.assertFalse(main_mod._user_prep_has_multiple_prominent_people(single_dominant))
+
     def test_build_flux2_targeted_prompt_uses_identity_reference_not_outfit_reference(self):
         prompt = main_mod._build_flux2_targeted_prompt(
             garment_descriptions=["category=top garment, type crop top."],
@@ -686,11 +778,38 @@ class PromptingStageTests(unittest.TestCase):
         self.assertNotIn("Person and current outfit reference", prompt)
         self.assertNotIn("pink satin bra top", prompt.lower())
 
+    def test_build_flux2_targeted_prompt_skips_background_preservation_for_isolated_user(self):
+        prompt = main_mod._build_flux2_targeted_prompt(
+            garment_descriptions=["category=dress garment, type fitted dress."],
+            user_description="identity: woman. pose: sitting.",
+            target_types=["dress"],
+            board_mode="single",
+            preserve_background=False,
+        )
+
+        self.assertNotIn("Keep the original camera framing, background, and lighting", prompt)
+        self.assertIn("do not recreate or invent any room, wall, floor, furniture, scenery, or scene background", prompt)
+
     def test_normalize_prompt_descriptor_backend_forces_minicpm_family(self):
         self.assertEqual(main_mod._normalize_prompt_descriptor_backend("qwen2_5_vl"), "minicpm")
         self.assertEqual(main_mod._normalize_prompt_descriptor_backend("florence"), "minicpm")
         self.assertEqual(main_mod._normalize_prompt_descriptor_backend("minicpm"), "minicpm")
         self.assertEqual(main_mod._normalize_prompt_descriptor_backend("minicpm_service"), "minicpm_service")
+
+    def test_download_image_can_preserve_alpha(self):
+        rgba = Image.new("RGBA", (2, 2), (255, 0, 0, 0))
+        buf = io.BytesIO()
+        rgba.save(buf, format="PNG")
+
+        response = mock.Mock()
+        response.content = buf.getvalue()
+        response.raise_for_status.return_value = None
+
+        with mock.patch("requests.get", return_value=response):
+            image = image_ops_mod.download_image("https://example.com/image.png", preserve_alpha=True)
+
+        self.assertEqual(image.mode, "RGBA")
+        self.assertEqual(image.getchannel("A").getpixel((0, 0)), 0)
 
     def test_resolve_tryon_runtime_negative_prompt_can_disable_tryon_only(self):
         original_flag = main_mod.FLUX2_TRYON_DISABLE_RUNTIME_NEGATIVE_PROMPT
@@ -721,6 +840,59 @@ class PromptingStageTests(unittest.TestCase):
 
         self.assertEqual(prompt, "extra hand")
         self.assertEqual(source, "request")
+
+    def test_user_prepare_route_does_not_gate_on_face_detection(self):
+        client = TestClient(main_mod.app)
+        src = Image.new("RGB", (320, 480), "white")
+        crop = Image.new("RGB", (256, 384), "white")
+        buf = io.BytesIO()
+        src.save(buf, format="PNG")
+        payload = buf.getvalue()
+
+        with mock.patch.object(
+            main_mod,
+            "_user_prep_detect_person_candidates",
+            return_value=([{"bbox": [20, 10, 260, 430], "confidence": 0.96, "area_ratio": 0.42}], {"count": 1}),
+        ), mock.patch.object(
+            main_mod,
+            "_user_prep_has_multiple_prominent_people",
+            return_value=False,
+        ), mock.patch.object(
+            main_mod,
+            "_user_prep_crop_main_person",
+            return_value=(crop, [20, 10, 260, 430]),
+        ), mock.patch.object(
+            main_mod,
+            "_focus_score",
+            return_value=99.0,
+        ), mock.patch.object(
+            main_mod,
+            "_user_prep_validate_face",
+            return_value=(False, {"reason": "face_not_detected"}),
+        ) as face_patch, mock.patch.object(
+            main_mod,
+            "_remove_user_background_strict",
+            return_value=(b"fake-png-bytes", {"backend": "birefnet"}),
+        ), mock.patch.object(
+            main_mod,
+            "_upload_or_raise",
+            return_value="https://example.com/prepared.png",
+        ), mock.patch.object(
+            main_mod,
+            "_describe_user_image_for_prepare",
+            return_value="identity: test subject. pose: standing. current outfit: white dress. preserve: pose",
+        ):
+            response = client.post(
+                "/v1/user-image/prepare",
+                files={"file": ("user.png", payload, "image/png")},
+                data={"description_backend": "minicpm_service"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()["data"]
+        self.assertEqual(data["url"], "https://example.com/prepared.png")
+        self.assertIn("identity: test subject", data["promptDescription"])
+        face_patch.assert_not_called()
 
     def test_build_flux2_targeted_prompt_adds_saree_limb_guard(self):
         prompt = main_mod._build_flux2_targeted_prompt(
