@@ -1626,7 +1626,21 @@ def _resolve_garment_color_truth(
                 remapped.insert(0, light_label)
             return remapped
         p90_l = profile.get("p90L") if isinstance(profile, dict) else None
+        cast_corrected = profile.get("castCorrected") if isinstance(profile, dict) and isinstance(profile.get("castCorrected"), dict) else {}
+        cast_corrected_hints = list(
+            dict.fromkeys(
+                str(v).strip().lower()
+                for v in (profile.get("castCorrectedHints") or [])
+                if isinstance(profile, dict) and str(v).strip()
+            )
+        ) if isinstance(profile, dict) else []
+        cast_median_l = cast_corrected.get("medianL") if isinstance(cast_corrected, dict) else None
+        cast_mean_chroma = cast_corrected.get("meanChroma") if isinstance(cast_corrected, dict) else None
+        cast_mean_b = cast_corrected.get("meanB") if isinstance(cast_corrected, dict) else None
+        cast_is_neutral = bool(cast_corrected.get("isNeutral")) if isinstance(cast_corrected, dict) else False
         shadowed_light_neutral_terms = {
+            "black",
+            "charcoal",
             "brown",
             "tan",
             "beige",
@@ -1638,24 +1652,64 @@ def _resolve_garment_color_truth(
             "ivory",
             "cream",
         }
+        parser_primary_shadow_rescue = bool(
+            mask_source_norm.startswith("parser_strict_runtime")
+            or mask_source_norm.startswith("parser_relaxed_runtime")
+            or mask_source_norm.startswith("parser_bottom_refined_runtime")
+            or mask_source_norm.startswith("parser_bottom_spatial_runtime")
+        )
         if (
-            str(color_mask_source or "").strip().lower().startswith("parser_strict_runtime")
-            and str(target_type or "").strip().lower() in {"top", "outer"}
+            parser_primary_shadow_rescue
+            and str(target_type or "").strip().lower() in {"top", "outer", "bottom", "dress"}
+            and cast_is_neutral
+            and isinstance(cast_mean_chroma, (int, float))
+            and isinstance(cast_median_l, (int, float))
+            and isinstance(cast_mean_b, (int, float))
+            and float(cast_median_l) >= 48.0
+            and float(cast_mean_chroma) <= 10.5
+            and 2.0 <= float(cast_mean_b) <= 9.5
+            and all(term in shadowed_light_neutral_terms for term in (cast_corrected_hints or ordered)[:4])
+            and (
+                any(term in {"silver", "gray", "white", "off-white", "ivory", "cream"} for term in ordered[:3])
+                or any(term in {"silver", "gray", "white", "off-white", "ivory", "cream"} for term in cast_corrected_hints[:3])
+            )
+        ):
+            light_label = "ivory" if float(cast_mean_b) >= 4.0 else "off-white"
+            remapped: List[str] = [light_label]
+            for term in ordered:
+                if term in {"black", "charcoal", "brown", "tan", "gray", "silver"}:
+                    continue
+                candidate = light_label if term in {"off-white", "white", "cream"} else term
+                if candidate not in remapped:
+                    remapped.append(candidate)
+            if len(remapped) == 1:
+                remapped.append("cream" if float(cast_mean_b) >= 5.5 else "off-white")
+            return remapped
+        if (
+            parser_primary_shadow_rescue
+            and str(target_type or "").strip().lower() in {"top", "outer", "bottom", "dress"}
             and all(term in shadowed_light_neutral_terms for term in ordered[:4])
             and isinstance(mean_chroma, (int, float))
             and isinstance(median_l, (int, float))
             and isinstance(p90_l, (int, float))
             and isinstance(mean_b, (int, float))
             and bool(profile.get("isNeutral"))
-            and float(median_l) >= 58.0
-            and float(p90_l) >= 80.0
-            and float(mean_chroma) <= 11.5
-            and 1.5 <= float(mean_b) <= 8.5
+            and float(median_l) >= 48.0
+            and float(p90_l) >= 70.0
+            and float(mean_chroma) <= 13.5
+            and 1.0 <= float(mean_b) <= 10.5
+            and (
+                (
+                    any(term in {"silver", "gray", "white", "off-white", "ivory", "cream"} for term in ordered[:3])
+                    and float(p90_l) >= 70.0
+                )
+                or float(p90_l) >= 84.0
+            )
         ):
             light_label = "ivory" if float(mean_b) >= 4.0 else "off-white"
             remapped: List[str] = [light_label]
             for term in ordered:
-                if term in {"brown", "tan", "gray", "silver"}:
+                if term in {"black", "charcoal", "brown", "tan", "gray", "silver"}:
                     continue
                 candidate = light_label if term in {"off-white", "white", "cream"} else term
                 if candidate not in remapped:

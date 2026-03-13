@@ -708,6 +708,47 @@ def _extract_lab_color_profile(
         return {}
 
 
+def _apply_mask_highlight_white_balance(
+    image: Image.Image,
+    mask: Optional[np.ndarray],
+    highlight_percentile: float = 90.0,
+) -> Optional[Image.Image]:
+    try:
+        rgb = image.convert("RGB")
+        arr = np.array(rgb, dtype=np.float32)
+        if arr.ndim != 3 or arr.shape[2] != 3:
+            return None
+
+        pixels = arr.reshape(-1, 3)
+        if isinstance(mask, np.ndarray) and mask.shape[:2] == arr.shape[:2]:
+            keep = np.asarray(mask).astype(bool).reshape(-1)
+            if int(np.sum(keep)) > 64:
+                pixels = pixels[keep]
+        if pixels.size == 0 or int(pixels.shape[0]) < 64:
+            return None
+
+        luminance = (0.2126 * pixels[:, 0]) + (0.7152 * pixels[:, 1]) + (0.0722 * pixels[:, 2])
+        threshold = float(np.percentile(luminance, max(50.0, min(99.0, highlight_percentile))))
+        bright_pixels = pixels[luminance >= threshold]
+        if bright_pixels.size == 0:
+            bright_pixels = pixels
+
+        mean_rgb = np.mean(bright_pixels, axis=0)
+        target = float(np.max(mean_rgb))
+        if target <= 1.0:
+            return None
+
+        scales = target / np.clip(mean_rgb, 1.0, None)
+        scales = np.clip(scales, 0.85, 1.35)
+        if float(np.max(np.abs(scales - 1.0))) < 0.04:
+            return None
+
+        balanced = np.clip(arr * scales.reshape(1, 1, 3), 0, 255).astype(np.uint8)
+        return Image.fromarray(balanced)
+    except Exception:
+        return None
+
+
 def build_single_image_color_context(
     image: Image.Image,
     description: str = "",
@@ -777,6 +818,36 @@ def build_single_image_color_context(
         settings=config,
         mask=use_mask if isinstance(use_mask, np.ndarray) else None,
     )
+    profile_is_neutral = bool(isinstance(profile, dict) and profile.get("isNeutral"))
+
+    cast_corrected_profile: Optional[Dict[str, object]] = None
+    cast_corrected_hints: List[str] = []
+    if profile_is_neutral:
+        corrected_image = _apply_mask_highlight_white_balance(
+            image=image,
+            mask=use_mask if isinstance(use_mask, np.ndarray) else None,
+        )
+        if isinstance(corrected_image, Image.Image):
+            cast_corrected_profile = _extract_lab_color_profile(
+                image=corrected_image,
+                settings=config,
+                mask=use_mask if isinstance(use_mask, np.ndarray) else None,
+            )
+            corrected_palette = _extract_dominant_hex_colors_with_coverage(
+                image=corrected_image,
+                settings=config,
+                mask=use_mask if isinstance(use_mask, np.ndarray) else None,
+                top_k=palette_top_k,
+            )
+            cast_corrected_hints = _color_labels_from_hex_palette(
+                [str(entry.get("hex", "")).strip().upper() for entry in corrected_palette],
+                top_k=config.top_k,
+            )
+            if cast_corrected_profile:
+                profile = dict(profile or {})
+                profile["castCorrected"] = cast_corrected_profile
+                if cast_corrected_hints:
+                    profile["castCorrectedHints"] = list(cast_corrected_hints)
 
     image_colors = _color_labels_from_hex_palette(dominant_hexes, top_k=config.top_k)
     if not image_colors:
@@ -799,7 +870,6 @@ def build_single_image_color_context(
         for c in _extract_text_color_terms(description, max_items=config.top_k)
     ]
     hints = list(image_colors)
-    profile_is_neutral = bool(isinstance(profile, dict) and profile.get("isNeutral"))
     high_chroma = bool(
         isinstance(profile.get("meanChroma"), (int, float))
         and float(profile.get("meanChroma")) >= 18.0

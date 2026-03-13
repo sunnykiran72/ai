@@ -154,6 +154,97 @@ class SplitOutfitDetectionTests(unittest.TestCase):
         self.assertEqual(hints[0], "ivory")
         self.assertNotIn("brown", hints[:2])
 
+    def test_parser_top_shadowed_light_neutral_with_dark_shadow_prefers_ivory(self):
+        resolved = _resolve_garment_color_truth(
+            base_garment_prompt="halter top",
+            target_type="top",
+            dominant_hexes=["#786B56", "#867966", "#675B47", "#908573"],
+            color_hints=["gray", "tan", "black"],
+            color_profile={
+                "medianL": 52.8,
+                "p90L": 84.6,
+                "meanChroma": 10.4,
+                "meanB": 6.1,
+                "isNeutral": True,
+            },
+            color_mask_source="parser_strict_runtime",
+        )
+
+        hints = resolved.get("color_hints") or []
+        self.assertTrue(hints)
+        self.assertEqual(hints[0], "ivory")
+        self.assertNotIn("black", hints[:2])
+        self.assertNotIn("tan", hints[:2])
+
+    def test_parser_bottom_shadowed_light_neutral_prefers_ivory(self):
+        resolved = _resolve_garment_color_truth(
+            base_garment_prompt="mini skirt",
+            target_type="bottom",
+            dominant_hexes=["#9B9387", "#8F877C", "#A49F93", "#C8C7BF"],
+            color_hints=["gray", "silver"],
+            color_profile={
+                "medianL": 54.4,
+                "p90L": 82.1,
+                "meanChroma": 6.8,
+                "meanB": 4.6,
+                "isNeutral": True,
+            },
+            color_mask_source="parser_bottom_refined_runtime",
+        )
+
+        hints = resolved.get("color_hints") or []
+        self.assertTrue(hints)
+        self.assertEqual(hints[0], "ivory")
+
+    def test_parser_top_cast_corrected_light_neutral_prefers_ivory(self):
+        resolved = _resolve_garment_color_truth(
+            base_garment_prompt="long sleeve top",
+            target_type="top",
+            dominant_hexes=["#9EA199", "#B2B4AD", "#7D7C75", "#8A694B"],
+            color_hints=["silver", "gray", "brown"],
+            color_profile={
+                "medianL": 60.0,
+                "p90L": 71.76,
+                "meanChroma": 9.64,
+                "meanB": 8.13,
+                "isNeutral": True,
+                "castCorrected": {
+                    "medianL": 60.0,
+                    "meanChroma": 9.69,
+                    "meanB": 8.31,
+                    "isNeutral": True,
+                },
+                "castCorrectedHints": ["silver", "gray", "brown"],
+            },
+            color_mask_source="parser_strict_runtime",
+        )
+
+        hints = resolved.get("color_hints") or []
+        self.assertTrue(hints)
+        self.assertEqual(hints[0], "ivory")
+        self.assertNotIn("brown", hints[:2])
+
+    def test_parser_top_silver_gray_brown_shadow_prefers_ivory(self):
+        resolved = _resolve_garment_color_truth(
+            base_garment_prompt="long sleeve top",
+            target_type="top",
+            dominant_hexes=["#9EA199", "#B2B4AD", "#7D7C75", "#8D8D82", "#69513C"],
+            color_hints=["silver", "gray", "brown"],
+            color_profile={
+                "medianL": 60.0,
+                "p90L": 71.76,
+                "meanChroma": 9.64,
+                "meanB": 8.13,
+                "isNeutral": True,
+            },
+            color_mask_source="parser_strict_runtime",
+        )
+
+        hints = resolved.get("color_hints") or []
+        self.assertTrue(hints)
+        self.assertEqual(hints[0], "ivory")
+        self.assertNotIn("brown", hints[:2])
+
     def test_weak_mask_yellow_prompt_rescues_dark_neutral_pixel_drift(self):
         resolved = _resolve_garment_color_truth(
             base_garment_prompt="A long yellow dress with a high turtleneck and ruched detailing.",
