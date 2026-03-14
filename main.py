@@ -136,9 +136,25 @@ VTO_OUTPUT_CONTAINER = (
 USE_FLORENCE_HYBRID_VERIFY = os.getenv("USE_FLORENCE_HYBRID_VERIFY", "0") == "1"
 USE_FLORENCE_DETAILED_PROMPT = os.getenv("USE_FLORENCE_DETAILED_PROMPT", "0") == "1"
 FLUX2_ALLOW_QWEN_BACKEND = os.getenv("FLUX2_ALLOW_QWEN_BACKEND", "0") == "1"
-FLUX2_DESCRIPTOR_BACKEND = os.getenv("FLUX2_DESCRIPTOR_BACKEND", "minicpm").strip().lower()
-if FLUX2_DESCRIPTOR_BACKEND not in {"minicpm", "minicpm_service"}:
-    FLUX2_DESCRIPTOR_BACKEND = "minicpm"
+_RAW_MINICPM_SERVICE_URL = os.getenv("MINICPM_SERVICE_URL", "").strip().rstrip("/")
+_RAW_ANALYZE_MINICPM_SERVICE_URL = os.getenv("ANALYZE_MINICPM_SERVICE_URL", "").strip().rstrip("/")
+_MINICPM_SERVICE_URL_EXPLICIT = bool(_RAW_MINICPM_SERVICE_URL)
+_ANALYZE_MINICPM_SERVICE_URL_EXPLICIT = bool(_RAW_ANALYZE_MINICPM_SERVICE_URL)
+
+
+def _default_minicpm_family_backend() -> str:
+    # Prefer the standalone MiniCPM service when the deployment explicitly configures it.
+    # This avoids loading the same vision-language model inside the main API process.
+    if _ANALYZE_MINICPM_SERVICE_URL_EXPLICIT or _MINICPM_SERVICE_URL_EXPLICIT:
+        return "minicpm_service"
+    return "minicpm"
+
+
+FLUX2_DESCRIPTOR_BACKEND = os.getenv("FLUX2_DESCRIPTOR_BACKEND", "auto").strip().lower()
+if FLUX2_DESCRIPTOR_BACKEND == "auto":
+    FLUX2_DESCRIPTOR_BACKEND = _default_minicpm_family_backend()
+elif FLUX2_DESCRIPTOR_BACKEND not in {"minicpm", "minicpm_service"}:
+    FLUX2_DESCRIPTOR_BACKEND = _default_minicpm_family_backend()
 FLUX2_FIDELITY_BACKEND = os.getenv("FLUX2_FIDELITY_BACKEND", "florence").strip().lower()
 if FLUX2_FIDELITY_BACKEND not in {"florence", "qwen2_5_vl"}:
     FLUX2_FIDELITY_BACKEND = "florence"
@@ -180,8 +196,8 @@ FLUX2_MINICPM_PRODUCT_CAPTION_MAX_SIDE = max(512, _env_int("FLUX2_MINICPM_PRODUC
 FLUX2_MINICPM_PRODUCT_CAPTION_MIN_SIDE = max(256, _env_int("FLUX2_MINICPM_PRODUCT_CAPTION_MIN_SIDE", 512))
 FLUX2_MINICPM_USER_CAPTION_MAX_SIDE = max(512, _env_int("FLUX2_MINICPM_USER_CAPTION_MAX_SIDE", 1024))
 FLUX2_MINICPM_USER_CAPTION_MIN_SIDE = max(256, _env_int("FLUX2_MINICPM_USER_CAPTION_MIN_SIDE", 512))
-MINICPM_SERVICE_URL = os.getenv("MINICPM_SERVICE_URL", "http://127.0.0.1:8010").strip().rstrip("/")
-ANALYZE_MINICPM_SERVICE_URL = os.getenv("ANALYZE_MINICPM_SERVICE_URL", "").strip().rstrip("/")
+MINICPM_SERVICE_URL = _RAW_MINICPM_SERVICE_URL or "http://127.0.0.1:8010"
+ANALYZE_MINICPM_SERVICE_URL = _RAW_ANALYZE_MINICPM_SERVICE_URL
 MINICPM_SERVICE_TIMEOUT_S = max(5, _env_int("MINICPM_SERVICE_TIMEOUT_S", 60 if FLUX2_LOW_LATENCY_MODE else 120))
 MINICPM_SERVICE_CONNECT_TIMEOUT_S = max(
     1.0, _env_float("MINICPM_SERVICE_CONNECT_TIMEOUT_S", 6.0 if FLUX2_LOW_LATENCY_MODE else 10.0)
@@ -330,10 +346,12 @@ FLUX2_FORCE_RUNTIME_SCORING_FOR_SINGLE_CANDIDATE = os.getenv(
 ) == "1"
 FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND = os.getenv(
     "FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND",
-    "minicpm",
+    "auto",
 ).strip().lower()
-if FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND not in {"florence", "joycaption", "minicpm", "minicpm_service"}:
-    FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND = "minicpm"
+if FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND == "auto":
+    FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND = _default_minicpm_family_backend()
+elif FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND not in {"florence", "joycaption", "minicpm", "minicpm_service"}:
+    FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_BACKEND = _default_minicpm_family_backend()
 FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS = max(4, _env_int("FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS", 10))
 FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_SEED = max(0, _env_int("FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_SEED", 23))
 FLUX2_SINGLE_GARMENT_EXTRACT_UPLOAD_DEBUG = os.getenv("FLUX2_SINGLE_GARMENT_EXTRACT_UPLOAD_DEBUG", "0") == "1"
@@ -514,9 +532,11 @@ USER_PREP_ALPHA_MIN_TRANSPARENT_RATIO = min(
     0.99,
     max(0.0, _env_float("USER_PREP_ALPHA_MIN_TRANSPARENT_RATIO", 0.02)),
 )
-USER_PREP_DESCRIPTION_BACKEND = os.getenv("USER_PREP_DESCRIPTION_BACKEND", "minicpm").strip().lower()
-if USER_PREP_DESCRIPTION_BACKEND not in {"minicpm", "minicpm_service"}:
-    USER_PREP_DESCRIPTION_BACKEND = "minicpm"
+USER_PREP_DESCRIPTION_BACKEND = os.getenv("USER_PREP_DESCRIPTION_BACKEND", "auto").strip().lower()
+if USER_PREP_DESCRIPTION_BACKEND == "auto":
+    USER_PREP_DESCRIPTION_BACKEND = _default_minicpm_family_backend()
+elif USER_PREP_DESCRIPTION_BACKEND not in {"minicpm", "minicpm_service"}:
+    USER_PREP_DESCRIPTION_BACKEND = _default_minicpm_family_backend()
 USER_PREP_MIN_PROMPT_WORDS = max(4, _env_int("USER_PREP_MIN_PROMPT_WORDS", 10))
 USER_PREP_UPLOAD_CONTAINER = os.getenv("USER_PREP_UPLOAD_CONTAINER", VTO_OUTPUT_CONTAINER).strip() or VTO_OUTPUT_CONTAINER
 USER_PREP_MINICPM_PERSON_PROMPT = os.getenv(
@@ -1378,6 +1398,7 @@ def _resolve_garment_color_truth(
     color_hints: Optional[List[str]] = None,
     color_profile: Optional[Dict[str, object]] = None,
     color_mask_source: str = "",
+    color_sampling_mask_meta: Optional[Dict[str, object]] = None,
     fashion_color_classifier: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     structured_prompt_fields = dict(_parse_structured_descriptor(base_garment_prompt))
@@ -1429,9 +1450,16 @@ def _resolve_garment_color_truth(
     ]
     pixel_hints = list(dict.fromkeys(pixel_hints))
     mask_source_norm = str(color_mask_source or "").strip().lower()
+    signal_confidence = _estimate_color_signal_confidence(
+        color_mask_source=color_mask_source,
+        color_profile=color_profile if isinstance(color_profile, dict) else None,
+        color_sampling_mask_meta=color_sampling_mask_meta if isinstance(color_sampling_mask_meta, dict) else None,
+        resolved_source="pixel",
+    )
     weak_mask_source = bool(
         mask_source_norm.startswith("heuristic")
         or mask_source_norm in {"color_mask_error", "mask_error", "error", "disabled", "none"}
+        or float(signal_confidence) < 0.48
     )
     if weak_mask_source and pixel_hexes:
         pixel_from_hex = _color_labels_from_hex_palette(pixel_hexes, top_k=max(1, FLUX2_COLOR_LOCK_TOP_K))
@@ -1824,7 +1852,7 @@ def _resolve_garment_color_truth(
         should_apply = bool(
             top_hint in existing
             or (
-                weak_mask_source
+                (weak_mask_source or float(signal_confidence) < 0.62)
                 and (
                     not pixel_non_neutral
                     or all_existing_neutralish
@@ -1891,6 +1919,8 @@ def _resolve_garment_color_truth(
         "dominant_hexes": resolved_hexes,
         "color_hints": resolved_hints,
         "color_source": resolved_source,
+        "color_signal_confidence": round(float(signal_confidence), 4),
+        "color_signal_strength": _bucket_color_signal_confidence(signal_confidence),
         "fashion_color_classifier": fashion_color_classifier if isinstance(fashion_color_classifier, dict) else {},
     }
 
@@ -2058,6 +2088,18 @@ def _build_rich_color_metadata(
         except Exception:
             classifier_score = 0.0
 
+    signal_confidence = _estimate_color_signal_confidence(
+        color_mask_source=(
+            str(color_sampling_mask_meta.get("source") or "")
+            if isinstance(color_sampling_mask_meta, dict)
+            else ""
+        ),
+        color_profile=color_profile if isinstance(color_profile, dict) else None,
+        color_sampling_mask_meta=color_sampling_mask_meta if isinstance(color_sampling_mask_meta, dict) else None,
+        resolved_source="pixel",
+    )
+    signal_strength = _bucket_color_signal_confidence(signal_confidence)
+
     return {
         "primary_color_label": primary_label,
         "primary_color_family": primary_family,
@@ -2071,8 +2113,148 @@ def _build_rich_color_metadata(
         "descriptor_source": "profile_composition",
         "classifier_top_label": classifier_top,
         "classifier_top_score": round(classifier_score, 6) if classifier_signal else 0.0,
+        "signal_confidence": round(float(signal_confidence), 4),
+        "signal_strength": signal_strength,
         "sampling_mask": color_sampling_mask_meta if isinstance(color_sampling_mask_meta, dict) else {},
     }
+
+
+def _estimate_color_signal_confidence(
+    *,
+    color_mask_source: str = "",
+    color_profile: Optional[Dict[str, object]] = None,
+    color_sampling_mask_meta: Optional[Dict[str, object]] = None,
+    resolved_source: str = "",
+) -> float:
+    mask_source = str(color_mask_source or "").strip().lower()
+    resolved = str(resolved_source or "").strip().lower()
+    profile = color_profile if isinstance(color_profile, dict) else {}
+    sampling_meta = color_sampling_mask_meta if isinstance(color_sampling_mask_meta, dict) else {}
+
+    score = 0.42
+    if mask_source.startswith("parser_strict_runtime"):
+        score += 0.30
+    elif mask_source.startswith("detector_parser_intersection"):
+        score += 0.28
+    elif mask_source.startswith("parser_relaxed_runtime"):
+        score += 0.22
+    elif mask_source.startswith("parser_bottom_refined_runtime"):
+        score += 0.20
+    elif mask_source.startswith("parser_bottom_spatial_runtime"):
+        score += 0.14
+    elif mask_source.startswith("detector_mask_runtime"):
+        score += 0.08
+    elif mask_source.startswith("heuristic"):
+        score -= 0.16
+    elif mask_source in {"disabled", "none", "mask_error", "error", "color_mask_error"}:
+        score -= 0.22
+
+    try:
+        mask_pixels = int(sampling_meta.get("mask_pixels", 0) or 0)
+    except Exception:
+        mask_pixels = 0
+    try:
+        area_ratio = float(sampling_meta.get("area_ratio", 0.0) or 0.0)
+    except Exception:
+        area_ratio = 0.0
+    if mask_pixels >= 20000:
+        score += 0.07
+    elif mask_pixels >= 5000:
+        score += 0.04
+    elif 0 < mask_pixels < 512:
+        score -= 0.08
+    if area_ratio >= 0.08:
+        score += 0.05
+    elif area_ratio >= 0.03:
+        score += 0.02
+    elif 0.0 < area_ratio < 0.006:
+        score -= 0.08
+
+    if resolved == "pixel":
+        score += 0.06
+    elif resolved.startswith("fashion_basecolour"):
+        score -= 0.02
+    elif resolved.startswith("semantic_"):
+        score -= 0.08
+
+    median_l = profile.get("medianL")
+    mean_chroma = profile.get("meanChroma")
+    p90_l = profile.get("p90L")
+    if isinstance(median_l, (int, float)) and isinstance(mean_chroma, (int, float)):
+        score += 0.02
+        if (
+            isinstance(p90_l, (int, float))
+            and bool(profile.get("isNeutral"))
+            and float(p90_l) >= 70.0
+            and float(mean_chroma) <= 14.0
+        ):
+            score += 0.03
+
+    return max(0.05, min(0.99, float(score)))
+
+
+def _bucket_color_signal_confidence(score: float) -> str:
+    value = float(score or 0.0)
+    if value >= 0.74:
+        return "high"
+    if value >= 0.52:
+        return "medium"
+    return "low"
+
+
+def _should_prefer_metadata_color_signal(color_block: object) -> bool:
+    if not isinstance(color_block, dict):
+        return False
+    score_val = color_block.get("signal_confidence")
+    try:
+        score = float(score_val or 0.0)
+    except Exception:
+        score = 0.0
+    if score >= 0.58:
+        return True
+    resolved_source = str(color_block.get("resolved_source") or "").strip().lower()
+    mask_source = str(color_block.get("mask_source") or "").strip().lower()
+    if resolved_source.startswith("semantic_"):
+        return False
+    if mask_source.startswith("heuristic"):
+        return score >= 0.68
+    return bool(score >= 0.52)
+
+
+def _build_metadata_color_descriptor_lock(
+    color_block: object,
+    *,
+    item_index: int,
+    total_items: int,
+) -> str:
+    if not isinstance(color_block, dict):
+        return ""
+    if not _should_prefer_metadata_color_signal(color_block):
+        return ""
+
+    primary_descriptor = " ".join(str(color_block.get("primary_color_descriptor") or "").split()).strip()
+    if not primary_descriptor:
+        return ""
+    secondary_descriptor = " ".join(str(color_block.get("secondary_color_descriptor") or "").split()).strip()
+    undertone = str(color_block.get("undertone") or "").strip().lower()
+    saturation = str(color_block.get("saturation") or "").strip().lower()
+    brightness = str(color_block.get("brightness") or "").strip().lower()
+
+    prefix = f"item {item_index + 1}: " if total_items > 1 else ""
+    clause = prefix + primary_descriptor
+    if secondary_descriptor and secondary_descriptor not in {primary_descriptor, ""}:
+        clause += f" with {secondary_descriptor}"
+
+    modifiers: List[str] = []
+    if brightness in {"very_light", "light", "mid", "deep", "dark"}:
+        modifiers.append(f"brightness={brightness}")
+    if saturation in {"neutral", "pale", "muted", "soft", "balanced", "rich", "vivid"}:
+        modifiers.append(f"saturation={saturation}")
+    if undertone in {"warm", "cool", "neutral"}:
+        modifiers.append(f"undertone={undertone}")
+    if modifiers:
+        clause += " (" + ", ".join(modifiers) + ")"
+    return clause
 
 
 def _extract_garment_descriptor_facts(
@@ -2135,6 +2317,7 @@ def _build_garment_metadata(
         color_hints=color_hints,
         color_profile=color_profile if isinstance(color_profile, dict) else None,
         color_mask_source=color_mask_source,
+        color_sampling_mask_meta=color_sampling_mask_meta if isinstance(color_sampling_mask_meta, dict) else None,
         fashion_color_classifier=fashion_color_classifier if isinstance(fashion_color_classifier, dict) else None,
     )
     resolved_base_prompt = str(reconciled_color.get("base_garment_prompt") or base_prompt).strip()
@@ -2192,6 +2375,8 @@ def _build_garment_metadata(
             "profile": color_profile if isinstance(color_profile, dict) else {},
             "mask_source": str(color_mask_source or "").strip(),
             "resolved_source": str(reconciled_color.get("color_source") or "pixel"),
+            "signal_confidence": round(float(reconciled_color.get("color_signal_confidence", rich_color.get("signal_confidence", 0.0)) or 0.0), 4),
+            "signal_strength": str(reconciled_color.get("color_signal_strength") or rich_color.get("signal_strength") or "").strip(),
             "fashion_basecolour": (
                 reconciled_color.get("fashion_color_classifier")
                 if isinstance(reconciled_color.get("fashion_color_classifier"), dict)
@@ -2283,12 +2468,37 @@ def _extract_garment_metadata_color_block(garment_metadata: object) -> Dict[str,
     ]
     profile = color_block.get("profile") if isinstance(color_block.get("profile"), dict) else {}
     mask_source = str(color_block.get("mask_source") or "").strip()
+    sampling_mask = color_block.get("sampling_mask") if isinstance(color_block.get("sampling_mask"), dict) else {}
+    try:
+        signal_confidence = float(color_block.get("signal_confidence", 0.0) or 0.0)
+    except Exception:
+        signal_confidence = 0.0
+    if signal_confidence <= 0.0:
+        signal_confidence = _estimate_color_signal_confidence(
+            color_mask_source=mask_source,
+            color_profile=profile if isinstance(profile, dict) else None,
+            color_sampling_mask_meta=sampling_mask if isinstance(sampling_mask, dict) else None,
+            resolved_source=str(color_block.get("resolved_source") or "pixel"),
+        )
     return {
         "dominant_hexes": dominant_hexes,
         "color_hints": color_hints,
         "accent_hexes": accent_hexes,
         "profile": profile,
         "mask_source": mask_source,
+        "resolved_source": str(color_block.get("resolved_source") or "").strip(),
+        "signal_confidence": round(signal_confidence, 4),
+        "signal_strength": str(color_block.get("signal_strength") or _bucket_color_signal_confidence(signal_confidence)).strip(),
+        "primary_color_label": str(color_block.get("primary_color_label") or "").strip(),
+        "primary_color_family": str(color_block.get("primary_color_family") or "").strip(),
+        "secondary_color_label": str(color_block.get("secondary_color_label") or "").strip(),
+        "secondary_color_family": str(color_block.get("secondary_color_family") or "").strip(),
+        "primary_color_descriptor": str(color_block.get("primary_color_descriptor") or "").strip(),
+        "secondary_color_descriptor": str(color_block.get("secondary_color_descriptor") or "").strip(),
+        "brightness": str(color_block.get("brightness") or "").strip(),
+        "saturation": str(color_block.get("saturation") or "").strip(),
+        "undertone": str(color_block.get("undertone") or "").strip(),
+        "sampling_mask": sampling_mask,
     }
 
 def _strip_descriptor_color_clause(description: str) -> str:
@@ -3589,28 +3799,33 @@ def _build_flux2_visual_lock_clauses(
             meta_hints = [str(v).strip().lower() for v in (block.get("color_hints") or []) if str(v).strip()]
             meta_accents = [str(v).strip().upper() for v in (block.get("accent_hexes") or []) if str(v).strip()]
             meta_profile = block.get("profile") if isinstance(block.get("profile"), dict) else {}
-            if meta_hexes:
+            prefer_metadata = _should_prefer_metadata_color_signal(block)
+            if meta_hexes and prefer_metadata:
                 color_palettes[idx] = meta_hexes
                 color_palette_metrics[idx] = [{"hex": hx, "areaPercent": 0.0, "pixelCount": 0} for hx in meta_hexes]
-            if meta_hints:
+            if meta_hints and prefer_metadata:
                 color_hints[idx] = meta_hints
-            if meta_profile:
+            if meta_profile and prefer_metadata:
                 color_profiles[idx] = meta_profile
-            if meta_accents:
+            if meta_accents and prefer_metadata:
                 accent_hints[idx] = []
             ctx = contexts[idx] if isinstance(contexts[idx], dict) else {}
-            if meta_hexes:
+            if meta_hexes and prefer_metadata:
                 ctx["dominantHexes"] = meta_hexes
                 ctx["paletteHexes"] = meta_hexes
-            if meta_hints:
+            if meta_hints and prefer_metadata:
                 ctx["colorHints"] = meta_hints
                 ctx["hints"] = meta_hints
-            if meta_accents:
+            if meta_accents and prefer_metadata:
                 ctx["accentHexes"] = meta_accents
-            if meta_profile:
+            if meta_profile and prefer_metadata:
                 ctx["profile"] = meta_profile
             if block.get("mask_source"):
                 ctx["maskSource"] = block.get("mask_source")
+            if block.get("signal_confidence") is not None:
+                ctx["signalConfidence"] = block.get("signal_confidence")
+            if block.get("primary_color_descriptor"):
+                ctx["primaryColorDescriptor"] = block.get("primary_color_descriptor")
             contexts[idx] = ctx
 
         out["color_palettes"] = color_palettes
@@ -3706,6 +3921,29 @@ def _build_flux2_visual_lock_clauses(
                 + "). Avoid over-saturating, neon amplification, or warm/cool hue drift. "
                 + "Do not shift yellow toward orange/red, and do not shift white/off-white toward gray/silver. "
             )
+        descriptor_lock_items: List[str] = []
+        total_items = len(metadata_colors)
+        for idx, block in enumerate(metadata_colors):
+            descriptor_clause = _build_metadata_color_descriptor_lock(
+                block,
+                item_index=idx,
+                total_items=total_items,
+            )
+            if descriptor_clause:
+                descriptor_lock_items.append(descriptor_clause)
+        if descriptor_lock_items:
+            if len(descriptor_lock_items) == 1:
+                color_clause += (
+                    "Descriptive color lock from analyze metadata: preserve the garment as "
+                    + descriptor_lock_items[0]
+                    + ". Do not neutralize or flatten this color impression. "
+                )
+            else:
+                color_clause += (
+                    "Descriptive color lock from analyze metadata: "
+                    + "; ".join(descriptor_lock_items)
+                    + ". Keep each item's brightness, undertone, and saturation aligned to source. "
+                )
         out["color_clause"] = color_clause
 
     out["detail_clause"] = detail_clause
@@ -4129,15 +4367,15 @@ def _resolve_tryon_runtime_negative_prompt(
 def _normalize_descriptor_backend(raw: Optional[str]) -> str:
     value = str(raw or FLUX2_DESCRIPTOR_BACKEND).strip().lower()
     if value not in {"florence", "qwen2_5_vl", "joycaption", "minicpm", "minicpm_service"}:
-        return "minicpm"
+        return _default_minicpm_family_backend()
     if value == "qwen2_5_vl" and not FLUX2_ALLOW_QWEN_BACKEND:
-        return "minicpm"
+        return _default_minicpm_family_backend()
     return value
 
 def _normalize_prompt_descriptor_backend(raw: Optional[str]) -> str:
     value = str(raw or FLUX2_DESCRIPTOR_BACKEND).strip().lower()
     if value not in {"minicpm", "minicpm_service"}:
-        return "minicpm"
+        return _default_minicpm_family_backend()
     return value
 
 
@@ -10622,6 +10860,7 @@ def _run_flux2_cloth_only_extract(
         color_hints=color_hints,
         color_profile=color_profile if isinstance(color_profile, dict) else None,
         color_mask_source=color_mask_source,
+        color_sampling_mask_meta=descriptor_color_mask_meta if isinstance(descriptor_color_mask_meta, dict) else None,
         fashion_color_classifier=fashion_basecolour_trial if isinstance(fashion_basecolour_trial, dict) else None,
     )
     resolved_garment_desc = " ".join(
@@ -12517,9 +12756,19 @@ async def vto_tryon_flux2(request: Flux2TryonRequest):
         product_descriptor_color_hexes: List[List[str]] = []
         product_descriptor_color_hints: List[List[str]] = []
         for idx, product_img in enumerate(product_imgs):
-            metadata_hexes, metadata_hints = _extract_garment_metadata_color_payload(
+            metadata_color_block = _extract_garment_metadata_color_block(
                 product_garment_metadata[idx] if idx < len(product_garment_metadata) else {}
             )
+            metadata_hexes = [
+                str(v)
+                for v in (metadata_color_block.get("dominant_hexes") or [])
+                if str(v).strip()
+            ] if _should_prefer_metadata_color_signal(metadata_color_block) else []
+            metadata_hints = [
+                str(v)
+                for v in (metadata_color_block.get("color_hints") or [])
+                if str(v).strip()
+            ] if _should_prefer_metadata_color_signal(metadata_color_block) else []
             product_color_ctx = None
             if not metadata_hexes and not metadata_hints:
                 product_color_ctx = _build_single_image_color_context(
@@ -13499,6 +13748,7 @@ def health_check():
                 "use_florence_hybrid_verify": USE_FLORENCE_HYBRID_VERIFY,
                 "use_florence_detailed_prompt": USE_FLORENCE_DETAILED_PROMPT,
                 "flux2_descriptor_backend": FLUX2_DESCRIPTOR_BACKEND,
+                "flux2_descriptor_backend_default": _default_minicpm_family_backend(),
                 "flux2_fidelity_backend": FLUX2_FIDELITY_BACKEND,
                 "flux2_descriptor_compare": FLUX2_DESCRIPTOR_COMPARE,
                 "flux2_dress_second_pass_enabled": FLUX2_DRESS_SECOND_PASS_ENABLED,
@@ -13562,6 +13812,8 @@ def health_check():
                 "flux2_force_runtime_scoring_for_single_candidate": FLUX2_FORCE_RUNTIME_SCORING_FOR_SINGLE_CANDIDATE,
                 "minicpm_service_url": MINICPM_SERVICE_URL,
                 "analyze_minicpm_service_url": ANALYZE_MINICPM_SERVICE_URL or MINICPM_SERVICE_URL,
+                "minicpm_service_url_explicit": _MINICPM_SERVICE_URL_EXPLICIT,
+                "analyze_minicpm_service_url_explicit": _ANALYZE_MINICPM_SERVICE_URL_EXPLICIT,
                 "analyze_minicpm_service_url_override_enabled": bool(ANALYZE_MINICPM_SERVICE_URL),
                 "minicpm_service_timeout_s": MINICPM_SERVICE_TIMEOUT_S,
                 "minicpm_service_connect_timeout_s": MINICPM_SERVICE_CONNECT_TIMEOUT_S,

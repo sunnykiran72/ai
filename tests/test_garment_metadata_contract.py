@@ -1,12 +1,16 @@
 import unittest
 
+from PIL import Image
+
 import ai.main as main_mod
 
 from ai.main import (
+    _build_flux2_visual_lock_clauses,
     _build_flux2_single_garment_extract_negative_prompt,
     _build_flux2_single_garment_extract_prompt,
     _build_garment_metadata,
     _extract_garment_metadata_color_payload,
+    _extract_garment_metadata_color_block,
     _extract_garment_metadata_prompt,
     _extract_garment_metadata_target_type,
     _to_public_item,
@@ -261,6 +265,56 @@ class GarmentMetadataContractTests(unittest.TestCase):
         self.assertEqual(metadata["color"]["primary_color_label"], "white")
         self.assertEqual(metadata["color"]["primary_color_family"], "neutral_light")
         self.assertEqual(metadata["color"]["primary_color_descriptor"], "bright white")
+
+    def test_build_garment_metadata_includes_color_signal_confidence(self):
+        metadata = _build_garment_metadata(
+            base_garment_prompt="Ivory long sleeve top.",
+            descriptor_raw_text="Ivory long sleeve top.",
+            prompt_description="Ivory long sleeve top.",
+            prompt_source="flux2_extract_descriptor",
+            target_type="top",
+            backend_target_type="top",
+            style="top",
+            primary_category_key="tops",
+            category_key="tops",
+            dominant_hexes=["#F0E9D8", "#E2D9C7"],
+            color_hints=["ivory", "cream"],
+            color_profile={"medianL": 76.0, "meanChroma": 4.0, "meanB": 4.2, "isNeutral": True},
+            color_mask_source="parser_strict_runtime",
+            color_sampling_mask_meta={"source": "parser_strict_runtime", "mask_pixels": 12000, "area_ratio": 0.14},
+        )
+
+        color_block = _extract_garment_metadata_color_block(metadata)
+        self.assertGreater(float(color_block["signal_confidence"]), 0.7)
+        self.assertEqual(color_block["signal_strength"], "high")
+        self.assertEqual(color_block["primary_color_descriptor"], "light ivory")
+
+    def test_visual_lock_uses_high_confidence_metadata_descriptor(self):
+        image = Image.new("RGB", (32, 32), (240, 238, 232))
+        locks = _build_flux2_visual_lock_clauses(
+            product_images=[image],
+            garment_descriptions=["simple top"],
+            garment_metadata_list=[
+                {
+                    "color": {
+                        "dominant_hexes": ["#F0E9D8", "#E2D9C7"],
+                        "color_hints": ["ivory", "cream"],
+                        "profile": {"medianL": 76.0, "meanChroma": 4.0, "meanB": 4.2, "isNeutral": True},
+                        "mask_source": "parser_strict_runtime",
+                        "resolved_source": "pixel",
+                        "signal_confidence": 0.84,
+                        "signal_strength": "high",
+                        "primary_color_descriptor": "light warm ivory",
+                        "brightness": "light",
+                        "saturation": "neutral",
+                        "undertone": "warm",
+                    }
+                }
+            ],
+        )
+
+        self.assertIn("light warm ivory", str(locks.get("color_clause") or ""))
+        self.assertIn("Descriptive color lock", str(locks.get("color_clause") or ""))
 
     def test_build_garment_metadata_adds_rich_color_descriptors_and_sampling_meta(self):
         metadata = _build_garment_metadata(

@@ -796,6 +796,45 @@ class PromptingStageTests(unittest.TestCase):
         self.assertEqual(main_mod._normalize_prompt_descriptor_backend("minicpm"), "minicpm")
         self.assertEqual(main_mod._normalize_prompt_descriptor_backend("minicpm_service"), "minicpm_service")
 
+    def test_default_minicpm_family_backend_prefers_explicit_service(self):
+        original_service = main_mod._MINICPM_SERVICE_URL_EXPLICIT
+        original_analyze_service = main_mod._ANALYZE_MINICPM_SERVICE_URL_EXPLICIT
+        try:
+            main_mod._MINICPM_SERVICE_URL_EXPLICIT = True
+            main_mod._ANALYZE_MINICPM_SERVICE_URL_EXPLICIT = False
+            self.assertEqual(main_mod._default_minicpm_family_backend(), "minicpm_service")
+
+            main_mod._MINICPM_SERVICE_URL_EXPLICIT = False
+            main_mod._ANALYZE_MINICPM_SERVICE_URL_EXPLICIT = True
+            self.assertEqual(main_mod._default_minicpm_family_backend(), "minicpm_service")
+
+            main_mod._MINICPM_SERVICE_URL_EXPLICIT = False
+            main_mod._ANALYZE_MINICPM_SERVICE_URL_EXPLICIT = False
+            self.assertEqual(main_mod._default_minicpm_family_backend(), "minicpm")
+        finally:
+            main_mod._MINICPM_SERVICE_URL_EXPLICIT = original_service
+            main_mod._ANALYZE_MINICPM_SERVICE_URL_EXPLICIT = original_analyze_service
+
+    def test_normalize_prompt_descriptor_backend_uses_service_default_when_configured(self):
+        original_backend = main_mod.FLUX2_DESCRIPTOR_BACKEND
+        original_service = main_mod._MINICPM_SERVICE_URL_EXPLICIT
+        original_analyze_service = main_mod._ANALYZE_MINICPM_SERVICE_URL_EXPLICIT
+        try:
+            main_mod.FLUX2_DESCRIPTOR_BACKEND = "minicpm_service"
+            main_mod._MINICPM_SERVICE_URL_EXPLICIT = True
+            main_mod._ANALYZE_MINICPM_SERVICE_URL_EXPLICIT = False
+            self.assertEqual(main_mod._normalize_prompt_descriptor_backend(None), "minicpm_service")
+            self.assertEqual(main_mod._normalize_prompt_descriptor_backend("invalid"), "minicpm_service")
+
+            main_mod.FLUX2_DESCRIPTOR_BACKEND = "minicpm"
+            main_mod._MINICPM_SERVICE_URL_EXPLICIT = False
+            main_mod._ANALYZE_MINICPM_SERVICE_URL_EXPLICIT = False
+            self.assertEqual(main_mod._normalize_prompt_descriptor_backend("invalid"), "minicpm")
+        finally:
+            main_mod.FLUX2_DESCRIPTOR_BACKEND = original_backend
+            main_mod._MINICPM_SERVICE_URL_EXPLICIT = original_service
+            main_mod._ANALYZE_MINICPM_SERVICE_URL_EXPLICIT = original_analyze_service
+
     def test_download_image_can_preserve_alpha(self):
         rgba = Image.new("RGBA", (2, 2), (255, 0, 0, 0))
         buf = io.BytesIO()
