@@ -39,6 +39,12 @@ class GarmentColorMaskerSettings:
     parser_skin_min_remaining_ratio: float = 0.32
     parser_bottom_refine_min_overlap_ratio: float = 0.55
     parser_bottom_refine_min_heuristic_overlap_ratio: float = 0.18
+    top_dress_join_min_component_ratio: float = 0.018
+    top_dress_join_min_relative_ratio: float = 0.22
+    bottom_dress_raw_min_ratio: float = 0.05
+    bottom_dress_rescue_min_ratio: float = 0.02
+    bottom_dress_rescue_min_overlap_ratio: float = 0.22
+    bottom_dress_rescue_min_component_ratio: float = 0.012
 
 
 class GarmentColorMasker:
@@ -98,7 +104,7 @@ class GarmentColorMasker:
     ) -> Tuple[np.ndarray, Dict[str, object]]:
         normalized_type = str(garment_type or "").strip().lower()
         parser_variant = str((parser_meta or {}).get("parser_variant") or "").strip().lower()
-        if normalized_type != "bottom" or parser_variant != "bottom_spatial_rescue":
+        if normalized_type != "bottom" or parser_variant not in {"bottom_spatial_rescue", "bottom_dress_rescue"}:
             return parser_mask, parser_meta
 
         heuristic_mask, heuristic_meta = self._mask_from_heuristic(image, garment_type, description=description)
@@ -156,6 +162,20 @@ class GarmentColorMasker:
                 mask_arr = np.asarray(mask).astype(bool)
                 if int(np.sum(mask_arr)) <= 0:
                     continue
+                variant_norm = str(variant or "").strip().lower()
+                if str(garment_type or "").strip().lower() in {"top", "bottom"}:
+                    candidate_mask = mask_arr
+                    skin_pixels = 0
+                    cleaned = candidate_mask
+                    if int(np.sum(cleaned)) >= int(self.settings.min_pixels) and float(np.mean(cleaned)) >= float(min_area_ratio):
+                        return cleaned, {
+                            "source": mask_source,
+                            "used": True,
+                            "mask_pixels": int(np.sum(cleaned)),
+                            "area_ratio": round(float(np.mean(cleaned)), 6),
+                            "skin_pixels_removed": skin_pixels,
+                            "parser_variant": variant,
+                        }
                 candidate_mask, skin_pixels = self._strip_skin_from_parser_mask(
                     mask=mask_arr,
                     rgb=rgb,
@@ -270,27 +290,27 @@ class GarmentColorMasker:
             "right_shoe",
             "bag",
             "scarf",
-            "belt",
+            "jewelry",
         )
         configs = {
             "top": {
-                "strict_keep": ("top", "upper", "upper_clothes"),
-                "relaxed_keep": ("top", "upper", "upper_clothes", "scarf"),
+                "strict_keep": ("top", "upper", "upper_clothes", "upper-clothes"),
+                "relaxed_keep": ("top", "upper", "upper_clothes", "upper-clothes"),
                 "kill": body_aliases + ("bottom", "pants", "trousers", "skirt", "shorts", "dress", "outer", "outerwear", "coat", "jacket", "blazer"),
             },
             "outer": {
                 "strict_keep": ("outer", "outerwear", "coat", "jacket", "blazer", "hoodie"),
-                "relaxed_keep": ("outer", "outerwear", "coat", "jacket", "blazer", "hoodie", "top", "upper", "upper_clothes"),
+                "relaxed_keep": ("outer", "outerwear", "coat", "jacket", "blazer", "hoodie", "top", "upper", "upper_clothes", "upper-clothes"),
                 "kill": body_aliases + ("bottom", "pants", "trousers", "skirt", "shorts", "dress"),
             },
             "bottom": {
-                "strict_keep": ("bottom", "pants", "trousers", "skirt", "shorts"),
-                "relaxed_keep": ("bottom", "pants", "trousers", "skirt", "shorts"),
+                "strict_keep": ("bottom", "pants", "trousers", "skirt", "shorts", "belt"),
+                "relaxed_keep": ("bottom", "pants", "trousers", "skirt", "shorts", "belt"),
                 "kill": body_aliases + ("top", "upper", "upper_clothes", "outer", "outerwear", "coat", "jacket", "blazer", "dress"),
             },
             "dress": {
                 "strict_keep": ("dress",),
-                "relaxed_keep": ("dress", "top", "upper", "upper_clothes", "skirt"),
+                "relaxed_keep": ("dress", "top", "upper", "upper_clothes", "upper-clothes", "skirt", "belt"),
                 "kill": body_aliases + ("outer", "outerwear", "coat", "jacket", "blazer", "pants", "trousers", "shorts"),
             },
         }
@@ -308,18 +328,66 @@ class GarmentColorMasker:
             relaxed_mask = None
         return strict_mask, relaxed_mask
 
+    def _join_connected_mask(
+        self,
+        base_mask: np.ndarray,
+        parsing: np.ndarray,
+        runtime_labels: Dict[str, int],
+        extra_aliases: Tuple[str, ...],
+    ) -> Optional[np.ndarray]:
+        base = np.asarray(base_mask).astype(bool)
+        if base.size == 0 or not np.any(base):
+            return None
+        extra = self._mask_for_aliases(parsing, runtime_labels, extra_aliases)
+        if extra.size == 0 or not np.any(extra):
+            return None
+        try:
+            import cv2
+
+            dilated = cv2.dilate(
+                (base.astype(np.uint8) * 255),
+                np.ones((3, 3), np.uint8),
+                iterations=1,
+            ) > 0
+            if not np.any(extra & dilated):
+                return None
+            num_labels, labels, stats, _ = cv2.connectedComponentsWithStats((extra.astype(np.uint8) * 255))
+            touching = np.zeros_like(extra, dtype=bool)
+            total_pixels = float(max(1, extra.shape[0] * extra.shape[1]))
+            base_pixels = int(np.sum(base))
+            for idx in range(1, int(num_labels)):
+                if int(stats[idx, cv2.CC_STAT_AREA]) <= 0:
+                    continue
+                comp = labels == idx
+                if np.any(comp & dilated):
+                    comp_pixels = int(stats[idx, cv2.CC_STAT_AREA])
+                    comp_ratio = float(comp_pixels) / total_pixels
+                    if comp_ratio < float(self.settings.top_dress_join_min_component_ratio):
+                        continue
+                    if base_pixels > 0 and comp_pixels < int(base_pixels * float(self.settings.top_dress_join_min_relative_ratio)):
+                        continue
+                    touching |= comp
+            if not np.any(touching):
+                return None
+            joined = base | touching
+        except Exception:
+            return None
+        return self._cleanup_mask(joined, keep_largest=True)
+
     def _build_bottom_spatial_rescue_mask(
         self,
         parsing: np.ndarray,
         runtime_labels: Dict[str, int],
+        aliases_override: Optional[Tuple[str, ...]] = None,
     ) -> Optional[np.ndarray]:
         h, w = parsing.shape[:2]
         if h <= 0 or w <= 0:
             return None
-        garment_aliases = (
+        garment_aliases = aliases_override or (
             "top",
             "upper",
             "upper_clothes",
+            "upper-clothes",
             "outer",
             "outerwear",
             "coat",
@@ -331,6 +399,8 @@ class GarmentColorMasker:
             "trousers",
             "skirt",
             "shorts",
+            "belt",
+            "scarf",
         )
         kill_aliases = (
             "background",
@@ -352,6 +422,7 @@ class GarmentColorMasker:
             "right_shoe",
             "bag",
             "scarf",
+            "jewelry",
         )
         garment_mask = self._mask_for_aliases(parsing, runtime_labels, garment_aliases)
         kill_mask = self._mask_for_aliases(parsing, runtime_labels, kill_aliases)
@@ -364,6 +435,64 @@ class GarmentColorMasker:
             return None
         return rescue_mask
 
+    def _build_bottom_dress_rescue_mask(
+        self,
+        parsing: np.ndarray,
+        runtime_labels: Dict[str, int],
+    ) -> Optional[np.ndarray]:
+        h, w = parsing.shape[:2]
+        if h <= 0 or w <= 0:
+            return None
+        dress_mask = self._mask_for_aliases(parsing, runtime_labels, ("dress",))
+        if dress_mask.size == 0 or not np.any(dress_mask):
+            return None
+        y = np.arange(h)[:, None]
+        x = np.arange(w)[None, :]
+        lower_region = y >= int(0.34 * h)
+        center_region = (x >= int(0.05 * w)) & (x <= int(0.95 * w))
+        total_pixels = float(max(1, h * w))
+        try:
+            import cv2
+
+            num_labels, labels, stats, _ = cv2.connectedComponentsWithStats((dress_mask.astype(np.uint8) * 255))
+            kept = np.zeros_like(dress_mask, dtype=bool)
+            for idx in range(1, int(num_labels)):
+                comp_area = int(stats[idx, cv2.CC_STAT_AREA])
+                if comp_area <= 0:
+                    continue
+                comp_ratio = float(comp_area) / total_pixels
+                if comp_ratio < float(self.settings.bottom_dress_rescue_min_component_ratio):
+                    continue
+                comp = labels == idx
+                comp_lower = comp & lower_region
+                overlap_ratio = float(np.sum(comp_lower)) / float(max(1, comp_area))
+                if overlap_ratio < float(self.settings.bottom_dress_rescue_min_overlap_ratio):
+                    continue
+                kept |= comp
+            if not np.any(kept):
+                return None
+            kept = kept & center_region
+            return self._cleanup_mask(kept, keep_largest=True)
+        except Exception:
+            return None
+
+    def _build_bottom_dress_raw_mask(
+        self,
+        parsing: np.ndarray,
+        runtime_labels: Dict[str, int],
+    ) -> Optional[np.ndarray]:
+        h, w = parsing.shape[:2]
+        if h <= 0 or w <= 0:
+            return None
+        dress_mask = self._mask_for_aliases(parsing, runtime_labels, ("dress",))
+        if dress_mask.size == 0 or not np.any(dress_mask):
+            return None
+        total_pixels = float(max(1, h * w))
+        ratio = float(np.sum(dress_mask)) / total_pixels
+        if ratio < float(self.settings.bottom_dress_raw_min_ratio):
+            return None
+        return self._cleanup_mask(dress_mask, keep_largest=False)
+
     def _parser_mask_candidates(
         self,
         parsing: np.ndarray,
@@ -373,6 +502,44 @@ class GarmentColorMasker:
         candidates: list[Tuple[Optional[np.ndarray], str, float, str]] = []
         if runtime_labels:
             strict_mask, relaxed_mask = self._build_type_specific_parser_masks(parsing, garment_type, runtime_labels)
+            if str(garment_type or "").strip().lower() == "top":
+                base_mask = strict_mask if strict_mask is not None else relaxed_mask
+                joined = self._join_connected_mask(
+                    base_mask=base_mask,
+                    parsing=parsing,
+                    runtime_labels=runtime_labels,
+                    extra_aliases=("dress",),
+                ) if base_mask is not None else None
+                if joined is not None:
+                    candidates.append(
+                        (
+                            joined,
+                            "parser_top_dress_join",
+                            float(self.settings.parser_min_area_ratio),
+                            "top_dress_join",
+                        )
+                    )
+            if str(garment_type or "").strip().lower() == "bottom":
+                raw_dress = self._build_bottom_dress_raw_mask(parsing, runtime_labels)
+                if raw_dress is not None:
+                    candidates.append(
+                        (
+                            raw_dress,
+                            "parser_bottom_dress_raw",
+                            float(self.settings.bottom_dress_raw_min_ratio),
+                            "bottom_dress_raw",
+                        )
+                    )
+                dress_rescue = self._build_bottom_dress_rescue_mask(parsing, runtime_labels)
+                if dress_rescue is not None:
+                    candidates.append(
+                        (
+                            dress_rescue,
+                            "parser_bottom_dress_rescue",
+                            float(self.settings.bottom_dress_rescue_min_ratio),
+                            "bottom_dress_rescue",
+                        )
+                    )
             candidates.append(
                 (
                     strict_mask,
@@ -469,12 +636,22 @@ class GarmentColorMasker:
             return None, {"source": "heuristic", "used": False, "reason": "bad_image"}
         h, w = arr.shape[:2]
 
+        base_meta: Dict[str, object] = {}
         base = self.base_mask_fn(rgb)
+        if isinstance(base, tuple):
+            base, meta = base
+            if isinstance(meta, dict):
+                base_meta = dict(meta)
         if not isinstance(base, np.ndarray):
-            return None, {"source": "heuristic", "used": False, "reason": "base_mask_empty"}
+            return None, {"source": "heuristic", "used": False, "reason": "base_mask_empty", "base_mask": base_meta}
         base = np.asarray(base).astype(bool)
         if int(np.sum(base)) < max(self.settings.min_pixels, int(self.settings.min_area_ratio * h * w)):
-            return None, {"source": "heuristic", "used": False, "reason": "base_mask_too_small"}
+            return None, {
+                "source": "heuristic",
+                "used": False,
+                "reason": "base_mask_too_small",
+                "base_mask": base_meta,
+            }
 
         skin = np.zeros((h, w), dtype=bool)
         if callable(self.skin_mask_fn):
@@ -487,6 +664,48 @@ class GarmentColorMasker:
         working = base & (~skin)
         if int(np.sum(working)) < max(self.settings.min_pixels, int(0.06 * np.sum(base))):
             working = base
+
+        parser_support_used = False
+        parser_support_reason = "none"
+        parser_support_ratio = 0.0
+        if self.parser is not None:
+            try:
+                parsing = self.parser.parse(rgb)
+                runtime_labels = self._runtime_labels()
+                parser_support = None
+                if isinstance(parsing, np.ndarray) and runtime_labels:
+                    strict_mask, relaxed_mask = self._build_type_specific_parser_masks(
+                        parsing,
+                        garment_type,
+                        runtime_labels,
+                    )
+                    parser_support = strict_mask if strict_mask is not None else relaxed_mask
+                    if parser_support is None and garment_type in {"top", "bottom"}:
+                        dress_mask = self._mask_for_aliases(parsing, runtime_labels, ("dress",))
+                        if np.any(dress_mask):
+                            y = np.arange(h)[:, None]
+                            if garment_type == "top":
+                                region = y <= int(0.66 * h)
+                                parser_support_reason = "dress_fallback_top"
+                            else:
+                                region = y >= int(0.34 * h)
+                                parser_support_reason = "dress_fallback_bottom"
+                            parser_support = dress_mask & region
+                    if isinstance(parser_support, np.ndarray) and np.any(parser_support):
+                        dilated = cv2.dilate(
+                            (parser_support.astype(np.uint8) * 255),
+                            np.ones((3, 3), np.uint8),
+                            iterations=1,
+                        ) > 0
+                        intersect = working & dilated
+                        if int(np.sum(intersect)) >= max(self.settings.min_pixels, int(0.04 * np.sum(working))):
+                            working = intersect
+                            parser_support_used = True
+                            parser_support_ratio = float(np.mean(parser_support))
+                            if parser_support_reason == "none":
+                                parser_support_reason = "parser_support"
+            except Exception:
+                parser_support_used = False
 
         if garment_type == "bottom":
             # Heuristic skin suppression for bottoms when parser is unavailable.
@@ -547,6 +766,10 @@ class GarmentColorMasker:
                 "used": True,
                 "reason": "single_component",
                 "mask_pixels": int(np.sum(cleaned)),
+                "parser_support_used": parser_support_used,
+                "parser_support_reason": parser_support_reason,
+                "parser_support_ratio": round(float(parser_support_ratio), 6),
+                "base_mask": base_meta,
             }
 
         seed_lab = self._seed_lab(arr=arr, working=working, garment_type=garment_type)
@@ -601,6 +824,10 @@ class GarmentColorMasker:
                 "used": True,
                 "reason": "rank_empty",
                 "mask_pixels": int(np.sum(cleaned)),
+                "parser_support_used": parser_support_used,
+                "parser_support_reason": parser_support_reason,
+                "parser_support_ratio": round(float(parser_support_ratio), 6),
+                "base_mask": base_meta,
             }
 
         ranked.sort(key=lambda item: item[0], reverse=True)
@@ -628,6 +855,10 @@ class GarmentColorMasker:
             "mask_pixels": int(np.sum(cleaned)),
             "area_ratio": round(float(np.mean(cleaned)), 6),
             "keep_labels": keep_labels,
+            "parser_support_used": parser_support_used,
+            "parser_support_reason": parser_support_reason,
+            "parser_support_ratio": round(float(parser_support_ratio), 6),
+            "base_mask": base_meta,
         }
 
     def _mask_shape_ok(

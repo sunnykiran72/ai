@@ -164,7 +164,7 @@ def run_selected_item_extraction_or_response(
             garment_type=selected_type,
             prompt_description="",
             fallback_prompt_description=selected_prompt_hint,
-            description_backend="minicpm",
+            description_backend="minicpm_service",
             steps=flux2_single_garment_extract_default_steps,
             seed=flux2_single_garment_extract_default_seed,
             descriptor_source_image=selected_item.get("_image_obj") or extract_source_image,

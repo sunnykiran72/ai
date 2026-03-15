@@ -643,7 +643,7 @@ class AIEngine:
         )
         self.garment_color_masker = GarmentColorMasker(
             parser=self.parser,
-            base_mask_fn=lambda image: _get_clean_foreground_mask(image),
+            base_mask_fn=lambda image: _get_heuristic_base_mask(image),
             skin_mask_fn=lambda rgb: _skin_like_mask(rgb),
         )
         self.florence = FlorenceRunner()
@@ -1135,7 +1135,7 @@ def _parse_garment_prompt_sections(
                 or ""
             )
         )
-        json_contract_valid = bool(base_key_present and avoid_key_present)
+        json_contract_valid = bool(base_key_present)
         source_format = "json"
 
     if not base_prompt:
@@ -2738,6 +2738,8 @@ _COLOR_LABEL_RGB: List[Tuple[str, Tuple[int, int, int]]] = [
     ("gray", (128, 128, 128)),
     ("silver", (185, 185, 185)),
     ("white", (245, 245, 245)),
+    ("off-white", (242, 242, 236)),
+    ("cream", (244, 235, 215)),
     ("ivory", (242, 235, 210)),
     ("beige", (214, 192, 155)),
     ("champagne", (233, 214, 170)),
@@ -2999,6 +3001,7 @@ def _augment_pixel_hints_with_muted_hue_family(
     mean_a = float(profile.get("meanA") or 0.0)
     mean_b = float(profile.get("meanB") or 0.0)
     median_l = float(profile.get("medianL") or 0.0)
+    p90_l = float(profile.get("p90L") or 0.0)
     near_white = _profile_is_near_white(profile)
     soft_warm_neutrals = {"beige", "champagne", "tan", "nude", "ivory", "cream", "off-white", "white"}
     light_neutral_majority = sum(
@@ -3006,6 +3009,8 @@ def _augment_pixel_hints_with_muted_hue_family(
         for term in ordered[:3]
         if term in soft_warm_neutrals or term in {"silver", "gray"}
     ) >= 2
+    if bool(profile.get("isNeutral")) and mean_chroma <= 14.0 and median_l >= 50.0 and p90_l >= 70.0:
+        return ordered
     promoted: Optional[str] = None
 
     if (
@@ -3023,7 +3028,7 @@ def _augment_pixel_hints_with_muted_hue_family(
             and mean_chroma >= 6.5
             and (mean_a <= -4.0 or mean_b >= 5.0)
             and not near_white
-            and not (light_neutral_majority and median_l >= 54.0 and mean_chroma <= 12.0)
+            and not (light_neutral_majority and median_l >= 50.0 and mean_chroma <= 14.0)
         ):
             promoted = "olive" if mean_b >= 7.0 and median_l < 66.0 else "green"
         elif (float(hue) >= 320.0 or float(hue) <= 25.0) and mean_a >= 4.0 and median_l >= 52.0:
@@ -3588,6 +3593,54 @@ def _get_clean_foreground_mask(
     except Exception as e:
         logger.warning(f"Clean foreground mask extraction failed: {e}")
         return None
+
+def _get_birefnet_alpha_mask(
+    image: Image.Image,
+    min_keep_ratio: float = 0.02,
+    alpha_threshold: int = 24,
+) -> Optional[np.ndarray]:
+    try:
+        buf = io.BytesIO()
+        image.convert("RGB").save(buf, format="PNG")
+        out_bytes, meta = _remove_background_with_birefnet(buf.getvalue())
+        if not out_bytes:
+            return None
+        out_img = Image.open(io.BytesIO(out_bytes)).convert("RGBA")
+        alpha = np.asarray(out_img)[:, :, 3]
+        mask = alpha >= int(alpha_threshold)
+        keep = int(np.sum(mask))
+        h, w = alpha.shape[:2]
+        if keep < max(64, int(min_keep_ratio * h * w)):
+            return None
+        return mask.astype(bool)
+    except Exception as err:
+        logger.warning(f"BiRefNet alpha mask extraction failed: {err}")
+        return None
+
+
+def _get_heuristic_base_mask(image: Image.Image) -> tuple[Optional[np.ndarray], dict]:
+    biref = _get_birefnet_alpha_mask(image)
+    if isinstance(biref, np.ndarray):
+        return biref, {"source": "birefnet_alpha"}
+    clean = _get_clean_foreground_mask(image)
+    if isinstance(clean, np.ndarray):
+        return clean, {"source": "clean_foreground"}
+    try:
+        buf = io.BytesIO()
+        image.convert("RGB").save(buf, format="PNG")
+        rembg_out = _remove_background_with_rembg(buf.getvalue())
+    except Exception:
+        rembg_out = (None, {})
+    if rembg_out and rembg_out[0]:
+        try:
+            out_img = Image.open(io.BytesIO(rembg_out[0])).convert("RGBA")
+            alpha = np.asarray(out_img)[:, :, 3]
+            mask = alpha >= 24
+            if int(np.sum(mask)) >= max(64, int(0.02 * alpha.shape[0] * alpha.shape[1])):
+                return mask.astype(bool), {"source": "rembg_alpha"}
+        except Exception:
+            pass
+    return None, {"source": "none"}
 
 def _trim_lab_profile_outliers(
     lab_pixels: np.ndarray,
@@ -4550,6 +4603,8 @@ def _describe_garment_with_backend(
     garment_type: Optional[str] = None,
     dominant_color_hexes: Optional[List[str]] = None,
     color_hints: Optional[List[str]] = None,
+    accent_hexes: Optional[List[str]] = None,
+    accent_hints: Optional[List[str]] = None,
 ) -> str:
     resolved = _normalize_descriptor_backend(backend)
     if resolved == "minicpm_service":
@@ -4571,6 +4626,8 @@ def _describe_garment_with_backend(
                     garment_type=str(garment_type or ""),
                     dominant_color_hexes=dominant_color_hexes,
                     color_hints=color_hints,
+                    accent_hexes=accent_hexes,
+                    accent_hints=accent_hints,
                 ),
                 return_raw=True,
             )
@@ -4593,6 +4650,8 @@ def _describe_garment_with_backend(
                         garment_type=str(garment_type or ""),
                         dominant_color_hexes=dominant_color_hexes,
                         color_hints=color_hints,
+                        accent_hexes=accent_hexes,
+                        accent_hints=accent_hints,
                     ),
                 )
             ).strip()
@@ -4623,10 +4682,7 @@ def _minicpm_bundle_has_valid_json_contract(bundle: Optional[Dict[str, str]]) ->
     if not isinstance(bundle, dict):
         return False
     base_prompt = " ".join(str(bundle.get("base_garment_prompt") or "").split()).strip()
-    return bool(
-        str(bundle.get("json_contract_valid") or "").strip().lower() == "true"
-        and base_prompt
-    )
+    return bool(base_prompt)
 
 
 def _default_extraction_avoid_clause_for_type(garment_type: Optional[str]) -> str:
@@ -4703,22 +4759,20 @@ def _ensure_garment_prompt_bundle_avoid_clause(
     return ensured
 
 
-def _apply_florence_top_avoid_clause(
+def _apply_florence_avoid_clause(
     bundle: Dict[str, str],
     *,
     image: Image.Image,
     garment_type: Optional[str] = None,
 ) -> Dict[str, str]:
     gtype = _normalize_garment_type(garment_type) or ""
-    if gtype != "top":
-        return bundle
     try:
         florence = getattr(engine, "florence", None)
         if florence is None:
             return bundle
         florence_caption = " ".join(str(florence.describe_garment_short(image) or "").split()).strip()
     except Exception as err:
-        logger.warning("Florence top avoid-clause support failed: %s", err)
+        logger.warning("Florence avoid-clause support failed: %s", err)
         return bundle
 
     florence_clause = _build_florence_contamination_avoid_clause(
@@ -4743,7 +4797,7 @@ def _apply_florence_top_avoid_clause(
         f"BASE_GARMENT_PROMPT: {updated.get('base_garment_prompt') or 'Garment.'}\n"
         f"EXTRACTION_AVOID_CLAUSE: {merged_clause}"
     )
-    updated["avoid_clause_source"] = "florence_top_support"
+    updated["avoid_clause_source"] = "florence_support"
     return updated
 
 
@@ -4752,22 +4806,19 @@ def _build_minicpm_garment_retry_prompt(
     garment_type: str,
     dominant_color_hexes: Optional[List[str]] = None,
     color_hints: Optional[List[str]] = None,
+    accent_hexes: Optional[List[str]] = None,
+    accent_hints: Optional[List[str]] = None,
 ) -> str:
-    skeleton = (
-        '{"base_garment_prompt":"<garment-only visible details>",'
-        '"extraction_avoid_clause":"<visible contamination or generation mistakes to avoid, or empty string>"}'
-    )
     return (
         _build_minicpm_garment_prompt(
             garment_type=garment_type,
             dominant_color_hexes=dominant_color_hexes,
             color_hints=color_hints,
+            accent_hexes=accent_hexes,
+            accent_hints=accent_hints,
         )
-        + " Schema reminder: both JSON keys must always be present, even when the avoid value is empty. "
-        + "If there is nothing specific to avoid, set "
-        + "\"extraction_avoid_clause\" to the empty string \"\". "
-        + "Example response shape: "
-        + skeleton
+        + " Your previous response did not follow the format. "
+        + "Return exactly one sentence with only garment facts."
     )
 
 
@@ -4776,32 +4827,35 @@ def _build_minicpm_garment_detail_retry_prompt(
     garment_type: str,
     dominant_color_hexes: Optional[List[str]] = None,
     color_hints: Optional[List[str]] = None,
+    accent_hexes: Optional[List[str]] = None,
+    accent_hints: Optional[List[str]] = None,
 ) -> str:
     gtype = _normalize_garment_type(garment_type) or "garment"
     detail_clause = {
         "top": (
-            "Your previous response was too generic. In base_garment_prompt, include visible front construction with garment type, "
-            "neckline or front opening, sleeve configuration, and waist or hem behavior. "
-            "If visible, include wrap, crossover, tie-front, gathered waist, blouson waist, draped front, tuck, or cropped hem."
+            "Your previous response was too generic. Include garment type, neckline or front opening, sleeve configuration, "
+            "fit/silhouette, hem behavior, fabric/texture, and any trims/closures."
         ),
         "dress": (
-            "Your previous response was too generic. In base_garment_prompt, include visible neckline or collar, sleeve length, "
-            "waist treatment, skirt or hem length, closure or placket if visible, and pattern summary if present."
+            "Your previous response was too generic. Include neckline or collar, sleeve length, "
+            "waist treatment, skirt or hem length, closure or placket if visible, fabric/texture, and pattern summary if present."
         ),
         "bottom": (
-            "Your previous response was too generic. In base_garment_prompt, include visible rise, leg shape, closure, pleats or creases, "
-            "pockets if visible, and hem behavior."
+            "Your previous response was too generic. Include rise, leg shape, closure, pleats or creases, "
+            "pockets if visible, hem behavior, and fabric/texture."
         ),
         "outer": (
-            "Your previous response was too generic. In base_garment_prompt, include visible collar or lapel, sleeve length, "
-            "closure details, hem or waist behavior, and front structure."
+            "Your previous response was too generic. Include collar or lapel, sleeve length, "
+            "closure details, hem or waist behavior, fabric/texture, and front structure."
         ),
-    }.get(gtype, "Your previous response was too generic. In base_garment_prompt, include more visible front-facing garment structure.")
+    }.get(gtype, "Your previous response was too generic. Include more visible front-facing garment structure.")
     return (
         _build_minicpm_garment_retry_prompt(
             garment_type=garment_type,
             dominant_color_hexes=dominant_color_hexes,
             color_hints=color_hints,
+            accent_hexes=accent_hexes,
+            accent_hints=accent_hints,
         )
         + " "
         + detail_clause
@@ -4835,6 +4889,8 @@ def _describe_garment_prompt_bundle_with_backend(
     garment_type: Optional[str] = None,
     dominant_color_hexes: Optional[List[str]] = None,
     color_hints: Optional[List[str]] = None,
+    accent_hexes: Optional[List[str]] = None,
+    accent_hints: Optional[List[str]] = None,
 ) -> Dict[str, str]:
     resolved = _normalize_descriptor_backend(backend)
 
@@ -4843,6 +4899,8 @@ def _describe_garment_prompt_bundle_with_backend(
             garment_type=str(garment_type or ""),
             dominant_color_hexes=dominant_color_hexes,
             color_hints=color_hints,
+            accent_hexes=accent_hexes,
+            accent_hints=accent_hints,
         )
         raw_text = str(fetch_raw_text(primary_prompt) or "").strip()
         bundle = _parse_garment_prompt_sections(raw_text, garment_type=garment_type)
@@ -4852,6 +4910,8 @@ def _describe_garment_prompt_bundle_with_backend(
                 garment_type=str(garment_type or ""),
                 dominant_color_hexes=dominant_color_hexes,
                 color_hints=color_hints,
+                accent_hexes=accent_hexes,
+                accent_hints=accent_hints,
             )
             retry_text = str(fetch_raw_text(retry_prompt) or "").strip()
             retry_bundle = _parse_garment_prompt_sections(retry_text, garment_type=garment_type)
@@ -4859,7 +4919,7 @@ def _describe_garment_prompt_bundle_with_backend(
                 bundle = retry_bundle
             else:
                 logger.warning(
-                    "MiniCPM garment response missed JSON contract; repairing locally "
+                    "MiniCPM garment response missed the expected format; repairing locally "
                     "(first_format=%s, retry_format=%s)",
                     bundle.get("source_format"),
                     retry_bundle.get("source_format"),
@@ -4875,6 +4935,8 @@ def _describe_garment_prompt_bundle_with_backend(
                 garment_type=str(garment_type or ""),
                 dominant_color_hexes=dominant_color_hexes,
                 color_hints=color_hints,
+                accent_hexes=accent_hexes,
+                accent_hints=accent_hints,
             )
             detail_text = str(fetch_raw_text(detail_prompt) or "").strip()
             detail_bundle = _parse_garment_prompt_sections(detail_text, garment_type=garment_type)
@@ -4886,7 +4948,7 @@ def _describe_garment_prompt_bundle_with_backend(
                 )
             elif str(detail_bundle.get("base_garment_prompt") or "").strip():
                 logger.warning(
-                    "MiniCPM garment detail retry stayed non-JSON; repairing locally (format=%s)",
+                    "MiniCPM garment detail retry stayed non-compliant; repairing locally (format=%s)",
                     detail_bundle.get("source_format"),
                 )
                 bundle = _choose_better_garment_prompt_bundle(
@@ -4896,13 +4958,13 @@ def _describe_garment_prompt_bundle_with_backend(
                 )
         if not str(bundle.get("base_garment_prompt") or "").strip():
             raise RuntimeError("MiniCPM garment response did not contain a usable base_garment_prompt")
-        if not str(bundle.get("extraction_avoid_clause") or "").strip():
-            bundle = _ensure_garment_prompt_bundle_avoid_clause(bundle, garment_type=garment_type)
-        bundle = _apply_florence_top_avoid_clause(
+        bundle = _apply_florence_avoid_clause(
             bundle,
             image=image,
             garment_type=garment_type,
         )
+        if not str(bundle.get("extraction_avoid_clause") or "").strip():
+            bundle = _ensure_garment_prompt_bundle_avoid_clause(bundle, garment_type=garment_type)
         return bundle
 
     if resolved == "minicpm_service":
@@ -4953,6 +5015,8 @@ def _describe_garment_prompt_bundle_with_backend(
         garment_type=garment_type,
         dominant_color_hexes=dominant_color_hexes,
         color_hints=color_hints,
+        accent_hexes=accent_hexes,
+        accent_hints=accent_hints,
     )
     return _parse_garment_prompt_sections(desc, garment_type=garment_type)
 
@@ -5541,7 +5605,7 @@ def _score_visible_limb_preservation(
         ref_parse = engine.parser.parse(ref)
         out_parse = engine.parser.parse(out)
 
-        arm_ids = _parser_alias_ids(["arms", "arm", "left_arm", "right_arm"], [14, 15])
+        arm_ids = _parser_alias_ids(["arms", "arm", "left_arm", "right_arm"], [12])
         if not arm_ids:
             return 0.0
 
@@ -5726,11 +5790,11 @@ def _user_prep_person_components(image: Image.Image) -> tuple[np.ndarray, np.nda
     total_pixels = max(1, int(h * w))
     min_pixels = max(64, int(total_pixels * USER_PREP_COMPONENT_MIN_AREA_RATIO))
 
-    body_ids = _parser_category_ids("body", fallback=[2, 11, 12, 13, 14, 15, 16])
-    garment_ids = _parser_category_ids("garment_fallback", fallback=[4, 5, 6, 7, 8, 17])
+    body_ids = _parser_category_ids("body", fallback=[1, 2, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
+    garment_ids = _parser_category_ids("garment_fallback", fallback=[3, 4, 5, 6, 7, 10])
     person_ids = sorted(set(int(v) for v in (body_ids + garment_ids)))
     if not person_ids:
-        person_ids = [2, 4, 5, 6, 7, 8, 11, 12, 13, 14, 15, 16, 17]
+        person_ids = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
 
     person_mask = np.isin(parsing, person_ids)
     components = _mask_connected_components(person_mask, min_pixels=min_pixels)
@@ -7237,6 +7301,7 @@ def _resolve_color_sampling_mask(
     reference_mask: Optional[np.ndarray] = None,
     apply_type_color_mask: bool = False,
 ) -> Tuple[Optional[np.ndarray], Dict[str, object]]:
+    fallback_min_area_ratio = 0.02
     ref_mask = _normalize_color_sampling_mask(reference_mask, image.size)
     ref_meta: Dict[str, object] = {}
     if isinstance(ref_mask, np.ndarray):
@@ -7262,6 +7327,38 @@ def _resolve_color_sampling_mask(
             parser_meta = dict(parser_meta or {})
             parser_meta["mask_pixels"] = int(np.sum(parser_mask))
             parser_meta["area_ratio"] = round(float(np.mean(parser_mask)), 6)
+
+    fallback_mask = None
+    fallback_meta: Dict[str, object] = {}
+    if (
+        isinstance(parser_mask, np.ndarray)
+        and bool(parser_meta.get("used"))
+        and float(parser_meta.get("area_ratio", 0.0) or 0.0) < float(fallback_min_area_ratio)
+    ):
+        candidate_base = ref_mask if isinstance(ref_mask, np.ndarray) else None
+        try:
+            candidate = _get_clean_foreground_mask(image, mask=candidate_base)
+        except Exception:
+            candidate = None
+        if isinstance(candidate, np.ndarray):
+            try:
+                rgb = np.asarray(image.convert("RGB"), dtype=np.uint8)
+                skin = _skin_like_mask(rgb)
+                trimmed = candidate & (~skin)
+                if _color_sampling_mask_is_usable(trimmed, image.size, min_area_ratio=fallback_min_area_ratio):
+                    candidate = trimmed
+            except Exception:
+                pass
+            if _color_sampling_mask_is_usable(candidate, image.size, min_area_ratio=fallback_min_area_ratio):
+                fallback_mask = candidate
+                fallback_meta = {
+                    "source": "clean_foreground_fallback",
+                    "used": True,
+                    "reason": "parser_mask_too_small",
+                    "mask_pixels": int(np.sum(candidate)),
+                    "area_ratio": round(float(np.mean(candidate)), 6),
+                    "parser_area_ratio": round(float(parser_meta.get("area_ratio", 0.0) or 0.0), 6),
+                }
 
     if (
         ANALYZE_COLOR_PARSER_SAMPLING_TRIAL_ENABLED
@@ -7299,6 +7396,8 @@ def _resolve_color_sampling_mask(
 
     if isinstance(ref_mask, np.ndarray):
         return ref_mask, ref_meta
+    if isinstance(fallback_mask, np.ndarray):
+        return fallback_mask, fallback_meta
     if isinstance(parser_mask, np.ndarray):
         return parser_mask, parser_meta
     if apply_type_color_mask:
@@ -8651,6 +8750,8 @@ def _build_minicpm_garment_prompt(
     garment_type: str,
     dominant_color_hexes: Optional[List[str]] = None,
     color_hints: Optional[List[str]] = None,
+    accent_hexes: Optional[List[str]] = None,
+    accent_hints: Optional[List[str]] = None,
 ) -> str:
     gtype = _normalize_garment_type(garment_type) or "garment"
     type_label = {
@@ -8666,6 +8767,12 @@ def _build_minicpm_garment_prompt(
         color_clause += " Use the source garment colors exactly with palette lock: " + ", ".join(hexes) + "."
     if hints:
         color_clause += " Keep the color family locked to: " + ", ".join(hints[: max(2, FLUX2_COLOR_LOCK_TOP_K)]) + "."
+    accent_hex = [str(v).strip().upper() for v in (accent_hexes or []) if str(v).strip()]
+    accent_hint = [str(v).strip().lower() for v in (accent_hints or []) if str(v).strip()]
+    if accent_hex:
+        color_clause += " Accent palette (if visible): " + ", ".join(accent_hex[:2]) + "."
+    if accent_hint:
+        color_clause += " Accent color words (if visible): " + ", ".join(accent_hint[:2]) + "."
     type_clause = (
         f"The required garment category is {type_label}. "
         f"Describe only that single {type_label} and ignore every other clothing item or body region."
@@ -8673,26 +8780,23 @@ def _build_minicpm_garment_prompt(
     return (
         "Describe the product garment for high-fidelity virtual try-on. "
         f"{type_clause} "
-        "If body parts, face, hair, hands, legs, room, bed, mirror, phone, bag, or props are visible, ignore them completely. "
-        "Do not mention a person wearing the garment. "
-        "Describe only visible front-facing garment features. Do not infer hidden back details, internal construction, closures, slits, cutouts, pockets, or panels unless they are clearly visible. "
-        "Do not describe pose, scene, background, or accessories. "
-        "Return exactly one valid JSON object and no extra text, markdown, or code fences. "
-        "The JSON must contain exactly these two string keys: "
-        "\"base_garment_prompt\" and \"extraction_avoid_clause\". "
-        "\"base_garment_prompt\" must contain only garment facts for the requested garment. "
-        "\"extraction_avoid_clause\" must contain only extraction-specific exclusions, contamination to ignore, or generation mistakes to avoid. "
-        "\"extraction_avoid_clause\" must always be present. If there is nothing specific to avoid, return it as an empty string. "
-        "If multiple garments or visible non-garment regions appear, mention them only inside \"extraction_avoid_clause\", never inside \"base_garment_prompt\". "
-        "If visible contamination exists from skin, tattoo, hair, face, lips, background, or another garment, explicitly include it in \"extraction_avoid_clause\". "
-        "Do not put avoid words, negatives, or exclusion phrases inside \"base_garment_prompt\". "
-        "Report garment colors using plain color words only; never output hex codes. "
-        "Do not use skin tone, gloves, jewelry, mannequin color, or background color as garment color. "
+        "Ignore all non-garment regions (person, body parts, hair, accessories, background). "
+        "Return ONE or TWO sentences only, plain text (no JSON, no labels). "
+        "Include ONLY the requested garment. "
+        "Must include: specific garment type, neckline/opening, sleeve or strap style, silhouette/fit, hem/length, "
+        "fabric/texture, and any visible trims/closures/decoration. "
+        "If an element is not visible, omit it; do not guess or infer hidden details. "
+        "If the garment is a single solid fabric color, mention only that color once and say it is solid. "
+        "If there are clearly different fabric colors or panels, list primary then secondary colors and specify where they appear "
+        "(e.g., sleeves, waistband, hem, trim). If the fabric is gradient/ombre, describe the color shift and region. "
+        "Do not treat lighting/shadows as separate colors. "
+        "Never use skin/hand color as a garment color, even if skin is adjacent to the garment. "
+        "Do not mention a person, pose, scene, or accessories. "
+        "Use 1-3 plain color words for the garment fabric; never output hex codes. "
+        "Do not use skin tone, mannequin color, or background color as garment color. "
         "Do not invent metallic, gold, silver, or hardware colors unless they are clearly visible on the garment itself. "
-        "For simple garments, still include garment type, neckline, sleeve length, fit, hem, closure, and front-visible structure when visible. "
-        "For complex garments, also include visible pattern, motif colors, placket, button count, cuff style, waist treatment, ties, drape, paneling, and length when visible. "
-        "For one-shoulder or crop tops, clearly state sleeve count, exposed shoulder side, and cropped hem geometry in \"base_garment_prompt\". "
-        "If visible, explicitly preserve and report front placket shape, button or snap count, button spacing, button size, and button placement. "
+        "For one-shoulder or crop tops, clearly state sleeve count, exposed shoulder side, and cropped hem geometry. "
+        "Be specific and complete; do not be overly brief. "
         "Return category and type for the requested garment only."
         f"{color_clause}"
     ).strip()
@@ -8710,6 +8814,7 @@ def _build_minicpm_garment_color_prompt(garment_type: str) -> str:
         f"Look only at the requested {type_label}. "
         "Ignore skin, body, face, hair, gloves, jewelry, mannequin, room, background, and lighting. "
         "Return only 1 to 3 short garment fabric color words in plain English, comma-separated. "
+        "If the garment is solid, return only one color. "
         "Focus on the main fabric color first, then any true trim or accent color. "
         "Never output hex codes. Never mention skin tone or background color."
     ).strip()
@@ -8767,6 +8872,8 @@ def _build_flux2_single_garment_extract_prompt(
     dominant_color_hexes: Optional[List[str]] = None,
     color_hints: Optional[List[str]] = None,
     color_profile: Optional[Dict[str, object]] = None,
+    accent_hexes: Optional[List[str]] = None,
+    accent_hints: Optional[List[str]] = None,
 ) -> str:
     gtype = _normalize_garment_type(garment_type) or "top"
     clean_desc = " ".join(str(prompt_description or "").split()).strip()
@@ -8817,6 +8924,13 @@ def _build_flux2_single_garment_extract_prompt(
             + ", ".join(hints[: max(2, FLUX2_COLOR_LOCK_TOP_K)])
             + ". "
         )
+    accent_clause = ""
+    accent_hex = [str(v).strip() for v in (accent_hexes or []) if str(v).strip()]
+    accent_hint = [str(v).strip().lower() for v in (accent_hints or []) if str(v).strip()]
+    if accent_hex:
+        accent_clause += " Preserve accent palette if visible: " + ", ".join(accent_hex[:2]) + ". "
+    if accent_hint:
+        accent_clause += " Preserve accent color words if visible: " + ", ".join(accent_hint[:2]) + ". "
     tone_guidance = _build_garment_color_tone_guidance(
         color_hints=hints,
         color_profile=color_profile if isinstance(color_profile, dict) else None,
@@ -8915,6 +9029,12 @@ def _build_flux2_single_garment_extract_prompt(
             " Preserve exactly one shoulder connection and one sleeve/strap layout only. "
             "Do not generate a second strap, second shoulder panel, or any extra lower torso band."
         )
+    descriptor_clause = ""
+    if clean_desc:
+        descriptor_clause = (
+            f" Use this exact garment description as the single source of structure and visible details: {clean_desc} "
+            "Do not omit any described elements and do not add elements not described. "
+        )
     clean_avoid_clause = " ".join(str(extraction_avoid_clause or "").split()).strip()
     avoid_clause = ""
     if clean_avoid_clause:
@@ -8930,11 +9050,11 @@ def _build_flux2_single_garment_extract_prompt(
         f"Generate only one {explicit_category} category garment and nothing from other categories. "
         "Do not generate any artificial fashion variant, redesign, or alternate styling. "
         "Reconstruct only the exact source garment visible in the crop. "
-        f"{type_lock_clause}{subtype_lock_clause}{color_lock_clause}{color_hint_clause}{color_tone_clause}{profile_clause}{preserve_visible_clause}{no_invention_clause}"
+        f"{descriptor_clause}{type_lock_clause}{subtype_lock_clause}{color_lock_clause}{color_hint_clause}{accent_clause}{color_tone_clause}{profile_clause}{preserve_visible_clause}{no_invention_clause}"
         "Preserve exact garment structure, fabric, texture, print placement, and only the seams, trims, and closures that are clearly visible in the source. "
         "Preserve the exact source color and material appearance; do not brighten black garments into gray, silver, or white. "
         "Do not include visible limbs, face, torso, neck, shoulders, hands, fingers, legs, feet, or any human remnants in the output garment region. "
-        f"Garment descriptor: {clean_desc}{avoid_clause}"
+        f"{avoid_clause}"
     )
 
 def _build_flux2_single_garment_extract_negative_prompt(
@@ -9715,9 +9835,9 @@ def _parser_extraction_keep_ids(garment_type: str) -> list[int]:
     label2id = _parser_runtime_label2id()
 
     alias_map = {
-        "top": ["top", "upper_clothes", "upper"],
-        "outer": ["outerwear", "outer", "coat", "jacket", "blazer", "top", "upper_clothes", "upper"],
-        "bottom": ["pants", "skirt", "shorts", "trousers", "belt"],
+        "top": ["top", "upper_clothes", "upper", "upper-clothes"],
+        "outer": ["outerwear", "outer", "coat", "jacket", "blazer", "top", "upper_clothes", "upper", "upper-clothes"],
+        "bottom": ["pants", "skirt", "shorts", "trousers", "belt", "bottom"],
         "dress": ["dress"],
     }
     aliases = alias_map.get(g, alias_map["top"])
@@ -9732,12 +9852,12 @@ def _parser_extraction_keep_ids(garment_type: str) -> list[int]:
 
     # Fallback to existing parser category logic only if runtime labels are unavailable.
     fallback_map = {
-        "top": [4, 17],
-        "outer": [4, 17, 8],
-        "bottom": [5, 6, 8],
-        "dress": [7],
+        "top": [3],
+        "outer": [3],
+        "bottom": [5, 6, 7],
+        "dress": [4],
     }
-    return _parser_category_ids(g, fallback_map.get(g, [4, 17]))
+    return _parser_category_ids(g, fallback_map.get(g, [3]))
 
 
 def _parser_strict_mask(parsing: np.ndarray, garment_type: str) -> np.ndarray:
@@ -10018,9 +10138,9 @@ def _top_object_mask_from_parsing(
     wy1 = min(image_height, y1 + int(th * 2.20))
 
     top_ids = _parser_extraction_keep_ids("top")
-    arm_ids = _parser_alias_ids(["arms", "arm", "left_arm", "right_arm"], [14, 15])
-    hand_ids = _parser_alias_ids(["hands", "hand", "left_hand", "right_hand"], [16])
-    torso_ids = _parser_alias_ids(["torso", "upper_body", "body"], [1, 2, 3, 9, 10, 11, 12, 13])
+    arm_ids = _parser_alias_ids(["arms", "arm", "left_arm", "right_arm"], [12])
+    hand_ids = _parser_alias_ids(["hands", "hand", "left_hand", "right_hand"], [13])
+    torso_ids = _parser_alias_ids(["torso", "upper_body", "body"], [16])
     support_ids = sorted(set([int(v) for v in (top_ids + arm_ids + hand_ids + torso_ids)]))
     support = np.isin(parsing, support_ids)
     window = np.zeros_like(support, dtype=bool)
@@ -10062,8 +10182,8 @@ def _top_context_bbox_from_parsing(
         return None
 
     top_ids = _parser_extraction_keep_ids("top")
-    arm_ids = _parser_alias_ids(["arms", "arm", "left_arm", "right_arm"], [14, 15])
-    hand_ids = _parser_alias_ids(["hands", "hand", "left_hand", "right_hand"], [16])
+    arm_ids = _parser_alias_ids(["arms", "arm", "left_arm", "right_arm"], [12])
+    hand_ids = _parser_alias_ids(["hands", "hand", "left_hand", "right_hand"], [13])
     keep_ids = sorted(set([int(v) for v in (top_ids + arm_ids + hand_ids)]))
     if not keep_ids:
         return None
@@ -10110,7 +10230,7 @@ def _body_leakage_stats(rgba_image: Image.Image) -> dict:
     parse_input = _flatten_rgba_on_white(rgba)
     parsing = engine.parser.parse(parse_input)
     # Use parser semantic labels (works across model variants).
-    body_ids = _parser_category_ids("body", [1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16])
+    body_ids = _parser_category_ids("body", [1, 2, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
     body_mask = np.isin(parsing, body_ids) & visible_mask
     body_pixels = int(np.sum(body_mask))
     ratio = float(body_pixels) / float(max(1, visible_pixels))
@@ -10336,17 +10456,17 @@ def _extract_cloth_from_crop(
             }
 
         # Non-parser-only mode still uses parser masks only.
-        base_body_kill_ids = _parser_category_ids("body", [1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16])
+        base_body_kill_ids = _parser_category_ids("body", [1, 2, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
         kill_ids = list(base_body_kill_ids)
         rescue_mode = "strict"
 
         if selected_type == "top":
             # Kill opposite garment classes for stronger separation.
-            kill_ids.extend(_parser_category_ids("bottom", [5, 6, 8]))
-            kill_ids.extend(_parser_category_ids("dress", [7]))
+            kill_ids.extend(_parser_category_ids("bottom", [5, 6, 7]))
+            kill_ids.extend(_parser_category_ids("dress", [4]))
         elif selected_type == "bottom":
-            kill_ids.extend(_parser_category_ids("top", [4, 17]))
-            kill_ids.extend(_parser_category_ids("dress", [7]))
+            kill_ids.extend(_parser_category_ids("top", [3, 10]))
+            kill_ids.extend(_parser_category_ids("dress", [4]))
         elif selected_type == "dress":
             # Dress already keeps broad clothing regions.
             pass
@@ -10399,7 +10519,7 @@ def _extract_cloth_from_crop(
             return _compose_alpha_from_seed(keep_mask)
 
         def _compose_alpha_body_only() -> tuple[np.ndarray, np.ndarray, float]:
-            garment_ids = _parser_category_ids("garment_fallback", [4, 5, 6, 7, 8, 17])
+            garment_ids = _parser_category_ids("garment_fallback", [3, 4, 5, 6, 7, 10])
             garment_mask = np.isin(parsing, garment_ids)
             body_mask = np.isin(parsing, base_body_kill_ids)
             kill_k = max(1, int(ANALYZE_EXTRACT_PARSER_KILL_DILATE))
@@ -10477,8 +10597,8 @@ def _extract_cloth_from_crop(
         logger.warning(f"Primary extraction path failed, falling back to parser: {e}")
         try:
             parsing = engine.parser.parse(crop)
-            garment_ids = _parser_category_ids("garment_fallback", [4, 5, 6, 7, 8, 17])
-            kill_ids_fallback = _parser_category_ids("kill_fallback", [1, 2, 3, 9, 10, 11, 12, 13, 14, 15, 16])
+            garment_ids = _parser_category_ids("garment_fallback", [3, 4, 5, 6, 7, 10])
+            kill_ids_fallback = _parser_category_ids("kill_fallback", [1, 2, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17])
             garment_mask = np.isin(parsing, garment_ids)
             kill_mask = np.isin(parsing, kill_ids_fallback)
             final_mask = garment_mask & (~kill_mask) & (parsing != 0)
@@ -10662,8 +10782,16 @@ def _run_flux2_cloth_only_extract(
         for v in (descriptor_color_ctx.get("dominantHexes") or descriptor_color_ctx.get("paletteHexes") or [])
         if str(v).strip()
     ]
+    descriptor_accent_hexes = [
+        str(v)
+        for v in (descriptor_color_ctx.get("accentHexes") or [])
+        if str(v).strip()
+    ]
     descriptor_color_hints = [
         str(v) for v in (descriptor_color_ctx.get("colorHints") or []) if str(v).strip()
+    ]
+    descriptor_accent_hints = [
+        str(v) for v in (descriptor_color_ctx.get("accentHints") or []) if str(v).strip()
     ]
     stage = {
         "descriptor_input_s": 0.0,
@@ -10736,6 +10864,8 @@ def _run_flux2_cloth_only_extract(
                 garment_type=resolved_type,
                 dominant_color_hexes=descriptor_dominant_hexes,
                 color_hints=descriptor_color_hints,
+                accent_hexes=descriptor_accent_hexes,
+                accent_hints=descriptor_accent_hints,
             )
             garment_desc = str(prompt_bundle.get("base_garment_prompt") or "").strip()
         except Exception as err:
@@ -10755,6 +10885,8 @@ def _run_flux2_cloth_only_extract(
                         garment_type=resolved_type,
                         dominant_color_hexes=descriptor_dominant_hexes,
                         color_hints=descriptor_color_hints,
+                        accent_hexes=descriptor_accent_hexes,
+                        accent_hints=descriptor_accent_hints,
                     )
                     garment_desc = str(prompt_bundle.get("base_garment_prompt") or "").strip()
                     desc_err = None
@@ -10816,6 +10948,8 @@ def _run_flux2_cloth_only_extract(
             top_k=4,
         )
     color_hints = [str(v) for v in (input_color_ctx.get("hints") or []) if str(v).strip()]
+    accent_hexes = [str(v) for v in (input_color_ctx.get("accentHexes") or []) if str(v).strip()]
+    accent_hints = [str(v) for v in (input_color_ctx.get("accentHints") or []) if str(v).strip()]
     color_profile = input_color_ctx.get("profile") if isinstance(input_color_ctx.get("profile"), dict) else {}
     color_mask_source = str(
         (descriptor_color_mask_meta or {}).get("source")
@@ -10896,6 +11030,8 @@ def _run_flux2_cloth_only_extract(
         dominant_color_hexes=dominant_hexes,
         color_hints=color_hints,
         color_profile=color_profile,
+        accent_hexes=accent_hexes,
+        accent_hints=accent_hints,
     )
     built_negative_prompt = _build_flux2_single_garment_extract_negative_prompt(
         garment_type=resolved_type,
@@ -11909,6 +12045,7 @@ async def flux2_extract_single_garment(
             selected_crop_bytes = selected_crop_bytes_io.getvalue()
 
             selected_crop_url = None
+            selected_crop_url_source = ""
             need_selected_crop_upload = (resolved_backend == "minicpm_service")
             if expose_intermediate_urls or need_selected_crop_upload:
                 try:
@@ -11919,8 +12056,27 @@ async def flux2_extract_single_garment(
                     warnings.append(f"selected_crop_upload_failed:{selected_upload_err}")
 
             if resolved_backend == "minicpm_service":
-                if not str(selected_crop_url or "").startswith("http"):
-                    warnings.append("minicpm_service_requires_http_url_fallback_to_local_minicpm")
+                if not selected_crop_url:
+                    try:
+                        fd, tmp_path = tempfile.mkstemp(prefix="minicpm_desc_", suffix=".png")
+                        os.close(fd)
+                        with open(tmp_path, "wb") as fp:
+                            fp.write(selected_crop_bytes)
+                        selected_crop_url = f"file://{tmp_path}"
+                        selected_crop_url_source = "local_file_url"
+                    except Exception as file_err:
+                        warnings.append(f"selected_crop_file_prep_failed:{file_err}")
+
+                service_url = str(ANALYZE_MINICPM_SERVICE_URL or MINICPM_SERVICE_URL or "").strip().rstrip("/")
+                is_local_service = service_url.startswith("http://127.0.0.1") or service_url.startswith("http://localhost") or service_url.startswith("http://0.0.0.0")
+
+                if str(selected_crop_url or "").startswith("file://"):
+                    if not is_local_service:
+                        warnings.append("minicpm_service_file_url_not_local_fallback_to_local_minicpm")
+                        resolved_backend = "minicpm"
+                        input_summary["descriptionBackendResolved"] = resolved_backend
+                elif not str(selected_crop_url or "").startswith("http"):
+                    warnings.append("minicpm_service_requires_http_or_file_url_fallback_to_local_minicpm")
                     resolved_backend = "minicpm"
                     input_summary["descriptionBackendResolved"] = resolved_backend
 
@@ -11974,6 +12130,8 @@ async def flux2_extract_single_garment(
                     top_k=4,
                 )
             color_hints = [str(v) for v in (input_color_ctx.get("hints") or []) if str(v).strip()]
+            accent_hexes = [str(v) for v in (input_color_ctx.get("accentHexes") or []) if str(v).strip()]
+            accent_hints = [str(v) for v in (input_color_ctx.get("accentHints") or []) if str(v).strip()]
             color_profile = input_color_ctx.get("profile") if isinstance(input_color_ctx.get("profile"), dict) else {}
             category_text = str((selected_candidate or {}).get("category_text") or resolved_type).strip()
 
@@ -11985,6 +12143,8 @@ async def flux2_extract_single_garment(
                 dominant_color_hexes=dominant_hexes,
                 color_hints=color_hints,
                 color_profile=color_profile,
+                accent_hexes=accent_hexes,
+                accent_hints=accent_hints,
             )
             built_negative_prompt = _build_flux2_single_garment_extract_negative_prompt(
                 garment_type=resolved_type,

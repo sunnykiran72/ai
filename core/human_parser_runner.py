@@ -17,7 +17,7 @@ class HumanParserRunner:
     """
 
     def __init__(self, model_path: Optional[str] = None, device: Optional[str] = None):
-        self.model_path = model_path or os.getenv("PARSING_MODEL_PATH", "mattmdjaga/segformer_b2_clothes")
+        self.model_path = model_path or os.getenv("PARSING_MODEL_PATH", "fashn-ai/fashn-human-parser")
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self._processor = None
         self._model = None

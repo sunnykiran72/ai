@@ -23,6 +23,8 @@ _COLOR_LABEL_RGB: List[Tuple[str, Tuple[int, int, int]]] = [
     ("gray", (128, 128, 128)),
     ("silver", (185, 185, 185)),
     ("white", (245, 245, 245)),
+    ("off-white", (242, 242, 236)),
+    ("cream", (244, 235, 215)),
     ("ivory", (242, 235, 210)),
     ("beige", (214, 192, 155)),
     ("champagne", (233, 214, 170)),
@@ -426,6 +428,7 @@ def _extract_dominant_hex_colors_with_coverage(
     settings: GarmentColorContextSettings,
     mask: Optional[np.ndarray] = None,
     top_k: int = 4,
+    allow_near_white: bool = False,
 ) -> List[PaletteEntry]:
     try:
         rgb = image.convert("RGB")
@@ -449,9 +452,10 @@ def _extract_dominant_hex_colors_with_coverage(
         if pixels.size == 0:
             return []
 
-        near_white = np.all(pixels >= 248, axis=1)
-        if int(np.sum(~near_white)) > 16:
-            pixels = pixels[~near_white]
+        if not bool(allow_near_white):
+            near_white = np.all(pixels >= 248, axis=1)
+            if int(np.sum(~near_white)) > 16:
+                pixels = pixels[~near_white]
         if pixels.size < 4:
             return []
 
@@ -461,6 +465,17 @@ def _extract_dominant_hex_colors_with_coverage(
         pixels_lab = cv2.cvtColor(pixels_u8.reshape(-1, 1, 3), cv2.COLOR_RGB2LAB).reshape(-1, 3)
         if pixels_lab.size < 12:
             return []
+
+        if settings.decontamination_enabled and int(pixels_lab.shape[0]) >= int(settings.decontam_min_pixels):
+            quick_a = pixels_lab[:, 1] - 128.0
+            quick_b = pixels_lab[:, 2] - 128.0
+            quick_chroma = np.sqrt((quick_a * quick_a) + (quick_b * quick_b))
+            if float(np.mean(quick_chroma)) < 18.0 and float(np.percentile(quick_chroma, 90)) < 28.0:
+                l_star = pixels_lab[:, 0] * (100.0 / 255.0)
+                low_p = float(np.percentile(l_star, max(0.0, min(45.0, settings.profile_trim_dark_percentile))))
+                keep = l_star >= low_p
+                if int(np.sum(keep)) >= int(settings.decontam_min_pixels):
+                    pixels_lab = pixels_lab[keep]
 
         unique_lab_count = int(np.unique(pixels_lab, axis=0).shape[0])
         k = min(max(2, int(top_k) + 2), int(pixels_lab.shape[0]), max(1, unique_lab_count))
@@ -595,6 +610,57 @@ def _filter_palette_entries_by_area(
     return entries[: max(1, min(int(min_items), len(entries)))]
 
 
+def _hex_to_lab_l(hx: str) -> Optional[float]:
+    rgb = _hex_to_rgb_triplet(hx)
+    if rgb is None:
+        return None
+    lab = rgb_to_lab(np.array([rgb], dtype=np.uint8))[0].astype(np.float32)
+    return float(lab[0]) * (100.0 / 255.0)
+
+
+def _palette_primary_l(palette: List[PaletteEntry]) -> Optional[float]:
+    if not palette:
+        return None
+    best = max(palette, key=lambda item: float(item.get("areaPercent", 0.0) or 0.0))
+    hx = str(best.get("hex", "")).strip().upper()
+    return _hex_to_lab_l(hx)
+
+
+def _filter_palette_for_light_neutrals(
+    palette: List[PaletteEntry],
+    profile: ColorProfile,
+) -> List[PaletteEntry]:
+    if not palette or not isinstance(profile, dict):
+        return palette
+    if not bool(profile.get("isNeutral")):
+        return palette
+    median_l = profile.get("medianL")
+    p90_l = profile.get("p90L")
+    mean_chroma = profile.get("meanChroma")
+    if not all(isinstance(v, (int, float)) for v in (median_l, p90_l, mean_chroma)):
+        return palette
+    if float(mean_chroma) > 16.0 or float(p90_l) < 55.0 or float(median_l) < 45.0:
+        return palette
+
+    scored: List[Tuple[PaletteEntry, float, float]] = []
+    for entry in palette:
+        hx = str(entry.get("hex", "")).strip().upper()
+        l_star = _hex_to_lab_l(hx)
+        if l_star is None:
+            continue
+        area = float(entry.get("areaPercent", 0.0) or 0.0)
+        scored.append((entry, l_star, area))
+    if len(scored) < 2:
+        return palette
+
+    l_values = [v for _entry, v, _area in scored]
+    threshold = max(float(median_l), float(np.percentile(l_values, 40)))
+    filtered = [entry for entry, l_star, _area in scored if l_star >= threshold]
+    if len(filtered) >= 2:
+        return filtered
+    return palette
+
+
 def _trim_lab_profile_outliers(
     lab_pixels: np.ndarray,
     dark_percentile: float,
@@ -712,6 +778,9 @@ def _apply_mask_highlight_white_balance(
     image: Image.Image,
     mask: Optional[np.ndarray],
     highlight_percentile: float = 90.0,
+    min_scale: float = 0.85,
+    max_scale: float = 1.35,
+    target_white: Optional[float] = None,
 ) -> Optional[Image.Image]:
     try:
         rgb = image.convert("RGB")
@@ -734,17 +803,49 @@ def _apply_mask_highlight_white_balance(
             bright_pixels = pixels
 
         mean_rgb = np.mean(bright_pixels, axis=0)
-        target = float(np.max(mean_rgb))
+        if target_white is None:
+            target = float(np.max(mean_rgb))
+        else:
+            target = float(max(1.0, min(255.0, target_white)))
         if target <= 1.0:
             return None
 
         scales = target / np.clip(mean_rgb, 1.0, None)
-        scales = np.clip(scales, 0.85, 1.35)
+        scales = np.clip(scales, float(min_scale), float(max_scale))
         if float(np.max(np.abs(scales - 1.0))) < 0.04:
             return None
 
         balanced = np.clip(arr * scales.reshape(1, 1, 3), 0, 255).astype(np.uint8)
         return Image.fromarray(balanced)
+    except Exception:
+        return None
+
+
+def _apply_mask_l_channel_clahe(
+    image: Image.Image,
+    mask: Optional[np.ndarray],
+    clip_limit: float = 1.8,
+    tile_grid_size: Tuple[int, int] = (8, 8),
+) -> Optional[Image.Image]:
+    try:
+        import cv2
+
+        rgb = image.convert("RGB")
+        arr = np.array(rgb, dtype=np.uint8)
+        if arr.ndim != 3 or arr.shape[2] != 3:
+            return None
+        lab = cv2.cvtColor(arr, cv2.COLOR_RGB2LAB)
+        l_chan = lab[:, :, 0]
+        clahe = cv2.createCLAHE(clipLimit=float(max(1.0, clip_limit)), tileGridSize=tile_grid_size)
+        l_eq = clahe.apply(l_chan)
+        if isinstance(mask, np.ndarray) and mask.shape[:2] == l_chan.shape:
+            keep = np.asarray(mask).astype(bool)
+            l_chan = np.where(keep, l_eq, l_chan)
+        else:
+            l_chan = l_eq
+        lab[:, :, 0] = l_chan
+        out = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+        return Image.fromarray(out.astype(np.uint8))
     except Exception:
         return None
 
@@ -759,8 +860,69 @@ def build_single_image_color_context(
     config = settings or GarmentColorContextSettings()
     palette_top_k = max(3, int(top_k if isinstance(top_k, int) and top_k > 0 else config.palette_top_k))
 
+    def _select_dominant_hexes(
+        palette_metrics_full: List[PaletteEntry],
+        profile_for_hints: ColorProfile,
+        profile_is_neutral: bool,
+    ) -> Tuple[List[str], List[PaletteEntry]]:
+        adjusted_palette_metrics = _filter_palette_for_light_neutrals(
+            palette=palette_metrics_full,
+            profile=profile_for_hints,
+        )
+        dominant_palette_metrics = _filter_palette_entries_by_area(
+            palette=adjusted_palette_metrics,
+            min_area_percent=float(config.palette_min_area_percent),
+            min_items=1,
+        )
+
+        dominant_hexes: List[str] = []
+        primary_area = float(dominant_palette_metrics[0].get("areaPercent", 0.0) or 0.0) if dominant_palette_metrics else 0.0
+        dominant_area_floor = max(float(config.palette_min_area_percent), primary_area * 0.20)
+        for idx, entry in enumerate(dominant_palette_metrics):
+            hx = str(entry.get("hex", "")).strip().upper()
+            if not re.fullmatch(r"#[0-9A-F]{6}", hx):
+                continue
+            area = float(entry.get("areaPercent", 0.0) or 0.0)
+            if idx == 0 or area >= dominant_area_floor:
+                dominant_hexes.append(hx)
+
+        if profile_is_neutral:
+            median_l = profile_for_hints.get("medianL")
+            p90_l = profile_for_hints.get("p90L")
+            mean_chroma = profile_for_hints.get("meanChroma")
+            if (
+                isinstance(median_l, (int, float))
+                and isinstance(p90_l, (int, float))
+                and isinstance(mean_chroma, (int, float))
+                and float(mean_chroma) <= 16.0
+                and float(p90_l) >= 55.0
+                and float(median_l) >= 45.0
+            ):
+                bright: List[Tuple[float, float, str]] = []
+                for entry in palette_metrics_full:
+                    hx = str(entry.get("hex", "")).strip().upper()
+                    l_star = _hex_to_lab_l(hx)
+                    if l_star is None:
+                        continue
+                    area = float(entry.get("areaPercent", 0.0) or 0.0)
+                    bright.append((float(l_star), area, hx))
+                bright.sort(key=lambda item: (item[0], item[1]), reverse=True)
+                bright_hexes: List[str] = []
+                for l_star, area, hx in bright:
+                    if area < 2.0 and bright_hexes:
+                        continue
+                    if hx not in bright_hexes:
+                        bright_hexes.append(hx)
+                    if len(bright_hexes) >= max(1, int(config.top_k)):
+                        break
+                if bright_hexes:
+                    dominant_hexes = bright_hexes
+
+        return dominant_hexes, dominant_palette_metrics
+
     use_mask: Optional[np.ndarray] = None
     mask_source = "disabled" if config.disable_masking else "clean_foreground"
+    allow_near_white = bool(isinstance(mask, np.ndarray))
     if not config.disable_masking:
         use_mask = _get_clean_foreground_mask(image, settings=config, mask=mask)
         if not isinstance(use_mask, np.ndarray):
@@ -774,29 +936,179 @@ def build_single_image_color_context(
             mask_source = "border_estimate"
         if not isinstance(use_mask, np.ndarray):
             mask_source = "none"
+    if allow_near_white and mask_source == "clean_foreground":
+        mask_source = "provided_mask"
 
-    palette_metrics_full = _extract_dominant_hex_colors_with_coverage(
+    raw_palette_metrics = _extract_dominant_hex_colors_with_coverage(
         image=image,
         settings=config,
         mask=use_mask if isinstance(use_mask, np.ndarray) else None,
         top_k=palette_top_k,
+        allow_near_white=allow_near_white,
     )
-    dominant_palette_metrics = _filter_palette_entries_by_area(
-        palette=palette_metrics_full,
-        min_area_percent=float(config.palette_min_area_percent),
-        min_items=1,
+    palette_metrics_full = list(raw_palette_metrics)
+
+    profile = _extract_lab_color_profile(
+        image=image,
+        settings=config,
+        mask=use_mask if isinstance(use_mask, np.ndarray) else None,
+    )
+    profile_is_neutral = bool(isinstance(profile, dict) and profile.get("isNeutral"))
+    balance_max_scale = 1.12
+    balance_min_scale = 0.90
+    balance_target_white: Optional[float] = None
+    apply_preprocess = False
+    apply_clahe = False
+    if isinstance(profile, dict):
+        mean_chroma = profile.get("meanChroma")
+        p90_chroma = profile.get("p90Chroma")
+        median_l = profile.get("medianL")
+        mean_a = profile.get("meanA")
+        mean_b = profile.get("meanB")
+        cast_strength = None
+        if isinstance(mean_a, (int, float)) and isinstance(mean_b, (int, float)):
+            cast_strength = float(np.sqrt((float(mean_a) ** 2) + (float(mean_b) ** 2)))
+        if profile_is_neutral:
+            apply_preprocess = True
+            mean_b = profile.get("meanB")
+            if isinstance(mean_b, (int, float)) and float(mean_b) >= 6.0:
+                balance_max_scale = 1.75
+                balance_min_scale = 0.85
+                balance_target_white = 235.0
+            else:
+                balance_max_scale = 1.35
+                balance_min_scale = 0.90
+        else:
+            if (
+                isinstance(mean_chroma, (int, float))
+                and isinstance(p90_chroma, (int, float))
+                and float(mean_chroma) <= 24.0
+                and float(p90_chroma) <= 38.0
+                and isinstance(cast_strength, (int, float))
+                and float(cast_strength) >= 6.0
+            ):
+                apply_preprocess = True
+        if apply_preprocess and isinstance(median_l, (int, float)) and float(median_l) <= 62.0:
+            apply_clahe = True
+
+    cast_corrected_profile: Optional[Dict[str, object]] = None
+    cast_corrected_hints: List[str] = []
+    cast_corrected_palette: Optional[List[PaletteEntry]] = None
+    use_corrected_palette = False
+    if apply_preprocess:
+        corrected_image = _apply_mask_highlight_white_balance(
+            image=image,
+            mask=use_mask if isinstance(use_mask, np.ndarray) else None,
+            min_scale=balance_min_scale,
+            max_scale=balance_max_scale,
+            target_white=balance_target_white,
+        )
+        if isinstance(corrected_image, Image.Image) and apply_clahe:
+            clahe_image = _apply_mask_l_channel_clahe(
+                corrected_image,
+                mask=use_mask if isinstance(use_mask, np.ndarray) else None,
+                clip_limit=1.6,
+                tile_grid_size=(8, 8),
+            )
+            if isinstance(clahe_image, Image.Image):
+                corrected_image = clahe_image
+        if isinstance(corrected_image, Image.Image):
+            cast_corrected_profile = _extract_lab_color_profile(
+                image=corrected_image,
+                settings=config,
+                mask=use_mask if isinstance(use_mask, np.ndarray) else None,
+            )
+            corrected_palette = _extract_dominant_hex_colors_with_coverage(
+                image=corrected_image,
+                settings=config,
+                mask=use_mask if isinstance(use_mask, np.ndarray) else None,
+                top_k=palette_top_k,
+                allow_near_white=allow_near_white,
+            )
+            cast_corrected_palette = list(corrected_palette or [])
+            cast_corrected_hints = _color_labels_from_hex_palette(
+                [str(entry.get("hex", "")).strip().upper() for entry in corrected_palette],
+                top_k=config.top_k,
+            )
+            if cast_corrected_profile:
+                profile = dict(profile or {})
+                profile["castCorrected"] = cast_corrected_profile
+                if cast_corrected_hints:
+                    profile["castCorrectedHints"] = list(cast_corrected_hints)
+
+    if cast_corrected_palette:
+        raw_primary_l = _palette_primary_l(raw_palette_metrics)
+        corrected_primary_l = _palette_primary_l(cast_corrected_palette)
+        raw_mean_chroma = profile.get("meanChroma") if isinstance(profile, dict) else None
+        corrected_mean_chroma = (
+            cast_corrected_profile.get("meanChroma") if isinstance(cast_corrected_profile, dict) else None
+        )
+        chroma_ok = True
+        if isinstance(raw_mean_chroma, (int, float)) and isinstance(corrected_mean_chroma, (int, float)):
+            if float(raw_mean_chroma) > 0.1:
+                ratio = float(corrected_mean_chroma) / float(raw_mean_chroma)
+                if ratio > 1.45 or ratio < 0.55:
+                    chroma_ok = False
+        min_delta_l = 6.0 if profile_is_neutral else 3.0
+        if corrected_primary_l is not None and chroma_ok and (
+            raw_primary_l is None or (corrected_primary_l - raw_primary_l) >= float(min_delta_l)
+        ):
+            use_corrected_palette = True
+
+    if use_corrected_palette and cast_corrected_palette:
+        palette_metrics_full = list(cast_corrected_palette)
+        if isinstance(profile, dict):
+            profile["colorCorrectionApplied"] = True
+            profile["colorCorrectionSource"] = "mask_preprocess_palette"
+
+    profile_for_hints = (
+        cast_corrected_profile
+        if (use_corrected_palette and isinstance(cast_corrected_profile, dict))
+        else (profile if isinstance(profile, dict) else {})
     )
 
-    dominant_hexes: List[str] = []
-    primary_area = float(dominant_palette_metrics[0].get("areaPercent", 0.0) or 0.0) if dominant_palette_metrics else 0.0
-    dominant_area_floor = max(float(config.palette_min_area_percent), primary_area * 0.20)
-    for idx, entry in enumerate(dominant_palette_metrics):
-        hx = str(entry.get("hex", "")).strip().upper()
-        if not re.fullmatch(r"#[0-9A-F]{6}", hx):
-            continue
-        area = float(entry.get("areaPercent", 0.0) or 0.0)
-        if idx == 0 or area >= dominant_area_floor:
-            dominant_hexes.append(hx)
+    dominant_hexes, dominant_palette_metrics = _select_dominant_hexes(
+        palette_metrics_full=palette_metrics_full,
+        profile_for_hints=profile_for_hints,
+        profile_is_neutral=profile_is_neutral,
+    )
+
+    if cast_corrected_palette:
+        corrected_bright: List[Tuple[float, float, str]] = []
+        for entry in cast_corrected_palette:
+            hx = str(entry.get("hex", "")).strip().upper()
+            l_star = _hex_to_lab_l(hx)
+            if l_star is None:
+                continue
+            area = float(entry.get("areaPercent", 0.0) or 0.0)
+            corrected_bright.append((float(l_star), area, hx))
+        corrected_bright.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        if corrected_bright:
+            current_l = _hex_to_lab_l(dominant_hexes[0]) if dominant_hexes else None
+            corrected_l = corrected_bright[0][0]
+            if current_l is None or (corrected_l - float(current_l)) >= 6.0:
+                corrected_hexes: List[str] = []
+                for l_star, area, hx in corrected_bright:
+                    if area < 1.5 and corrected_hexes:
+                        continue
+                    if hx not in corrected_hexes:
+                        corrected_hexes.append(hx)
+                    if len(corrected_hexes) >= max(1, int(config.top_k)):
+                        break
+                if corrected_hexes:
+                    dominant_hexes = corrected_hexes
+                    use_corrected_palette = True
+                    palette_metrics_full = list(cast_corrected_palette)
+                    if isinstance(profile, dict):
+                        profile["colorCorrectionApplied"] = True
+                        profile["colorCorrectionSource"] = "mask_preprocess_dominant"
+                    if isinstance(cast_corrected_profile, dict):
+                        profile_for_hints = cast_corrected_profile
+                    dominant_hexes, dominant_palette_metrics = _select_dominant_hexes(
+                        palette_metrics_full=palette_metrics_full,
+                        profile_for_hints=profile_for_hints,
+                        profile_is_neutral=profile_is_neutral,
+                    )
 
     palette_hexes = list(dominant_hexes)
     accent_hexes: List[str] = []
@@ -812,42 +1124,6 @@ def build_single_image_color_context(
         accent_hexes.append(hx)
         if len(accent_hexes) >= max(1, int(config.accent_top_k)):
             break
-
-    profile = _extract_lab_color_profile(
-        image=image,
-        settings=config,
-        mask=use_mask if isinstance(use_mask, np.ndarray) else None,
-    )
-    profile_is_neutral = bool(isinstance(profile, dict) and profile.get("isNeutral"))
-
-    cast_corrected_profile: Optional[Dict[str, object]] = None
-    cast_corrected_hints: List[str] = []
-    if profile_is_neutral:
-        corrected_image = _apply_mask_highlight_white_balance(
-            image=image,
-            mask=use_mask if isinstance(use_mask, np.ndarray) else None,
-        )
-        if isinstance(corrected_image, Image.Image):
-            cast_corrected_profile = _extract_lab_color_profile(
-                image=corrected_image,
-                settings=config,
-                mask=use_mask if isinstance(use_mask, np.ndarray) else None,
-            )
-            corrected_palette = _extract_dominant_hex_colors_with_coverage(
-                image=corrected_image,
-                settings=config,
-                mask=use_mask if isinstance(use_mask, np.ndarray) else None,
-                top_k=palette_top_k,
-            )
-            cast_corrected_hints = _color_labels_from_hex_palette(
-                [str(entry.get("hex", "")).strip().upper() for entry in corrected_palette],
-                top_k=config.top_k,
-            )
-            if cast_corrected_profile:
-                profile = dict(profile or {})
-                profile["castCorrected"] = cast_corrected_profile
-                if cast_corrected_hints:
-                    profile["castCorrectedHints"] = list(cast_corrected_hints)
 
     image_colors = _color_labels_from_hex_palette(dominant_hexes, top_k=config.top_k)
     if not image_colors:
@@ -871,9 +1147,15 @@ def build_single_image_color_context(
     ]
     hints = list(image_colors)
     high_chroma = bool(
-        isinstance(profile.get("meanChroma"), (int, float))
-        and float(profile.get("meanChroma")) >= 18.0
+        isinstance(profile_for_hints.get("meanChroma"), (int, float))
+        and float(profile_for_hints.get("meanChroma")) >= 18.0
     )
+    profile_is_neutral_for_hints = bool(
+        (isinstance(profile_for_hints, dict) and profile_for_hints.get("isNeutral"))
+        or profile_is_neutral
+    )
+    if profile_is_neutral_for_hints:
+        hints = [token for token in hints if _is_neutral_color_token(token)]
     non_neutral = [color for color in hints if not _is_neutral_color_token(color)]
     if high_chroma or (non_neutral and not profile_is_neutral):
         dedup_non_neutral: List[str] = []
@@ -890,9 +1172,31 @@ def build_single_image_color_context(
         if token not in hints:
             hints.append(token)
 
-    profile_mean_b = float(profile.get("meanB")) if isinstance(profile.get("meanB"), (int, float)) else None
-    profile_median_l = float(profile.get("medianL")) if isinstance(profile.get("medianL"), (int, float)) else None
-    if _profile_is_near_white(profile):
+    profile_mean_b = float(profile_for_hints.get("meanB")) if isinstance(profile_for_hints.get("meanB"), (int, float)) else None
+    profile_median_l = float(profile_for_hints.get("medianL")) if isinstance(profile_for_hints.get("medianL"), (int, float)) else None
+    profile_mean_chroma = float(profile_for_hints.get("meanChroma")) if isinstance(profile_for_hints.get("meanChroma"), (int, float)) else None
+    profile_p90_l = float(profile_for_hints.get("p90L")) if isinstance(profile_for_hints.get("p90L"), (int, float)) else None
+    if profile_is_neutral_for_hints and profile_mean_chroma is not None and profile_p90_l is not None:
+        brightest = None
+        for entry in palette_metrics_full:
+            hx = str(entry.get("hex", "")).strip().upper()
+            l_star = _hex_to_lab_l(hx)
+            if l_star is None:
+                continue
+            area = float(entry.get("areaPercent", 0.0) or 0.0)
+            if brightest is None or float(l_star) > brightest[0]:
+                brightest = (float(l_star), area, hx)
+        if (
+            brightest
+            and float(profile_mean_chroma) <= 18.0
+            and float(profile_p90_l) >= 70.0
+            and float(brightest[0]) >= 78.0
+            and float(brightest[1]) >= 10.0
+        ):
+            white_label = "ivory" if profile_mean_b is not None and profile_mean_b >= 8.0 else "white"
+            alt_label = "white" if white_label == "ivory" else "ivory"
+            hints = [white_label, alt_label]
+    if _profile_is_near_white(profile_for_hints):
         white_label = "ivory" if profile_mean_b is not None and profile_mean_b >= 4.0 else "white"
         hints = [white_label] + [
             token for token in hints
@@ -900,7 +1204,7 @@ def build_single_image_color_context(
         ]
     if (
         hints
-        and (not profile_is_neutral)
+        and (not profile_is_neutral_for_hints)
         and all(_is_neutral_color_token(token) for token in hints)
         and profile_mean_b is not None
         and profile_median_l is not None

@@ -19,13 +19,27 @@ class HumanParser:
     ):
         self._parser_fn = parser_fn
 
-        # Default labels for segformer_b2_clothes; runtime labels from model config
-        # (for example fashn-ai/fashn-human-parser) are merged automatically.
+        # Default labels for fashn-ai/fashn-human-parser; runtime labels from model config
+        # are merged automatically to support alternate parsers.
         self.labels = self._normalize_labels(labels or {
-            "background": 0, "hat": 1, "hair": 2, "sunglasses": 3, "upper": 4,
-            "skirt": 5, "pants": 6, "dress": 7, "belt": 8, "left_shoe": 9,
-            "right_shoe": 10, "face": 11, "left_leg": 12, "right_leg": 13,
-            "left_arm": 14, "right_arm": 15, "bag": 16, "scarf": 17
+            "background": 0,
+            "face": 1,
+            "hair": 2,
+            "top": 3,
+            "dress": 4,
+            "skirt": 5,
+            "pants": 6,
+            "belt": 7,
+            "bag": 8,
+            "hat": 9,
+            "scarf": 10,
+            "glasses": 11,
+            "arms": 12,
+            "hands": 13,
+            "legs": 14,
+            "feet": 15,
+            "torso": 16,
+            "jewelry": 17,
         })
 
     @staticmethod
@@ -61,18 +75,18 @@ class HumanParser:
         labels = self._runtime_labels()
         c = self._norm_label(category)
         alias_map = {
-            "top": ["top", "upper", "upper_clothes", "scarf"],
-            "outer": ["outer", "outerwear", "coat", "jacket", "blazer", "top", "upper", "upper_clothes", "scarf"],
-            "bottom": ["bottom", "pants", "trousers", "skirt", "belt", "shorts"],
-            "dress": ["dress", "top", "upper", "upper_clothes", "pants", "skirt", "belt", "scarf", "torso"],
+            "top": ["top", "upper", "upper_clothes", "upper-clothes"],
+            "outer": ["outer", "outerwear", "coat", "jacket", "blazer", "top", "upper", "upper_clothes", "upper-clothes"],
+            "bottom": ["bottom", "pants", "trousers", "skirt", "shorts", "belt"],
+            "dress": ["dress"],
             "body": [
                 "hat", "hair", "sunglasses", "glasses", "face", "torso", "arms", "hands", "legs", "feet",
-                "left_arm", "right_arm", "left_leg", "right_leg", "left_shoe", "right_shoe", "bag"
+                "left_arm", "right_arm", "left_leg", "right_leg", "left_shoe", "right_shoe", "bag", "scarf", "jewelry"
             ],
-            "garment_fallback": ["top", "upper", "upper_clothes", "dress", "pants", "skirt", "belt", "scarf"],
+            "garment_fallback": ["top", "upper", "upper_clothes", "upper-clothes", "dress", "pants", "skirt", "belt", "scarf"],
             "kill_fallback": [
                 "background", "hat", "hair", "sunglasses", "glasses", "face", "torso", "arms", "hands", "legs", "feet",
-                "left_arm", "right_arm", "left_leg", "right_leg", "left_shoe", "right_shoe", "bag"
+                "left_arm", "right_arm", "left_leg", "right_leg", "left_shoe", "right_shoe", "bag", "scarf", "jewelry"
             ],
         }
         ids = self._ids_for_aliases(labels, alias_map.get(c, [c]))

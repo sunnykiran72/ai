@@ -301,7 +301,7 @@ def prefetch_models(python_bin: str, project_root: Path) -> None:
 from huggingface_hub import snapshot_download
 models = [
     "microsoft/Florence-2-large",
-    "mattmdjaga/segformer_b2_clothes",
+    "fashn-ai/fashn-human-parser",
 ]
 for model in models:
     try:
