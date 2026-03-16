@@ -195,7 +195,7 @@ class AnalyzeService:
             # MiniCPM: Generates detailed garment description for metadata
             # JoyCaption: Generates additional context for negative prompts
             minicpm_runner = getattr(self.engine, "minicpm", None)  # Fixed: was minicpm_runner
-            joycaption_runner = getattr(self.engine, "joycaption", None)
+            florence_runner = getattr(self.engine, "florence", None)
 
             # Helper functions for extraction
             def _prepare_extract_source_image(
@@ -389,7 +389,7 @@ class AnalyzeService:
             if selected_item_response is not None:
                 return selected_item_response
 
-            # Stage: MiniCPM + JoyCaption (Run in Parallel)
+            # Stage: MiniCPM + Florence (Run in Parallel)
             # Determine which image to use for description
             if isinstance(selected_item.get("_image_obj"), Image.Image):
                 desc_image = selected_item.get("_image_obj")
@@ -418,32 +418,30 @@ class AnalyzeService:
                     logger.warning(f"MiniCPM description failed: {e}")
                     return ""
 
-            async def run_joycaption():
-                if not joycaption_runner:
+            async def run_florence():
+                if not florence_runner:
                     return ""
                 try:
                     loop = asyncio.get_event_loop()
                     description = await loop.run_in_executor(
                         None,
-                        lambda: joycaption_runner.describe_garment(
-                            image=desc_image,
-                            instruction_override=None
-                        )
+                        lambda: florence_runner.describe_garment(image=desc_image)
                     )
                     return description
                 except Exception as e:
-                    logger.warning(f"JoyCaption description failed: {e}")
+                    logger.warning(f"Florence description failed: {e}")
                     return ""
 
             t_description = time.time()
-            minicpm_desc, joycaption_desc = await asyncio.gather(
+            minicpm_desc, florence_desc = await asyncio.gather(
                 run_minicpm(),
-                run_joycaption()
+                run_florence()
             )
             description_time = round(time.time() - t_description, 4)
 
             selected_item["minicpm_description"] = minicpm_desc
-            selected_item["joycaption_description"] = joycaption_desc
+            # Keep the existing key to avoid downstream changes in prompting_stage.
+            selected_item["joycaption_description"] = florence_desc
             analyze_stage_timings["minicpm_s"] = description_time
             analyze_stage_timings["joycaption_s"] = description_time
 
