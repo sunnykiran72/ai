@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from .models import UserPrepRequest, UserPrepResponse
 from services import UserImageService
+from shared.response_payloads import json_response
 
 logger = logging.getLogger("glamify-ai")
 router = APIRouter()
@@ -23,8 +24,8 @@ router = APIRouter()
 
 def get_user_prep_service() -> UserImageService:
     """Dependency to get UserImageService instance."""
-    from main import get_user_prep_service as _get_user_prep_service
-    return _get_user_prep_service()
+    from ai import main as _main
+    return _main.get_user_prep_service()
 
 
 @router.post("/v1/user-image/prepare", response_model=UserPrepResponse)
@@ -69,6 +70,10 @@ async def prepare_user_image_endpoint(
         # Pass through legacy response objects
         if isinstance(result, Response):
             return result
+
+        # Legacy user-prep payloads return a top-level status code and should bypass Pydantic wrapping
+        if isinstance(result, dict) and isinstance(result.get("status"), int):
+            return json_response(result)
         
         return UserPrepResponse(
             status="success",

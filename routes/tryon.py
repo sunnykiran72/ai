@@ -23,8 +23,8 @@ router = APIRouter()
 
 def get_tryon_service() -> TryonService:
     """Dependency to get TryonService instance."""
-    from main import get_tryon_service as _get_tryon_service
-    return _get_tryon_service()
+    from ai import main as _main
+    return _main.get_tryon_service()
 
 
 @router.post("/tryon", response_model=TryonResponse)

@@ -221,6 +221,10 @@ def _nearest_color_label(rgb_triplet: Tuple[int, int, int]) -> str:
     b_star = float(lab[2]) - 128.0
     chroma = float(np.sqrt((a_star * a_star) + (b_star * b_star)))
 
+    if 52.0 <= l_star <= 84.0 and chroma >= 26.0 and b_star >= 28.0 and a_star >= -2.0:
+        if b_star >= 34.0 or (b_star >= 28.0 and chroma >= 32.0):
+            return "gold"
+
     if (
         45.0 <= l_star < 86.0
         and chroma < 35.0
@@ -249,8 +253,12 @@ def _nearest_color_label(rgb_triplet: Tuple[int, int, int]) -> str:
         if l_star < 28.0:
             return "charcoal"
         if l_star < 62.0:
-            return "gray" if b_star < 8.0 else "tan"
-        if l_star < 85.0:
+            return "gray" if b_star < 9.0 else "tan"
+        if l_star < 78.0:
+            return "gray" if b_star < 10.0 else "tan"
+        if l_star < 90.0:
+            if chroma < 6.0 and b_star < 8.0 and abs(a_star) < 8.0:
+                return "white" if l_star >= 76.0 else "silver"
             return "silver" if b_star < 9.0 else "beige"
         if l_star < 96.0:
             return "cream" if b_star > 11.0 else ("ivory" if b_star > 4.0 else "white")
@@ -476,6 +484,7 @@ def _extract_dominant_hex_colors_with_coverage(
                 keep = l_star >= low_p
                 if int(np.sum(keep)) >= int(settings.decontam_min_pixels):
                     pixels_lab = pixels_lab[keep]
+                    pixels = pixels[keep]
 
         unique_lab_count = int(np.unique(pixels_lab, axis=0).shape[0])
         k = min(max(2, int(top_k) + 2), int(pixels_lab.shape[0]), max(1, unique_lab_count))
@@ -494,13 +503,27 @@ def _extract_dominant_hex_colors_with_coverage(
         order = np.argsort(-counts)
         centers_u8 = np.clip(centers, 0, 255).astype(np.uint8).reshape(-1, 1, 3)
         centers_rgb = cv2.cvtColor(centers_u8, cv2.COLOR_LAB2RGB).reshape(-1, 3)
+        mean_rgb_by_cluster: Dict[int, Tuple[int, int, int]] = {}
+        for cluster_id in unique.tolist():
+            cluster_pixels = pixels[flat_labels == cluster_id]
+            if cluster_pixels.size == 0:
+                continue
+            mean_rgb = np.mean(cluster_pixels.astype(np.float32), axis=0)
+            mean_rgb_by_cluster[int(cluster_id)] = (
+                int(round(float(mean_rgb[0]))),
+                int(round(float(mean_rgb[1]))),
+                int(round(float(mean_rgb[2]))),
+            )
 
         total_pixels = max(1, int(np.sum(counts)))
         out: List[PaletteEntry] = []
         seen_hex = set()
         for order_idx in order.tolist():
             center_idx = int(unique[order_idx])
-            r, g, b = [int(v) for v in centers_rgb[center_idx].tolist()]
+            if center_idx in mean_rgb_by_cluster:
+                r, g, b = mean_rgb_by_cluster[center_idx]
+            else:
+                r, g, b = [int(v) for v in centers_rgb[center_idx].tolist()]
             hx = f"#{max(0, min(255, r)):02X}{max(0, min(255, g)):02X}{max(0, min(255, b)):02X}"
             if hx in seen_hex:
                 continue
@@ -557,7 +580,7 @@ def _merge_similar_palette_entries_by_delta_e(
     for candidate in sorted(candidates, key=lambda item: int(item["pixelCount"]), reverse=True):
         matched_bucket: Optional[Dict[str, object]] = None
         for bucket in merged:
-            if delta_e_cie76(candidate["lab"], bucket["lab"]) <= float(merge_delta_e):
+            if delta_e_cie76(candidate["lab"], bucket["lab"]) <= (float(merge_delta_e) + 0.5):
                 matched_bucket = bucket
                 break
         if matched_bucket is None:
@@ -969,15 +992,28 @@ def build_single_image_color_context(
         if isinstance(mean_a, (int, float)) and isinstance(mean_b, (int, float)):
             cast_strength = float(np.sqrt((float(mean_a) ** 2) + (float(mean_b) ** 2)))
         if profile_is_neutral:
-            apply_preprocess = True
-            mean_b = profile.get("meanB")
-            if isinstance(mean_b, (int, float)) and float(mean_b) >= 6.0:
-                balance_max_scale = 1.75
-                balance_min_scale = 0.85
-                balance_target_white = 235.0
+            if isinstance(median_l, (int, float)) and float(median_l) < 20.0:
+                apply_preprocess = False
+            elif (
+                isinstance(mean_chroma, (int, float))
+                and isinstance(mean_a, (int, float))
+                and isinstance(mean_b, (int, float))
+                and float(mean_chroma) >= 10.0
+                and (abs(float(mean_a)) + abs(float(mean_b))) >= 10.0
+                and isinstance(median_l, (int, float))
+                and 40.0 <= float(median_l) <= 72.0
+            ):
+                apply_preprocess = False
             else:
-                balance_max_scale = 1.35
-                balance_min_scale = 0.90
+                apply_preprocess = True
+                mean_b = profile.get("meanB")
+                if isinstance(mean_b, (int, float)) and float(mean_b) >= 6.0:
+                    balance_max_scale = 1.75
+                    balance_min_scale = 0.85
+                    balance_target_white = 235.0
+                else:
+                    balance_max_scale = 1.35
+                    balance_min_scale = 0.90
         else:
             if (
                 isinstance(mean_chroma, (int, float))
@@ -1154,8 +1190,20 @@ def build_single_image_color_context(
         (isinstance(profile_for_hints, dict) and profile_for_hints.get("isNeutral"))
         or profile_is_neutral
     )
+    profile_median_l_hint = (
+        float(profile_for_hints.get("medianL"))
+        if isinstance(profile_for_hints.get("medianL"), (int, float))
+        else None
+    )
     if profile_is_neutral_for_hints:
-        hints = [token for token in hints if _is_neutral_color_token(token)]
+        if (
+            profile_median_l_hint is not None
+            and profile_median_l_hint < 32.0
+            and any(not _is_neutral_color_token(token) for token in hints)
+        ):
+            profile_is_neutral_for_hints = False
+        else:
+            hints = [token for token in hints if _is_neutral_color_token(token)]
     non_neutral = [color for color in hints if not _is_neutral_color_token(color)]
     if high_chroma or (non_neutral and not profile_is_neutral):
         dedup_non_neutral: List[str] = []

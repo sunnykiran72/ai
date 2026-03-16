@@ -13,7 +13,7 @@ This test ensures that error handling across all endpoints follows consistent pa
 
 import pytest
 from typing import Dict, Any, Optional
-from hypothesis import given, strategies as st, settings
+from hypothesis import HealthCheck, given, strategies as st, settings
 from fastapi import HTTPException
 from pydantic import ValidationError
 from unittest.mock import Mock, patch
@@ -74,7 +74,7 @@ class TestErrorHandlingConsistency:
         error_message=st.text(min_size=1, max_size=100),
         status_code=st.sampled_from([400, 422, 500, 503])
     )
-    @settings(max_examples=10)
+    @settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_http_exception_format_consistency(self, mock_services, error_message, status_code):
         """
         **Property 5: Error Handling Consistency**
@@ -139,7 +139,7 @@ class TestErrorHandlingConsistency:
         field_name=st.sampled_from(["user_image_url", "garment_image_url", "garment_type", "steps", "seed"]),
         field_value=st.one_of(st.none(), st.text(), st.integers(), st.floats())
     )
-    @settings(max_examples=20)
+    @settings(max_examples=20, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_field_validation_error_messages(self, mock_services, field_name, field_value):
         """
         **Property 5: Error Handling Consistency**
@@ -241,7 +241,7 @@ class TestErrorHandlingConsistency:
         timeout_seconds=st.floats(min_value=0.1, max_value=120.0),
         queue_position=st.integers(min_value=1, max_value=10)
     )
-    @settings(max_examples=5)
+    @settings(max_examples=5, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_timeout_error_consistency(self, mock_services, timeout_seconds, queue_position):
         """
         **Property 5: Error Handling Consistency**
@@ -285,7 +285,7 @@ class TestErrorHandlingConsistency:
         
         # Test different error types produce consistent schema
         error_types = [
-            {"exception": ValidationError("Validation failed", model=TryonRequest), "expected_status": 422},
+            {"exception": ValidationError.from_exception_data("TryonRequest", []), "expected_status": 422},
             {"exception": HTTPException(status_code=400, detail="Bad request"), "expected_status": 400},
             {"exception": HTTPException(status_code=500, detail="Internal error"), "expected_status": 500},
         ]

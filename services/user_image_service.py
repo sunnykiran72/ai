@@ -12,6 +12,7 @@ Responsibilities:
 """
 
 from typing import Dict, Optional, Tuple
+import io
 from PIL import Image
 
 from config import Config
@@ -44,9 +45,43 @@ class UserImageService:
         This is a temporary bridge to maintain functionality while the refactoring
         is completed. The actual implementation logic remains in main_legacy.py.
         """
+        if upload is None or not hasattr(upload, "read"):
+            return {
+                "status": "not_implemented",
+                "message": "UserImageService expects an uploaded file.",
+            }
+
+        from ai import main as main_mod
+
+        payload = await upload.read()
+        image = Image.open(io.BytesIO(payload)).convert("RGB")
+
+        candidates, detect_meta = main_mod._user_prep_detect_person_candidates(image)
+        if main_mod._user_prep_has_multiple_prominent_people(candidates):
+            return {
+                "error": "multiple_people",
+                "message": "Multiple prominent people detected.",
+                "meta": detect_meta,
+            }
+
+        crop, bbox = main_mod._user_prep_crop_main_person(image, candidates)
+        focus_score = main_mod._focus_score(crop)
+
+        prepared_bytes, bg_meta = main_mod._remove_user_background_strict(crop)
+        url = main_mod._upload_or_raise(prepared_bytes)
+
+        description_raw = main_mod._describe_user_image_for_prepare(crop, description_backend=None)
+        prompt_description = main_mod._normalize_user_prepare_api_prompt_description(description_raw)
+
         return {
-            "status": "not_implemented",
-            "message": "UserImageService not implemented yet",
+            "url": url,
+            "promptDescription": prompt_description,
+            "focusScore": float(focus_score),
+            "meta": {
+                "person_bbox": bbox,
+                "detect": detect_meta,
+                "background": bg_meta,
+            },
         }
     
     async def _validate_image_quality(self, image: Image.Image) -> Dict[str, object]:

@@ -14,7 +14,7 @@ compatibility with existing API contracts. It verifies that:
 import pytest
 import json
 from typing import Dict, Any, List
-from hypothesis import given, strategies as st, settings
+from hypothesis import HealthCheck, given, strategies as st, settings
 from fastapi.testclient import TestClient
 from unittest.mock import Mock, patch
 
@@ -97,7 +97,7 @@ class TestAPIContractPreservation:
         seed=st.integers(min_value=0, max_value=2147483647),
         garment_type=st.sampled_from(["top", "bottom", "dress", "outer", None])
     )
-    @settings(max_examples=10)
+    @settings(max_examples=10, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_tryon_parameter_validation_preserved(self, client, mock_services, steps, seed, garment_type):
         """
         **Property 3: API Contract Preservation**
@@ -212,7 +212,7 @@ class TestAPIContractPreservation:
         steps=st.integers(min_value=4, max_value=30),
         seed=st.integers(min_value=0, max_value=2147483647)
     )
-    @settings(max_examples=5)
+    @settings(max_examples=5, suppress_health_check=[HealthCheck.function_scoped_fixture])
     def test_extract_endpoint_response_structure(self, client, mock_services, garment_type, steps, seed):
         """
         **Property 3: API Contract Preservation**

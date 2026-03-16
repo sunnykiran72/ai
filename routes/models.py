@@ -10,7 +10,7 @@ Models provide:
 """
 
 from typing import Optional, List, Dict, Any, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # ── Base Models ──
@@ -47,6 +47,32 @@ class TryonRequest(BaseModel):
     use_second_pass: Optional[bool] = Field(None, description="Enable second pass refinement")
     color_lock_enabled: Optional[bool] = Field(None, description="Enable color preservation")
 
+    @field_validator("user_image_url", "garment_image_url")
+    @classmethod
+    def _validate_required_url(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("URL must be a string")
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("URL must not be empty")
+        if not cleaned.startswith(("http://", "https://")):
+            raise ValueError("URL must start with http:// or https://")
+        return cleaned
+
+    @field_validator("garment_type")
+    @classmethod
+    def _validate_garment_type(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("garment_type must be a string")
+        cleaned = value.strip().lower()
+        if not cleaned:
+            return None
+        if cleaned not in {"top", "bottom", "dress", "outer"}:
+            raise ValueError("garment_type must be one of: top, bottom, dress, outer")
+        return cleaned
+
 
 class TryonResponse(SuccessResponse):
     """Response model for virtual try-on endpoint."""
@@ -61,7 +87,7 @@ class TryonResponse(SuccessResponse):
 class AnalyzeRequest(BaseModel):
     """Request model for garment analysis endpoint."""
     garment_type: Optional[str] = Field(None, description="Expected garment type")
-    selected_index: Optional[int] = Field(None, description="Index of selected garment if multiple detected")
+    selected_index: Optional[int] = Field(None, ge=0, description="Index of selected garment if multiple detected")
     debug: bool = Field(default=False, description="Enable debug mode")
 
 

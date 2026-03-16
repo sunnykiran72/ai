@@ -21,8 +21,8 @@ router = APIRouter()
 
 def get_ai_engine() -> AIEngine:
     """Dependency to get AIEngine instance."""
-    from main import get_ai_engine as _get_ai_engine
-    return _get_ai_engine()
+    from ai import main as _main
+    return _main.get_ai_engine()
 
 
 @router.get("/", response_model=HealthResponse)

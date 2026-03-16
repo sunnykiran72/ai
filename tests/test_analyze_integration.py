@@ -46,9 +46,8 @@ class TestAnalyzeIntegration:
         file_content = b"fake_image_data"
         file_obj = io.BytesIO(file_content)
         return UploadFile(
-            filename="test_garment.jpg",
             file=file_obj,
-            content_type="image/jpeg"
+            filename="test_garment.jpg",
         )
     
     @pytest.fixture
@@ -428,9 +427,8 @@ class TestAnalyzeIntegration:
         # Create multiple upload files
         uploads = [
             UploadFile(
-                filename=f"test{i}.jpg",
                 file=io.BytesIO(f"fake_data_{i}".encode()),
-                content_type="image/jpeg"
+                filename=f"test{i}.jpg",
             )
             for i in range(3)
         ]

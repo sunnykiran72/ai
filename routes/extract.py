@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from .models import ExtractRequest, ExtractResponse
 from services import GarmentExtractionService
+from shared.response_payloads import json_response
 
 logger = logging.getLogger("glamify-ai")
 router = APIRouter()
@@ -22,8 +23,8 @@ router = APIRouter()
 
 def get_extract_service() -> GarmentExtractionService:
     """Dependency to get GarmentExtractionService instance."""
-    from main import get_extract_service as _get_extract_service
-    return _get_extract_service()
+    from ai import main as _main
+    return _main.get_extract_service()
 
 
 @router.post("/v1/flux2/extract-garment", response_model=ExtractResponse)
@@ -132,6 +133,10 @@ async def extract_garment_endpoint(
         # Pass through legacy response objects
         if isinstance(result, Response):
             return result
+
+        # Legacy extract payloads return a top-level status code and should bypass Pydantic wrapping
+        if isinstance(result, dict) and isinstance(result.get("status"), int):
+            return json_response(result)
 
         return ExtractResponse(
             status="success",

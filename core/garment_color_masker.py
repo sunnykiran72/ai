@@ -163,19 +163,6 @@ class GarmentColorMasker:
                 if int(np.sum(mask_arr)) <= 0:
                     continue
                 variant_norm = str(variant or "").strip().lower()
-                if str(garment_type or "").strip().lower() in {"top", "bottom"}:
-                    candidate_mask = mask_arr
-                    skin_pixels = 0
-                    cleaned = candidate_mask
-                    if int(np.sum(cleaned)) >= int(self.settings.min_pixels) and float(np.mean(cleaned)) >= float(min_area_ratio):
-                        return cleaned, {
-                            "source": mask_source,
-                            "used": True,
-                            "mask_pixels": int(np.sum(cleaned)),
-                            "area_ratio": round(float(np.mean(cleaned)), 6),
-                            "skin_pixels_removed": skin_pixels,
-                            "parser_variant": variant,
-                        }
                 candidate_mask, skin_pixels = self._strip_skin_from_parser_mask(
                     mask=mask_arr,
                     rgb=rgb,

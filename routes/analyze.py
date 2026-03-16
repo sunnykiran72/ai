@@ -20,6 +20,7 @@ from .models import (
     SelectionRequiredResponse, ParserJoyCaptionAnalyzeRequest
 )
 from services import AnalyzeService
+from shared.response_payloads import json_response
 
 logger = logging.getLogger("glamify-ai")
 router = APIRouter()
@@ -27,8 +28,8 @@ router = APIRouter()
 
 def get_analyze_service() -> AnalyzeService:
     """Dependency to get AnalyzeService instance."""
-    from main import get_analyze_service as _get_analyze_service
-    return _get_analyze_service()
+    from ai import main as _main
+    return _main.get_analyze_service()
 
 
 @router.post("/analyze", response_model=Union[AnalyzeResponse, SelectionRequiredResponse])
@@ -92,6 +93,13 @@ async def analyze_garment_endpoint(
         # Pass through legacy response objects (multipart/form-data)
         if isinstance(result, Response):
             return result
+
+        # Legacy analyze payloads return a top-level status code and should bypass Pydantic wrapping
+        if isinstance(result, dict) and isinstance(result.get("status"), int):
+            return json_response(result)
+
+        if not isinstance(result, dict):
+            raise HTTPException(status_code=500, detail="Analyze service returned an invalid response type")
 
         # Handle selection required response for dict payloads
         if result.get("selection_required"):
@@ -162,6 +170,13 @@ async def analyze_with_selection_endpoint(
         # Pass through legacy response objects (multipart/form-data)
         if isinstance(result, Response):
             return result
+
+        # Legacy analyze payloads return a top-level status code and should bypass Pydantic wrapping
+        if isinstance(result, dict) and isinstance(result.get("status"), int):
+            return json_response(result)
+
+        if not isinstance(result, dict):
+            raise HTTPException(status_code=500, detail="Analyze service returned an invalid response type")
         
         return AnalyzeResponse(
             status="success",

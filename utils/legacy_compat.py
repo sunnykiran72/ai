@@ -4,6 +4,7 @@ Legacy compatibility helpers extracted from main.py.
 This module is intentionally centralized for legacy test and API shims.
 """
 
+import logging
 import os
 import re
 from dataclasses import replace
@@ -49,6 +50,16 @@ from utils.color_processing import (
     bucket_color_undertone as _bucket_color_undertone,
     hex_to_rgb_triplet as _hex_to_rgb_triplet,
 )
+from shared.category_mapping import (
+    wardrobe_category_from_garment_type as _wardrobe_category_from_garment_type,
+    infer_style_from_text as _infer_style_from_text,
+)
+
+logger = logging.getLogger("glamify-ai")
+
+# Injected by main.py at runtime for legacy shims
+engine = None
+estimate_type_focused_color_mask_fn = None
 from utils.image_preprocessing import (
     mask_connected_components as _mask_connected_components,
     bbox_from_mask as _bbox_from_mask,
@@ -92,6 +103,14 @@ GARMENT_COLOR_SEMANTIC_OVERRIDE_ENABLED = True
 
 ANALYZE_FASHION_BASECOLOUR_APPLY_MIN_SCORE = 0.90
 ANALYZE_COLOR_PARSER_SAMPLING_TRIAL_ENABLED = True
+
+# Uncertain full-body fallback settings (synced by main.py)
+ANALYZE_UNCERTAIN_FULLBODY_TO_DRESS = True
+ANALYZE_UNCERTAIN_FULLBODY_MIN_HEIGHT_RATIO = 0.78
+ANALYZE_UNCERTAIN_FULLBODY_MIN_AREA_RATIO = 0.22
+ANALYZE_UNCERTAIN_FULLBODY_MAX_TOP_RATIO = 0.26
+ANALYZE_UNCERTAIN_FULLBODY_MIN_BOTTOM_RATIO = 0.90
+ANALYZE_UNCERTAIN_FULLBODY_MIN_AREA_ADVANTAGE = 1.55
 
 def _descriptor_word_count(text: str) -> int:
     return _descriptor_word_count_base(text)
@@ -1149,6 +1168,10 @@ def _nearest_color_label(rgb_triplet: Tuple[int, int, int]) -> str:
     b_star = float(lab[2]) - 128.0
     chroma = float(np.sqrt((a_star * a_star) + (b_star * b_star)))
 
+    if 52.0 <= l_star <= 84.0 and chroma >= 26.0 and b_star >= 28.0 and a_star >= -2.0:
+        if b_star >= 34.0 or (b_star >= 28.0 and chroma >= 32.0):
+            return "gold"
+
     if (
         45.0 <= l_star < 86.0
         and chroma < 35.0
@@ -1179,8 +1202,12 @@ def _nearest_color_label(rgb_triplet: Tuple[int, int, int]) -> str:
         if l_star < 28.0:
             return "charcoal"
         if l_star < 62.0:
-            return "gray" if b_star < 8.0 else "tan"
-        if l_star < 85.0:
+            return "gray" if b_star < 9.0 else "tan"
+        if l_star < 78.0:
+            return "gray" if b_star < 10.0 else "tan"
+        if l_star < 90.0:
+            if chroma < 6.0 and b_star < 8.0 and abs(a_star) < 8.0:
+                return "white" if l_star >= 76.0 else "silver"
             return "silver" if b_star < 9.0 else "beige"
         if l_star < 96.0:
             return "cream" if b_star > 11.0 else ("ivory" if b_star > 4.0 else "white")
@@ -3030,14 +3057,17 @@ def _build_flux2_single_garment_extract_negative_prompt(
 
 
 def _parser_category_ids(category: str, fallback: Optional[List[int]] = None) -> List[int]:
+    ids: List[int] = []
     if engine.parser and hasattr(engine.parser, "category_ids"):
         try:
-            ids = engine.parser.category_ids(category)
-            if ids:
-                return sorted({int(v) for v in ids})
+            raw_ids = engine.parser.category_ids(category)
+            if raw_ids:
+                ids.extend(int(v) for v in raw_ids)
         except Exception:
             pass
-    return [int(v) for v in (fallback or [])]
+    if fallback:
+        ids.extend(int(v) for v in fallback)
+    return sorted({int(v) for v in ids})
 
 
 def _parser_extraction_keep_ids(garment_type: str) -> List[int]:
@@ -3049,6 +3079,26 @@ def _parser_extraction_keep_ids(garment_type: str) -> List[int]:
         "dress": [7],
     }
     return _parser_category_ids(g, fallback_map.get(g, [4]))
+
+
+def _parser_fallback_ids(garment_type: str) -> List[int]:
+    g = _normalize_garment_type(garment_type) or "top"
+    return {
+        "top": [4, 3],
+        "outer": [4, 3],
+        "bottom": [5, 6],
+        "dress": [7],
+    }.get(g, [4])
+
+
+def _parser_strict_mask_fallback(parsing: np.ndarray, garment_type: str) -> np.ndarray:
+    ids = _parser_fallback_ids(garment_type)
+    if not ids:
+        return np.zeros_like(parsing, dtype=bool)
+    mask = np.isin(parsing, ids)
+    mask = binary_open(mask, 3)
+    mask = binary_close(mask, 3)
+    return np.asarray(mask).astype(bool)
 
 
 def _parser_strict_mask(parsing: np.ndarray, garment_type: str) -> np.ndarray:
@@ -3070,6 +3120,17 @@ def _split_outfit_signature_from_parsing(parsing: np.ndarray) -> Dict[str, objec
     top_mask = _parser_strict_mask(parsing, "top")
     bottom_mask = _parser_strict_mask(parsing, "bottom")
     dress_mask = _parser_strict_mask(parsing, "dress")
+
+    try:
+        overlap = np.mean(top_mask & bottom_mask)
+        top_area = np.mean(top_mask)
+        bottom_area = np.mean(bottom_mask)
+        if overlap > 0.15 and top_area > 0.01 and bottom_area > 0.01:
+            top_mask = _parser_strict_mask_fallback(parsing, "top")
+            bottom_mask = _parser_strict_mask_fallback(parsing, "bottom")
+            dress_mask = _parser_strict_mask_fallback(parsing, "dress")
+    except Exception:
+        pass
 
     top_area_ratio = float(np.sum(top_mask)) / total_pixels
     bottom_area_ratio = float(np.sum(bottom_mask)) / total_pixels
@@ -3164,6 +3225,155 @@ def _split_outfit_signature_from_parsing(parsing: np.ndarray) -> Dict[str, objec
         "dress_area_ratio": round(dress_area_ratio, 6),
         "x_overlap": round(float(x_overlap), 4),
     }
+
+
+def _item_rank_score(item: dict) -> float:
+    conf = item.get("confidence", {})
+    if isinstance(conf, dict):
+        return float(conf.get("hybrid", conf.get("yolo", 0.0)))
+    return 0.0
+
+
+def _requested_type_geometry_score(item: dict, requested_type: str, image_height: int) -> float:
+    bbox = item.get("bbox")
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4 or image_height <= 0:
+        return _item_rank_score(item)
+    _, y0, _, y1 = [int(v) for v in bbox]
+    box_h = max(1, y1 - y0)
+    center_y = y0 + (box_h / 2.0)
+    center_ratio = float(center_y) / float(image_height)
+    height_ratio = float(box_h) / float(image_height)
+    base = _item_rank_score(item)
+    req = _normalize_garment_type(requested_type)
+
+    if req in {"top", "outer"}:
+        return base + (1.0 - center_ratio) + (0.25 * min(height_ratio, 0.6))
+    if req == "bottom":
+        return base + center_ratio + (0.15 * min(height_ratio, 0.75))
+    if req == "dress":
+        return base + (1.5 * height_ratio) - abs(center_ratio - 0.52)
+    return base
+
+
+def _caption_fullbody_dress_signal(text: str) -> bool:
+    t = " ".join(str(text or "").strip().lower().split())
+    if not t:
+        return False
+    dress_terms = (
+        "dress", "gown", "one-piece", "one piece", "maxi", "midi", "mini",
+        "anarkali", "saree", "sari", "lehenga", "jumpsuit", "romper", "kurti",
+        "traditional drape", "draped garment", "full-length drape",
+    )
+    return any(term in t for term in dress_terms)
+
+
+def _maybe_force_uncertain_fullbody_to_dress(
+    items: list[dict],
+    *,
+    image_width: int,
+    image_height: int,
+    requested_type: Optional[str] = None,
+) -> tuple[list[dict], Optional[dict]]:
+    if (
+        requested_type
+        or not ANALYZE_UNCERTAIN_FULLBODY_TO_DRESS
+        or len(items) < 2
+        or image_width <= 0
+        or image_height <= 0
+    ):
+        return items, None
+
+    normalized_types = [_normalize_garment_type(str(item.get("type") or "")) for item in items]
+    unique_types = {t for t in normalized_types if t}
+
+    candidates: list[tuple[int, dict]] = []
+    for idx, item in enumerate(items):
+        bbox = item.get("bbox")
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            continue
+        x0, y0, x1, y1 = [int(v) for v in bbox]
+        width = max(1, x1 - x0)
+        height = max(1, y1 - y0)
+        area_ratio = float(width * height) / max(1.0, float(image_width * image_height))
+        height_ratio = float(height) / float(image_height)
+        top_ratio = float(y0) / float(image_height)
+        bottom_ratio = float(y1) / float(image_height)
+        prompt_text = " ".join(
+            str(item.get(key) or "")
+            for key in ("promptDescription", "description", "style", "category_key")
+        ).strip()
+        candidates.append(
+            (
+                idx,
+                {
+                    "item": item,
+                    "bbox": [x0, y0, x1, y1],
+                    "area_ratio": area_ratio,
+                    "height_ratio": height_ratio,
+                    "top_ratio": top_ratio,
+                    "bottom_ratio": bottom_ratio,
+                    "type": _normalize_garment_type(str(item.get("type") or "")),
+                    "rank_score": _item_rank_score(item),
+                    "dress_signal": _caption_fullbody_dress_signal(prompt_text),
+                },
+            )
+        )
+
+    if len(candidates) < 2:
+        return items, None
+
+    candidates.sort(key=lambda pair: (pair[1]["area_ratio"], pair[1]["rank_score"]), reverse=True)
+    dominant_idx, dominant = candidates[0]
+    runner_up_area = float(candidates[1][1]["area_ratio"])
+    area_advantage = float(dominant["area_ratio"]) / max(1e-6, runner_up_area)
+
+    dominant_is_fullbody = (
+        dominant["height_ratio"] >= ANALYZE_UNCERTAIN_FULLBODY_MIN_HEIGHT_RATIO
+        and dominant["area_ratio"] >= ANALYZE_UNCERTAIN_FULLBODY_MIN_AREA_RATIO
+        and dominant["top_ratio"] <= ANALYZE_UNCERTAIN_FULLBODY_MAX_TOP_RATIO
+        and dominant["bottom_ratio"] >= ANALYZE_UNCERTAIN_FULLBODY_MIN_BOTTOM_RATIO
+    )
+    if not dominant_is_fullbody:
+        return items, None
+
+    types_allow_fallback = len(unique_types) <= 1 or dominant["dress_signal"]
+    if not types_allow_fallback:
+        return items, None
+
+    required_area_advantage = ANALYZE_UNCERTAIN_FULLBODY_MIN_AREA_ADVANTAGE
+    if dominant["dress_signal"]:
+        required_area_advantage = min(required_area_advantage, 1.30)
+    if area_advantage < required_area_advantage:
+        return items, None
+
+    chosen = dict(items[dominant_idx])
+    original_type = chosen.get("type")
+    chosen["type_original"] = original_type
+    chosen["garment_type_original"] = chosen.get("garment_type")
+    chosen["type"] = "dress"
+    chosen["garment_type"] = "dress"
+    chosen["type_source"] = "uncertain_fullbody_dress_fallback"
+    chosen["dress_fallback"] = {
+        "triggered": True,
+        "dominant_index": int(dominant_idx),
+        "area_ratio": round(float(dominant["area_ratio"]), 4),
+        "height_ratio": round(float(dominant["height_ratio"]), 4),
+        "top_ratio": round(float(dominant["top_ratio"]), 4),
+        "bottom_ratio": round(float(dominant["bottom_ratio"]), 4),
+        "area_advantage": round(area_advantage, 4),
+        "required_area_advantage": round(required_area_advantage, 4),
+        "unique_types_before": sorted(unique_types),
+        "dress_signal": bool(dominant["dress_signal"]),
+    }
+    inferred_style = _infer_style_from_text(
+        str(chosen.get("promptDescription") or chosen.get("description") or ""),
+        garment_type="dress",
+    )
+    category_meta = _wardrobe_category_from_garment_type("dress", style=inferred_style if inferred_style else None)
+    chosen["style"] = category_meta["style"]
+    chosen["category_key"] = category_meta["category_key"]
+    chosen["primary_category_key"] = category_meta["primary_category_key"]
+    return [chosen], chosen["dress_fallback"]
 
 
 def _skin_like_mask(rgb_image: np.ndarray) -> np.ndarray:
@@ -3271,12 +3481,22 @@ def _resolve_color_sampling_mask(
     parser_mask = None
     parser_meta: Dict[str, object] = {"source": "disabled", "used": False, "reason": "type_mask_not_requested"}
     if apply_type_color_mask:
-        parser_mask, parser_meta = _estimate_type_focused_color_mask(
+        mask_fn = estimate_type_focused_color_mask_fn or _estimate_type_focused_color_mask
+        result = mask_fn(
             image,
             garment_type,
             description,
             return_meta=True,
         )
+        if isinstance(result, tuple) and len(result) == 2:
+            parser_mask, parser_meta = result
+        else:
+            parser_mask = result
+            parser_meta = {
+                "source": "type_mask_runtime",
+                "used": bool(parser_mask is not None),
+                "reason": "type_mask_runtime",
+            }
         parser_mask = _normalize_color_sampling_mask(parser_mask, image.size)
         if isinstance(parser_mask, np.ndarray):
             parser_meta = dict(parser_meta or {})

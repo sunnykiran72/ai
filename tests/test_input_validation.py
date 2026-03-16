@@ -368,7 +368,14 @@ class TestInputValidation:
                 assert len(errors) > 0
                 
                 # Check for type-related error messages
-                type_errors = [err for err in errors if "type" in err.get("type", "")]
+                type_errors = [
+                    err
+                    for err in errors
+                    if any(
+                        token in str(err.get("type", ""))
+                        for token in ("type", "parsing", "from_float")
+                    )
+                ]
                 assert len(type_errors) > 0
 
 
