@@ -10,6 +10,8 @@ import json
 import hashlib
 import colorsys
 import threading
+from datetime import datetime
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace
 from typing import Any, Optional, List, Tuple, Dict
@@ -482,6 +484,14 @@ ENABLE_WARDROBE_PROGRESS_SYNC = os.getenv("ENABLE_WARDROBE_PROGRESS_SYNC", "0") 
 WARDROBE_PROGRESS_API_BASE_URL = os.getenv("WARDROBE_PROGRESS_API_BASE_URL", "").strip()
 WARDROBE_PROGRESS_SYNC_TIMEOUT_S = max(5, _env_int("WARDROBE_PROGRESS_SYNC_TIMEOUT_S", 20))
 WARDROBE_PROGRESS_INCLUDE_INPUT_IMAGE = os.getenv("WARDROBE_PROGRESS_INCLUDE_INPUT_IMAGE", "0") == "1"
+WARDROBE_RESULTS_ENABLED = os.getenv("WARDROBE_RESULTS_ENABLED", "1") == "1"
+WARDROBE_RESULTS_DIR = os.getenv(
+    "WARDROBE_RESULTS_DIR",
+    str(Path(__file__).resolve().parent / "wardrobe_results"),
+).strip()
+WARDROBE_RESULTS_SAVE_INPUT = os.getenv("WARDROBE_RESULTS_SAVE_INPUT", "1") == "1"
+WARDROBE_RESULTS_SAVE_OUTPUT = os.getenv("WARDROBE_RESULTS_SAVE_OUTPUT", "1") == "1"
+WARDROBE_RESULTS_SAVE_MASKS = os.getenv("WARDROBE_RESULTS_SAVE_MASKS", "1") == "1"
 ANALYZE_AUX_MIN_REL_AREA = _env_float("ANALYZE_AUX_MIN_REL_AREA", 0.22)
 PARSER_FUSION_V1_ENABLED = os.getenv("PARSER_FUSION_V1_ENABLED", "1") == "1"
 PARSER_FUSION_USE_YOLO_SUPPORT = os.getenv("PARSER_FUSION_USE_YOLO_SUPPORT", "1") == "1"
@@ -7444,6 +7454,200 @@ def _parser_runtime_id2label() -> dict[int, str]:
         pass
     return out
 
+def _mask_to_image(mask: np.ndarray) -> Image.Image:
+    return Image.fromarray((mask.astype(np.uint8) * 255), mode="L")
+
+def _overlay_mask(
+    image: Image.Image,
+    mask: np.ndarray,
+    color: tuple[int, int, int] = (0, 200, 255),
+    alpha: float = 0.45,
+) -> Image.Image:
+    base = image.convert("RGBA")
+    overlay = Image.new("RGBA", base.size, color + (0,))
+    alpha_val = int(max(1, min(255, int(255 * float(alpha)))))
+    alpha_mask = (mask.astype(np.uint8) * alpha_val)
+    overlay.putalpha(Image.fromarray(alpha_mask, mode="L"))
+    return Image.alpha_composite(base, overlay).convert("RGB")
+
+def _color_for_label_id(label_id: int) -> tuple[int, int, int]:
+    seed = int(label_id) & 0xFFFF
+    r = (seed * 53 + 97) % 256
+    g = (seed * 97 + 13) % 256
+    b = (seed * 193 + 53) % 256
+    return int(r), int(g), int(b)
+
+def _colorize_parsing(parsing: np.ndarray) -> Image.Image:
+    if parsing.size == 0:
+        return Image.new("RGB", (1, 1), (0, 0, 0))
+    max_id = int(np.max(parsing))
+    palette = np.zeros((max_id + 1, 3), dtype=np.uint8)
+    for idx in range(max_id + 1):
+        palette[idx] = np.array(_color_for_label_id(idx), dtype=np.uint8)
+    colored = palette[parsing]
+    return Image.fromarray(colored.astype(np.uint8), mode="RGB")
+
+def _overlay_colorized(image: Image.Image, colorized: Image.Image, alpha: float = 0.45) -> Image.Image:
+    base = image.convert("RGBA")
+    overlay = colorized.convert("RGBA")
+    overlay.putalpha(int(max(1, min(255, int(255 * float(alpha))))))
+    return Image.alpha_composite(base, overlay).convert("RGB")
+
+def _normalize_wardrobe_filename(name: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9._-]+", "_", str(name or "")).strip("._")
+    if not cleaned:
+        return "input.png"
+    if "." not in cleaned:
+        return f"{cleaned}.png"
+    return cleaned
+
+def _sanitize_debug_payload(value: object) -> object:
+    if isinstance(value, (bytes, bytearray, np.ndarray, Image.Image)):
+        return None
+    if isinstance(value, dict):
+        out: Dict[str, object] = {}
+        for k, v in value.items():
+            if str(k).startswith("_"):
+                continue
+            sanitized = _sanitize_debug_payload(v)
+            if sanitized is not None:
+                out[str(k)] = sanitized
+        return out
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_debug_payload(v) for v in value]
+    try:
+        json.dumps(value)
+        return value
+    except TypeError:
+        return str(value)
+
+def _write_json_file(path: Path, payload: object) -> None:
+    path.write_text(
+        json.dumps(payload, ensure_ascii=True, separators=(",", ":"), default=str),
+        encoding="utf-8",
+    )
+
+def _persist_wardrobe_result(
+    *,
+    image_bytes: Optional[bytes],
+    upload_name: str,
+    requested_type: Optional[str],
+    selected_item: Optional[Dict[str, object]],
+    public_item: Optional[Dict[str, object]],
+    items: List[Dict[str, object]],
+    prompting_context: Dict[str, object],
+    stage_timings: Dict[str, object],
+    auth_result: Optional[Dict[str, object]],
+    debug: bool = False,
+) -> Optional[Path]:
+    if not WARDROBE_RESULTS_ENABLED:
+        return None
+
+    timestamp = datetime.now()
+    run_id = f"{timestamp.strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+    base_dir = Path(WARDROBE_RESULTS_DIR)
+    out_dir = base_dir / run_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    if WARDROBE_RESULTS_SAVE_INPUT and image_bytes:
+        filename = _normalize_wardrobe_filename(upload_name)
+        (out_dir / filename).write_bytes(image_bytes)
+
+    extracted_bytes = bytes((selected_item or {}).get("_extracted_image_bytes") or b"")
+    if WARDROBE_RESULTS_SAVE_OUTPUT and extracted_bytes:
+        (out_dir / "extracted_cloth.png").write_bytes(extracted_bytes)
+
+    output_url = ""
+    if public_item:
+        output_url = str(public_item.get("output_image_url") or public_item.get("url") or "")
+    if output_url:
+        (out_dir / "output_url.txt").write_text(output_url, encoding="utf-8")
+
+    prompt_lines: List[str] = []
+    if selected_item:
+        for key, label in (
+            ("promptDescription", "prompt_description"),
+            ("description", "description"),
+            ("baseGarmentPrompt", "base_garment_prompt"),
+            ("extractionAvoidClause", "extraction_avoid_clause"),
+            ("promptSectionsRaw", "prompt_sections_raw"),
+            ("promptDescriptionRaw", "prompt_description_raw"),
+        ):
+            value = " ".join(str(selected_item.get(key) or "").split()).strip()
+            if value:
+                prompt_lines.append(f"{label}: {value}")
+    if prompt_lines:
+        (out_dir / "prompt.txt").write_text("\n".join(prompt_lines), encoding="utf-8")
+
+    garment_meta = (public_item or {}).get("garmentMetadata") if public_item else None
+    if isinstance(garment_meta, dict):
+        color_block = garment_meta.get("color")
+        if isinstance(color_block, dict) and color_block:
+            _write_json_file(out_dir / "color.json", color_block)
+
+    if WARDROBE_RESULTS_SAVE_MASKS and selected_item:
+        crop = selected_item.get("_image_obj")
+        if isinstance(crop, Image.Image):
+            try:
+                crop.save(out_dir / "crop.png")
+            except Exception:
+                pass
+            selected_type = str(selected_item.get("type") or selected_item.get("garment_type") or "")
+            mask, mask_meta = _resolve_color_sampling_mask(
+                image=crop,
+                garment_type=selected_type,
+                description=str(selected_item.get("description") or ""),
+                reference_mask=None,
+                apply_type_color_mask=True,
+            )
+            if isinstance(mask, np.ndarray):
+                try:
+                    _mask_to_image(mask).save(out_dir / "mask_final.png")
+                    _overlay_mask(crop, mask).save(out_dir / "mask_overlay.png")
+                except Exception:
+                    pass
+            try:
+                _write_json_file(out_dir / "mask_meta.json", mask_meta)
+            except Exception:
+                pass
+
+            if engine.parser is not None:
+                try:
+                    parsing = engine.parser.parse(crop)
+                except Exception:
+                    parsing = None
+                if isinstance(parsing, np.ndarray):
+                    try:
+                        label_map = _parser_runtime_id2label()
+                        if label_map:
+                            _write_json_file(out_dir / "parser_labels.json", label_map)
+                        max_id = int(np.max(parsing)) if parsing.size else 0
+                        raw_ids = (
+                            (parsing.astype(np.float32) / float(max_id) * 255.0).clip(0, 255).astype(np.uint8)
+                            if max_id > 0
+                            else parsing.astype(np.uint8)
+                        )
+                        Image.fromarray(raw_ids, mode="L").save(out_dir / "parser_raw_ids.png")
+                        colorized = _colorize_parsing(parsing)
+                        colorized.save(out_dir / "parser_raw_color.png")
+                        _overlay_colorized(crop, colorized).save(out_dir / "parser_raw_overlay.png")
+                    except Exception:
+                        pass
+
+    payload = {
+        "timestamp": timestamp.isoformat(),
+        "requested_type": requested_type,
+        "auth": auth_result or {},
+        "debug": bool(debug),
+        "public_item": _sanitize_debug_payload(public_item or {}),
+        "selected_item": _sanitize_debug_payload(selected_item or {}),
+        "items": _sanitize_debug_payload(items),
+        "prompting_context": _sanitize_debug_payload(prompting_context),
+        "stage_timings": _sanitize_debug_payload(stage_timings),
+    }
+    _write_json_file(out_dir / "metadata.json", payload)
+    return out_dir
+
 def _square_bbox_from_bbox(
     bbox: list[int],
     image_width: int,
@@ -12763,6 +12967,22 @@ async def analyze_garment(
         total_s = round(time.time() - t0, 4)
         analyze_stage_timings["caption_total_s"] = round(float(analyze_stage_timings["caption_total_s"]), 4)
         analyze_stage_timings["primary_type_total_s"] = round(float(analyze_stage_timings["primary_type_total_s"]), 4)
+        if WARDROBE_RESULTS_ENABLED:
+            try:
+                _persist_wardrobe_result(
+                    image_bytes=image_bytes,
+                    upload_name=str(getattr(upload, "filename", "") or "input.png"),
+                    requested_type=requested_type,
+                    selected_item=selected_item,
+                    public_item=public_item,
+                    items=items,
+                    prompting_context=prompting_context,
+                    stage_timings=analyze_stage_timings.to_dict(),
+                    auth_result=auth_result if isinstance(auth_result, dict) else {},
+                    debug=bool(debug),
+                )
+            except Exception as persist_err:
+                logger.warning("Wardrobe results dump failed: %s", persist_err)
         return _build_extraction_success_response(
             public_item=public_item,
             selected_item=selected_item,
