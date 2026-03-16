@@ -126,6 +126,15 @@ class JoyCaptionRunner:
         self.ensure_ready()
         rgb = image.convert("RGB")
         instruction = str(instruction_override or self.instruction).strip() or self.instruction
+        if not instruction_override:
+            try:
+                from config.prompts import get_joycaption_negative_prompt
+
+                negative_clause = get_joycaption_negative_prompt()
+            except Exception:
+                negative_clause = ""
+            if negative_clause:
+                instruction = f"{instruction} Avoid describing: {negative_clause}."
 
         messages = [{"role": "user", "content": "<image>\n" + instruction}]
         prompt = self._processor.apply_chat_template(

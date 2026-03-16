@@ -13,6 +13,7 @@ import io
 import logging
 import os
 import re
+import time
 from dataclasses import replace
 from typing import Optional, List, Dict, Tuple
 
@@ -40,7 +41,7 @@ from routes import (
 
 # Shared utilities
 from shared.azure_storage import storage
-from shared.image_ops import binary_open, binary_close, rgb_to_lab
+from shared.image_ops import binary_open, binary_close, rgb_to_lab, download_image
 
 from core.garment_color_context import (
     GarmentColorContextSettings,
@@ -81,6 +82,10 @@ from utils.image_preprocessing import (
     mask_connected_components as _mask_connected_components,
     bbox_from_mask as _bbox_from_mask,
     bbox_x_overlap_ratio as _bbox_x_overlap_ratio,
+    remove_background_rembg as _remove_background_rembg,
+    remove_background_birefnet as _remove_background_birefnet,
+    enhance_image as _enhance_image,
+    pad_image as _pad_image,
 )
 
 # Configure logging
@@ -382,17 +387,192 @@ def _describe_user_image_for_prepare(image: Image.Image, description_backend: Op
     return "identity: person. pose: standing."
 
 
-def _run_vton_cloth_only_fallback(image_url: str, garment_type: str, vto_mode: bool = False) -> Dict[str, object]:
-    return {
-        "url": "",
-        "raw_url": "",
-        "_processed_image_bytes": b"",
-        "meta": {
-            "path": "vton_fallback_stub",
-            "endpoint": "",
-            "category": garment_type,
-            "vto_mode": bool(vto_mode),
+def _run_vton_cloth_only_fallback(
+    image_url: str,
+    garment_type: str,
+    vto_mode: bool = False,
+    base_prompt: str = "",
+    negative_prompt: str = "",
+    minicpm_description: str = "",
+    prompt_description: str = "",
+    fallback_prompt_description: str = "",
+    source_image: Optional[Image.Image] = None,
+    steps: Optional[int] = None,
+    seed: Optional[int] = None,
+    true_cfg_scale: Optional[float] = None,
+    **_kwargs,
+) -> Dict[str, object]:
+    """
+    Run garment extraction for /analyze.
+
+    This method attempts a Flux2-based extraction first (if available),
+    and falls back to background-removal extraction for robustness.
+
+    Args:
+        image_url: Source image URL or filename
+        garment_type: Type of garment (top, bottom, dress, outer)
+        vto_mode: Whether this is for virtual try-on
+        base_prompt: Flux2 positive prompt (what TO generate)
+        negative_prompt: Flux2 negative prompt (what NOT to generate)
+        minicpm_description: MiniCPM garment description for metadata
+        prompt_description: Optional prompt description
+        fallback_prompt_description: Optional fallback prompt hint
+        source_image: Source image crop (preferred)
+        steps: Flux2 inference steps
+        seed: Flux2 seed
+        true_cfg_scale: Optional override for true CFG scale
+    
+    Returns:
+        Dict with 'url' key containing extracted image URL
+    """
+    t0 = time.time()
+    extracted_image = None
+    extraction_pipeline = "background_extract"
+    extraction_meta: Dict[str, object] = {}
+
+    resolved_prompt = " ".join(
+        str(base_prompt or prompt_description or fallback_prompt_description or "garment").split()
+    ).strip()
+    resolved_negative = " ".join(str(negative_prompt or "").split()).strip()
+
+    # Resolve source image
+    input_image = source_image
+    if input_image is None:
+        try:
+            if image_url and str(image_url).startswith(("http://", "https://")):
+                input_image = download_image(str(image_url))
+            elif image_url and os.path.exists(str(image_url)):
+                input_image = Image.open(str(image_url)).convert("RGB")
+        except Exception as exc:
+            logger.warning(f"Failed to load image for extraction: {exc}")
+            input_image = None
+
+    # Attempt Flux2 extraction if runner is available
+    if input_image is not None:
+        try:
+            flux_runner = engine.get_flux2_for_analyze()
+            flux_runner.ensure_ready()
+            flux_steps = int(steps) if steps is not None else int(config.analyze.flux2_single_garment_extract_default_steps)
+            flux_seed = int(seed) if seed is not None else int(config.analyze.flux2_single_garment_extract_default_seed)
+            flux_true_cfg = float(true_cfg_scale) if true_cfg_scale is not None else None
+
+            flux_result = flux_runner.run_tryon(
+                person_image=input_image,
+                board_image=input_image,
+                prompt=resolved_prompt or "garment",
+                steps=flux_steps,
+                seed=flux_seed,
+                negative_prompt=resolved_negative if resolved_negative else None,
+                use_lora=False,
+                true_cfg_scale=flux_true_cfg,
+            )
+            extracted_image = flux_result.get("image")
+            extraction_pipeline = "flux2_extract"
+            extraction_meta.update({
+                "pipeline": "flux2_extract",
+                "steps": flux_steps,
+                "seed": flux_seed,
+                "latency": float(flux_result.get("latency", 0.0) or 0.0),
+                "negative_prompt_mode": (flux_result.get("metadata") or {}).get("negative_prompt_mode"),
+                "negative_prompt_true_cfg_scale": (flux_result.get("metadata") or {}).get("negative_prompt_true_cfg_scale"),
+            })
+        except Exception as exc:
+            logger.warning(f"Flux2 extraction failed; falling back to background removal: {exc}")
+            extracted_image = None
+
+    # Background-removal fallback
+    bg_meta: Dict[str, object] = {}
+    if extracted_image is None and input_image is not None:
+        try:
+            buf = io.BytesIO()
+            input_image.convert("RGB").save(buf, format="PNG")
+            raw_bytes = buf.getvalue()
+
+            backend = str(config.analyze.bg_removal_backend or "raw").lower()
+            out_bytes: Optional[bytes] = None
+            if backend == "rembg":
+                out_bytes, bg_meta = _remove_background_rembg(raw_bytes)
+            elif backend == "birefnet":
+                out_bytes, bg_meta = _remove_background_birefnet(raw_bytes)
+            elif backend in {"white", "raw"}:
+                out_bytes = raw_bytes
+                bg_meta = {"mode": backend}
+
+            if out_bytes is None:
+                out_bytes = raw_bytes
+                bg_meta = {"mode": "raw_fallback"}
+
+            extracted_image = Image.open(io.BytesIO(out_bytes)).convert("RGBA")
+            extraction_pipeline = "background_extract"
+        except Exception as exc:
+            logger.error(f"Background removal failed: {exc}")
+            extracted_image = None
+
+    if extracted_image is None:
+        return {
+            "url": "",
+            "raw_url": "",
+            "_processed_image_bytes": b"",
+            "meta": {
+                "path": "extract_failed",
+                "endpoint": "",
+                "category": garment_type,
+                "vto_mode": bool(vto_mode),
+                "pipeline": "extract_failed",
+                "error": "extraction_failed",
+            },
+        }
+
+    # Postprocess + background output formatting
+    output_image = extracted_image
+    if config.analyze.garment_postprocess_enabled:
+        output_image = _enhance_image(output_image)
+
+    output_image = _pad_image(
+        output_image,
+        int(config.analyze.garment_target_aspect_w),
+        int(config.analyze.garment_target_aspect_h),
+    )
+
+    if str(config.analyze.garment_output_background).lower() == "white":
+        if output_image.mode != "RGBA":
+            output_image = output_image.convert("RGBA")
+        white_bg = Image.new("RGB", output_image.size, (255, 255, 255))
+        white_bg.paste(output_image, mask=output_image.split()[-1])
+        output_image = white_bg.convert("RGB")
+
+    out_buf = io.BytesIO()
+    output_image.save(out_buf, format="PNG")
+    processed_bytes = out_buf.getvalue()
+
+    url = ""
+    try:
+        url = _upload_or_raise(processed_bytes)
+    except Exception as exc:
+        logger.error(f"Upload failed: {exc}")
+        url = ""
+
+    extraction_meta.update({
+        "path": extraction_pipeline,
+        "endpoint": ANALYZE_VTON_CLOTH_ONLY_ENDPOINT,
+        "category": garment_type,
+        "vto_mode": bool(vto_mode),
+        "base_garment_prompt": resolved_prompt,
+        "extraction_avoid_clause": resolved_negative,
+        "prompt_description": resolved_prompt,
+        "prompt_sections_raw": "",
+        "descriptor_raw_text": str(minicpm_description or "").strip(),
+        "background": bg_meta,
+        "timings": {
+            "total_s": round(time.time() - t0, 4),
         },
+    })
+
+    return {
+        "url": url,
+        "raw_url": url,
+        "_processed_image_bytes": processed_bytes,
+        "meta": extraction_meta,
     }
 
 _descriptor_word_count = _with_runtime_sync(_runtime_compat._descriptor_word_count)

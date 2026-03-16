@@ -77,7 +77,7 @@ _NON_GARMENT_LABELS = {
 @dataclass
 class ClothDetectionConfig:
     detector_threshold: float = 0.30
-    strong_confidence_threshold: float = 0.55
+    strong_confidence_threshold: float = 0.50
     ambiguity_margin: float = 0.08
     duplicate_iou_threshold: float = 0.72
     min_upper_center_ratio_for_bottom: float = 0.42
@@ -238,6 +238,42 @@ class ClothDetector:
                 kept.append(item)
         return kept
 
+    def _collapse_same_type_detections(self, items: List[Dict[str, object]]) -> List[Dict[str, object]]:
+        """
+        Collapse multiple detections of the same type, keeping only the highest confidence one.
+        This prevents returning multiple tops, multiple bottoms, etc.
+        
+        Args:
+            items: List of detection candidates
+            
+        Returns:
+            List with at most one detection per type (top, bottom, dress, outer)
+        """
+        if not items:
+            return []
+        
+        # Group by type
+        type_groups: Dict[str, List[Dict[str, object]]] = {}
+        for item in items:
+            item_type = self._normalize_type(item.get("type"))
+            if item_type not in type_groups:
+                type_groups[item_type] = []
+            type_groups[item_type].append(item)
+        
+        # Keep only highest confidence per type
+        collapsed: List[Dict[str, object]] = []
+        for garment_type, group in type_groups.items():
+            if not group:
+                continue
+            # Sort by confidence (descending) and area (descending)
+            best = max(group, key=lambda item: (
+                float(item.get("confidence", 0.0)),
+                float(item.get("metrics", {}).get("area_ratio", 0.0))
+            ))
+            collapsed.append(best)
+        
+        return collapsed
+
     def _is_weak_or_ambiguous(
         self,
         detections: List[Dict[str, object]],
@@ -269,6 +305,12 @@ class ClothDetector:
             first_bbox = sorted_detections[0].get("bbox") or [0, 0, 0, 0]
             second_bbox = sorted_detections[1].get("bbox") or [0, 0, 0, 0]
             pair_types = {first_type, second_type}
+            
+            # Check for same-type duplicates with similar confidence
+            if first_type == second_type and (top_score - second_score) <= self.config.ambiguity_margin:
+                return True  # Multiple same-type detections with similar confidence - ambiguous
+            
+            # Special case: top + bottom is valid (outfit)
             if (
                 pair_types == {"top", "bottom"}
                 and not self._geometry_conflict(sorted_detections[1], image_height)
@@ -411,6 +453,9 @@ class ClothDetector:
             legacy_candidates = self._build_legacy_candidates(image, requested_type=requested_type)
             if legacy_candidates:
                 candidates = legacy_candidates
+
+        # Collapse same-type detections - keep only highest confidence per type
+        candidates = self._collapse_same_type_detections(candidates)
 
         def _sort_key(item: Dict[str, object]) -> Tuple[float, float]:
             bbox = item.get("bbox") or [0, 0, 0, 0]

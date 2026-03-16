@@ -25,6 +25,7 @@ from shared.security import verify_bearer_token
 from shared.image_ops import download_image
 from shared.category_mapping import wardrobe_category_from_garment_type, infer_style_from_text
 from utils.validation import normalize_garment_type, sanitize_garment_description
+from utils.metadata_extraction import strip_descriptor_color_clause
 from utils.scoring import (
     dedupe_items_by_iou,
     calculate_bbox_prior,
@@ -32,7 +33,6 @@ from utils.scoring import (
     item_rank_by_score,
     find_largest_instance,
 )
-from utils.metadata_extraction import strip_descriptor_color_clause
 from core.garment_extractor import GarmentExtractor, GarmentExtractionConfig, GarmentExtractionRequest
 from modules.wardrobe.extraction.pipeline import default_extraction_stage_timings
 from modules.wardrobe.extraction.utils import (
@@ -43,11 +43,10 @@ from modules.wardrobe.extraction.utils import (
 )
 from modules.wardrobe.extraction.detection_stage import (
     run_detection_stage_or_response,
-    build_selection_required_response,
     resolve_selected_item_or_response,
 )
-from modules.wardrobe.extraction.prompting_stage import apply_selected_item_prompting
 from modules.wardrobe.extraction.generation_stage import run_selected_item_extraction_or_response
+from modules.wardrobe.extraction.prompting_stage import apply_selected_item_prompting
 from modules.wardrobe.extraction.postprocess_stage import sync_selected_item_progress
 
 logger = logging.getLogger("glamify-ai")
@@ -78,12 +77,8 @@ class AnalyzeService:
         self,
         upload,
         garment_type: Optional[str] = None,
-        selected_index: Optional[int] = None,
-        require_selection: Optional[bool] = None,
         debug: bool = False,
         authorization: Optional[str] = None,
-        use_parser_post_extract: Optional[bool] = None,
-        useParserPostExtract: Optional[bool] = None,
     ):
         if upload is None or not hasattr(upload, "read"):
             return {
@@ -185,6 +180,12 @@ class AnalyzeService:
                     "image": full_image.crop((x0, y0, x1, y1)).convert("RGB"),
                 }]
 
+            # MiniCPM: Generates detailed garment description for metadata
+            # JoyCaption: Generates additional context for negative prompts
+            minicpm_runner = getattr(self.engine, "minicpm", None)  # Fixed: was minicpm_runner
+            joycaption_runner = getattr(self.engine, "joycaption", None)
+
+            # Helper functions for extraction
             def _prepare_extract_source_image(
                 *,
                 full_image: Image.Image,
@@ -267,6 +268,33 @@ class AnalyzeService:
                     desc = f"{desc}."
                 return desc or "Garment."
 
+            def _run_flux2_cloth_only_extract(**kwargs) -> Dict[str, object]:
+                fallback_fn = getattr(main_mod, "_run_vton_cloth_only_fallback", None)
+                if fallback_fn is None:
+                    raise RuntimeError("Flux2 extract pipeline not available in refactor.")
+
+                payload = {
+                    "image_url": str(getattr(upload, "filename", "") or "upload"),
+                    "garment_type": str(kwargs.get("garment_type") or ""),
+                    "vto_mode": False,
+                    "base_prompt": kwargs.get("base_prompt", ""),
+                    "negative_prompt": kwargs.get("negative_prompt", ""),
+                    "minicpm_description": kwargs.get("minicpm_description", ""),
+                    "prompt_description": kwargs.get("prompt_description", ""),
+                    "fallback_prompt_description": kwargs.get("fallback_prompt_description", ""),
+                    "source_image": kwargs.get("source_image"),
+                    "steps": kwargs.get("steps"),
+                    "seed": kwargs.get("seed"),
+                }
+                try:
+                    sig = inspect.signature(fallback_fn)
+                    if any(param.kind == param.VAR_KEYWORD for param in sig.parameters.values()):
+                        return fallback_fn(**payload)
+                    filtered = {k: v for k, v in payload.items() if k in sig.parameters}
+                    return fallback_fn(**filtered)
+                except Exception:
+                    return fallback_fn(**payload)
+
             def _suppress_auxiliary_instances(
                 instances: list[dict],
                 image_width: int,
@@ -288,7 +316,7 @@ class AnalyzeService:
             detection_result, detection_response = run_detection_stage_or_response(
                 image=image,
                 requested_type=requested_type,
-                selected_index=selected_index,
+                selected_index=None,
                 engine=self.engine,
                 stage_timings=analyze_stage_timings,
                 logger=logger,
@@ -337,35 +365,10 @@ class AnalyzeService:
             heuristic_split_used = bool(detection_result.get("heuristic_split_used"))
             auto_selected_index = detection_result.get("auto_selected_index")
 
-            require_selection_flag = (
-                bool(require_selection)
-                if require_selection is not None
-                else bool(main_mod.ANALYZE_REQUIRE_SELECTION)
-            )
-            if require_selection_flag and len(items) > 1 and selected_index is None and auto_selected_index is None:
-                return build_selection_required_response(
-                    items=items,
-                    full_image=image,
-                    started_at=started_at,
-                    gpu_queue_wait_s=gpu_queue_wait_s,
-                    raw_detected_count=raw_detected_count,
-                    parser_split_used=parser_split_used,
-                    heuristic_split_used=heuristic_split_used,
-                    selection_preview_format=str(self.config.selection_preview_format),
-                    selection_preview_max_side=int(self.config.selection_preview_max_side),
-                    selection_preview_jpeg_quality=int(self.config.selection_preview_jpeg_quality),
-                    to_public_item=main_mod._to_public_item,
-                    build_adaptive_rect_crop_variants=_simple_build_adaptive_rect_crop_variants,
-                    prepare_extract_source_image=_prepare_extract_source_image,
-                    build_multipart_parts=build_multipart_parts,
-                    build_success_payload=build_success_payload,
-                    multipart_form_response=multipart_form_response,
-                )
-
             selected_item, _selected_index_internal, selected_item_response = resolve_selected_item_or_response(
                 items=items,
                 requested_type=requested_type,
-                selected_index=selected_index,
+                selected_index=None,
                 auto_selected_index=auto_selected_index,
                 min_accept_confidence=float(getattr(main_mod, "ANALYZE_MIN_ACCEPT_CONFIDENCE", self.config.min_accept_confidence)),
                 build_error_payload=build_error_payload,
@@ -374,15 +377,80 @@ class AnalyzeService:
             if selected_item_response is not None:
                 return selected_item_response
 
-            def _run_flux2_cloth_only_extract(**kwargs) -> Dict[str, object]:
-                if not bool(getattr(main_mod, "ANALYZE_VTON_FALLBACK_ENABLED", False)):
-                    raise RuntimeError("Flux2 extract pipeline not available in refactor.")
-                return main_mod._run_vton_cloth_only_fallback(
-                    image_url=str(getattr(upload, "filename", "") or "upload"),
-                    garment_type=str(kwargs.get("garment_type") or ""),
-                    vto_mode=False,
-                )
+            # Stage: MiniCPM + JoyCaption (Run in Parallel)
+            # Determine which image to use for description
+            if isinstance(selected_item.get("_image_obj"), Image.Image):
+                desc_image = selected_item.get("_image_obj")
+            elif "bbox" in selected_item and selected_item["bbox"]:
+                bbox = selected_item["bbox"]
+                x1, y1, x2, y2 = bbox
+                desc_image = image.crop((x1, y1, x2, y2))
+            else:
+                desc_image = image
 
+            # Run MiniCPM and JoyCaption in parallel for efficiency
+            import asyncio
+
+            async def run_minicpm():
+                if not minicpm_runner:
+                    return ""
+                try:
+                    loop = asyncio.get_event_loop()
+                    description = await loop.run_in_executor(
+                        None,
+                        lambda: minicpm_runner.describe_garment(
+                            image=desc_image,
+                            prompt_override=None
+                        )
+                    )
+                    return description
+                except Exception as e:
+                    logger.warning(f"MiniCPM description failed: {e}")
+                    return ""
+
+            async def run_joycaption():
+                if not joycaption_runner:
+                    return ""
+                try:
+                    loop = asyncio.get_event_loop()
+                    description = await loop.run_in_executor(
+                        None,
+                        lambda: joycaption_runner.describe_garment(
+                            image=desc_image,
+                            instruction_override=None
+                        )
+                    )
+                    return description
+                except Exception as e:
+                    logger.warning(f"JoyCaption description failed: {e}")
+                    return ""
+
+            t_description = time.time()
+            minicpm_desc, joycaption_desc = await asyncio.gather(
+                run_minicpm(),
+                run_joycaption()
+            )
+            description_time = round(time.time() - t_description, 4)
+
+            selected_item["minicpm_description"] = minicpm_desc
+            selected_item["joycaption_description"] = joycaption_desc
+            analyze_stage_timings["minicpm_s"] = description_time
+            analyze_stage_timings["joycaption_s"] = description_time
+
+            # Stage: Prompting (Generate Flux2 prompts based on type and MiniCPM description)
+            selected_item, prompting_context = apply_selected_item_prompting(
+                selected_item=selected_item,
+                requested_type=requested_type,
+                analyze_prompt_from_extracted=bool(self.config.prompt_from_extracted),
+                normalize_garment_type=normalize_garment_type,
+                infer_style_from_text=infer_style_from_text,
+                wardrobe_category_from_garment_type=wardrobe_category_from_garment_type,
+                product_prompt_description=_product_prompt_description,
+                build_garment_metadata=main_mod._build_garment_metadata,
+                strip_descriptor_color_clause=strip_descriptor_color_clause,
+            )
+
+            # Stage: Extraction (Run Flux2 extraction with prompts)
             selected_item, extraction_response = run_selected_item_extraction_or_response(
                 selected_item=selected_item,
                 requested_type=requested_type,
@@ -414,18 +482,7 @@ class AnalyzeService:
             if extraction_response is not None:
                 return extraction_response
 
-            selected_item, prompting_context = apply_selected_item_prompting(
-                selected_item=selected_item,
-                requested_type=requested_type,
-                analyze_prompt_from_extracted=bool(self.config.prompt_from_extracted),
-                normalize_garment_type=normalize_garment_type,
-                infer_style_from_text=infer_style_from_text,
-                wardrobe_category_from_garment_type=wardrobe_category_from_garment_type,
-                product_prompt_description=_product_prompt_description,
-                build_garment_metadata=main_mod._build_garment_metadata,
-                strip_descriptor_color_clause=strip_descriptor_color_clause,
-            )
-
+            # Stage: Sync Progress
             selected_item, _postprocess_context = sync_selected_item_progress(
                 selected_item=selected_item,
                 requested_type=requested_type,
@@ -441,6 +498,7 @@ class AnalyzeService:
                 prompting_context=prompting_context,
             )
 
+            # Build final response
             public_item = main_mod._to_public_item(selected_item) if selected_item else None
             return build_success_response(
                 public_item=public_item,
@@ -459,17 +517,3 @@ class AnalyzeService:
         finally:
             if gpu_slot_acquired and gpu_sem is not None:
                 gpu_sem.release()
-
-    async def analyze_with_selection(
-        self,
-        upload,
-        selected_index: int,
-        garment_type: Optional[str] = None,
-        authorization: Optional[str] = None,
-    ):
-        return await self.analyze_image(
-            upload=upload,
-            garment_type=garment_type,
-            selected_index=selected_index,
-            authorization=authorization,
-        )

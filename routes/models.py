@@ -87,14 +87,7 @@ class TryonResponse(SuccessResponse):
 class AnalyzeRequest(BaseModel):
     """Request model for garment analysis endpoint."""
     garment_type: Optional[str] = Field(None, description="Expected garment type")
-    selected_index: Optional[int] = Field(None, ge=0, description="Index of selected garment if multiple detected")
     debug: bool = Field(default=False, description="Enable debug mode")
-
-
-class AnalyzeSelectionRequest(BaseModel):
-    """Request model for analyze with selection."""
-    selected_index: int = Field(..., ge=0, description="Index of selected garment")
-    garment_type: Optional[str] = Field(None, description="Expected garment type")
 
 
 class AnalyzeResponse(SuccessResponse):
@@ -103,14 +96,6 @@ class AnalyzeResponse(SuccessResponse):
         ...,
         description="Analysis result including garment metadata, extracted image, and selection info"
     )
-
-
-class SelectionRequiredResponse(BaseResponse):
-    """Response when multiple garments detected and selection required."""
-    status: str = Field(default="selection_required", description="Selection required status")
-    selection_required: bool = Field(default=True, description="Indicates selection is required")
-    candidates: List[Dict[str, Any]] = Field(..., description="List of detected garment candidates")
-    total_candidates: int = Field(..., description="Total number of candidates")
 
 
 # ── Extract Models ──
@@ -168,25 +153,6 @@ class StatusResponse(BaseModel):
     models: Dict[str, Any] = Field(..., description="Model loading status")
     config: Dict[str, Any] = Field(..., description="Configuration summary")
     startup: Dict[str, Any] = Field(..., description="Startup information")
-
-
-# ── Parser JoyCaption Models (specialized analyze endpoint) ──
-
-class ParserJoyCaptionAnalyzeRequest(BaseModel):
-    """Request model for parser-joycaption analyze endpoint."""
-    image_url: str = Field(..., description="URL of image to analyze")
-    garment_type: Optional[str] = None
-    selected_index: Optional[int] = Field(default=None, ge=0)
-    use_unified_square_split: bool = True
-    square_padding_ratio: float = Field(default=0.12, ge=0.0, le=0.60)
-    min_component_area_ratio: float = Field(default=0.01, ge=0.0005, le=0.25)
-    upload_candidate_previews: bool = True
-    run_flux_garment_only: bool = False
-    flux_steps: int = Field(default=8, ge=4, le=30)
-    flux_seed: int = Field(default=23, ge=0, le=2147483647)
-    flux_extract_only: bool = False
-    flux_extract_strict_safety: bool = True
-    adaptive_rect_crop: bool = False
 
 
 # ── Flux2 and Legacy VTO Models ──

@@ -121,6 +121,10 @@ def run_selected_item_extraction_or_response(
     ):
         selected_prompt_hint = ""
 
+    base_prompt = str(selected_item.get("baseGarmentPrompt") or "").strip()
+    negative_prompt = str(selected_item.get("extractionAvoidClause") or "").strip()
+    minicpm_description = str(selected_item.get("minicpm_description") or "").strip()
+
     extracted_url = ""
     extraction_meta = {}
     extracted_image_bytes = b""
@@ -171,6 +175,9 @@ def run_selected_item_extraction_or_response(
             color_reference_image=color_reference_image,
             reference_mask=reference_mask,
             apply_type_color_mask=bool(selected_type),
+            base_prompt=base_prompt,
+            negative_prompt=negative_prompt,
+            minicpm_description=minicpm_description,
         )
         fallback = flux_fallback
         extracted_url = str(flux_fallback.get("url") or "")

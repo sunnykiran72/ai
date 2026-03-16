@@ -61,7 +61,6 @@ class MiniCPMVRunner:
 
     def _load_model(self) -> None:
         logger.info(f"Loading MiniCPM-V from {self.model_id}...")
-        self._apply_whisper_compat_shim()
         model_kwargs = {
             "trust_remote_code": True,
             "attn_implementation": self.attn_implementation,
@@ -77,40 +76,6 @@ class MiniCPMVRunner:
         tokenizer = AutoTokenizer.from_pretrained(self.model_id, trust_remote_code=True)
         self._model = model
         self._tokenizer = tokenizer
-
-    @staticmethod
-    def _apply_whisper_compat_shim() -> None:
-        """
-        MiniCPM-o remote code imports WHISPER_ATTENTION_CLASSES, which is
-        absent in newer transformers. Add a compatibility alias at runtime.
-        """
-        try:
-            import transformers.models.whisper.modeling_whisper as whisper_mod
-        except Exception:
-            return
-        if hasattr(whisper_mod, "WHISPER_ATTENTION_CLASSES"):
-            return
-        try:
-            from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
-            eager_fn = None
-            if isinstance(ALL_ATTENTION_FUNCTIONS, dict):
-                eager_fn = ALL_ATTENTION_FUNCTIONS.get("eager")
-
-            # Some MiniCPM-o remote code paths call the legacy Whisper map with
-            # signatures that are incompatible with newer `sdpa` helpers.
-            # Force sdpa->eager fallback in this compatibility table.
-            compat_map = {}
-            for key in ("eager", "sdpa", "flash_attention_2"):
-                fn = None
-                if isinstance(ALL_ATTENTION_FUNCTIONS, dict):
-                    fn = ALL_ATTENTION_FUNCTIONS.get(key)
-                if key == "sdpa" and eager_fn is not None:
-                    fn = eager_fn
-                if fn is not None:
-                    compat_map[key] = fn
-            whisper_mod.WHISPER_ATTENTION_CLASSES = compat_map or ALL_ATTENTION_FUNCTIONS
-        except Exception:
-            whisper_mod.WHISPER_ATTENTION_CLASSES = {}
 
     def ensure_ready(self) -> None:
         if self.is_loaded:
@@ -180,47 +145,27 @@ class MiniCPMVRunner:
             )
 
     def describe_garment(self, image: Image.Image, prompt_override: Optional[str] = None) -> str:
+        from config.prompts import get_minicpm_garment_prompt
+        
         return self._run_prompt(
             image=image,
             instruction=(
                 str(prompt_override).strip()
                 if str(prompt_override or "").strip()
-                else (
-                    "Describe only the product garment for high-fidelity virtual try-on. "
-                    "Return exactly one single line with this schema: "
-                    "category=<dress|top|bottom|outerwear|set|unknown>; "
-                    "type=<specific garment type>; "
-                    "colors=<primary and secondary colors>; "
-                    "pattern=<solid|striped|floral|graphic|etc>; "
-                    "material=<fabric/material>; "
-                    "silhouette=<fit and shape>; "
-                    "construction=<neckline, sleeve style, waist/hip shaping, hem/length>; "
-                    "details=<buttons, zipper, pleats, ruffles, lace, embroidery, pockets, slit, logo>; "
-                    "coverage=<what body area it should replace>; "
-                    "preserve=<state that garment colors, print placement, and structure must remain unchanged>. "
-                    "Use 'unknown' when not visible. Do not mention person, mannequin, background, camera, or recommendations."
-                )
+                else get_minicpm_garment_prompt()
             ),
             max_new_tokens=self.garment_max_new_tokens,
         )
 
     def describe_person_and_outfit(self, image: Image.Image, prompt_override: Optional[str] = None) -> str:
+        from config.prompts import get_minicpm_person_outfit_prompt
+        
         return self._run_prompt(
             image=image,
             instruction=(
                 str(prompt_override).strip()
                 if str(prompt_override or "").strip()
-                else (
-                    "Describe only the human subject for virtual try-on identity preservation. "
-                    "Return exactly one single line with this schema: "
-                    "identity=<face shape/features, skin tone, hair style/color, age band>; "
-                    "body_pose=<pose, camera angle, visible limbs>; "
-                    "framing_lighting=<framing, crop, light direction/intensity>; "
-                    "occlusion=<hair/hands/accessories/objects overlapping body regions>; "
-                    "preserve=<face identity, skin tone, hair, body proportions, pose, framing, and lighting should remain unchanged>. "
-                    "Do not describe background or current clothing unless it creates an occlusion. "
-                    "Be factual from visible pixels only; use 'unknown' for hidden details."
-                )
+                else get_minicpm_person_outfit_prompt()
             ),
             max_new_tokens=self.user_max_new_tokens,
         )

@@ -103,6 +103,8 @@ class AnalyzeConfig(BaseModel):
     extract_cloth: bool = Field(default=True, description="Extract cloth from detected garments")
     flux_disable_lora: bool = Field(default=True, description="Disable LoRA for Flux2 in analyze")
     preload_flux_runner: bool = Field(default=False, description="Preload Flux2 runner at startup")
+    flux2_single_garment_extract_default_steps: int = Field(default=10, description="Default steps for Flux2 single garment extraction")
+    flux2_single_garment_extract_default_seed: int = Field(default=23, description="Default seed for Flux2 single garment extraction")
     use_parser_post_extract: bool = Field(default=False, description="Use parser after extraction")
     pass_detection_prompt_to_extract: bool = Field(default=True, description="Pass detection prompt to extraction")
     prompt_from_extracted: bool = Field(default=True, description="Generate prompt from extracted image")
@@ -304,6 +306,8 @@ class AnalyzeConfig(BaseModel):
             extract_cloth=env_bool("ANALYZE_EXTRACT_CLOTH", "1"),
             flux_disable_lora=env_bool("ANALYZE_FLUX_DISABLE_LORA", "1"),
             preload_flux_runner=env_bool("ANALYZE_PRELOAD_FLUX_RUNNER", "0"),
+            flux2_single_garment_extract_default_steps=max(4, env_int("FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS", 10)),
+            flux2_single_garment_extract_default_seed=max(0, env_int("FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_SEED", 23)),
             use_parser_post_extract=env_bool("ANALYZE_USE_PARSER_POST_EXTRACT", "0"),
             pass_detection_prompt_to_extract=env_bool("ANALYZE_PASS_DETECTION_PROMPT_TO_EXTRACT", "1"),
             prompt_from_extracted=env_bool("ANALYZE_PROMPT_FROM_EXTRACTED", "1"),
