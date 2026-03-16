@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, List, Optional
 import numpy as np
 from PIL import Image
 
-from ai.shared.image_ops import (
+from shared.image_ops import (
     resize_mask_to_image, binary_open, binary_close, build_soft_alpha
 )
 

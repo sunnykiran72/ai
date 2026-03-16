@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ai.modules.wardrobe.extraction.contracts import AnalyzeStageTimings
+from modules.wardrobe.extraction.contracts import AnalyzeStageTimings
 
 
 EXTRACTION_STAGE_ORDER = (

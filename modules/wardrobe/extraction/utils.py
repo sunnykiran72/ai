@@ -6,7 +6,7 @@ from typing import Callable, Dict, List, Optional
 
 from PIL import Image
 
-from ai.modules.wardrobe.extraction.contracts import AnalyzeInputImage, AnalyzeStageTimings
+from modules.wardrobe.extraction.contracts import AnalyzeInputImage, AnalyzeStageTimings
 
 
 def verify_authorization_or_response(

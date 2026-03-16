@@ -7,7 +7,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import numpy as np
 from PIL import Image
 
-from ai.shared.image_ops import delta_e_cie76, rgb_to_lab
+from shared.image_ops import delta_e_cie76, rgb_to_lab
 
 
 logger = logging.getLogger("glamify-ai")

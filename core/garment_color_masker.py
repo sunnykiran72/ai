@@ -7,7 +7,7 @@ from typing import Callable, Dict, Optional, Tuple
 import numpy as np
 from PIL import Image
 
-from ai.shared.image_ops import binary_close, binary_open
+from shared.image_ops import binary_close, binary_open
 
 
 MaskFn = Callable[[Image.Image], Optional[np.ndarray]]
