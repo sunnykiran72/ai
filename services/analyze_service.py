@@ -144,13 +144,22 @@ class AnalyzeService:
         gpu_sem = getattr(main_mod, "gpu_semaphore", None)
         t_gpu_wait = time.time()
         if gpu_sem is not None:
+            timeout_s = float(getattr(self.config, "gpu_queue_timeout_s", 70.0))
             try:
-                await asyncio.wait_for(
-                    gpu_sem.acquire(),
-                    timeout=float(getattr(self.config, "gpu_queue_timeout_s", 70.0)),
-                )
-                gpu_slot_acquired = True
+                acquire_call = gpu_sem.acquire()
+                if inspect.isawaitable(acquire_call):
+                    await asyncio.wait_for(acquire_call, timeout=timeout_s)
+                    gpu_slot_acquired = True
+                else:
+                    try:
+                        acquired = gpu_sem.acquire(timeout=timeout_s)
+                    except TypeError:
+                        acquired = bool(acquire_call)
+                    gpu_slot_acquired = bool(acquired)
                 gpu_queue_wait_s = round(time.time() - t_gpu_wait, 4)
+            except TypeError:
+                # Non-async semaphore or unexpected acquire signature: skip queueing.
+                gpu_slot_acquired = False
             except Exception:
                 payload = build_error_payload(
                     title="Server Busy",
