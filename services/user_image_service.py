@@ -51,7 +51,10 @@ class UserImageService:
                 "message": "UserImageService expects an uploaded file.",
             }
 
-        from ai import main as main_mod
+        try:
+            from ai import main as main_mod
+        except ModuleNotFoundError:
+            import main as main_mod
 
         payload = await upload.read()
         image = Image.open(io.BytesIO(payload)).convert("RGB")

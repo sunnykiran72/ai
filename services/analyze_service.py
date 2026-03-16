@@ -66,7 +66,10 @@ class AnalyzeService:
                 "message": "AnalyzeService expects an uploaded file.",
             }
 
-        from ai import main as main_mod
+        try:
+            from ai import main as main_mod
+        except ModuleNotFoundError:
+            import main as main_mod
 
         if not inspect.iscoroutinefunction(upload.read):
             return {
