@@ -160,7 +160,7 @@ class AnalyzeService:
             except TypeError:
                 # Non-async semaphore or unexpected acquire signature: skip queueing.
                 gpu_slot_acquired = False
-            except Exception:
+            except asyncio.TimeoutError:
                 payload = build_error_payload(
                     title="Server Busy",
                     description="Please retry in a moment.",
@@ -168,6 +168,9 @@ class AnalyzeService:
                     status_code=503,
                 )
                 return multipart_form_response(payload)
+            except Exception as exc:
+                logger.warning("GPU queue unavailable, proceeding without semaphore: %s", exc)
+                gpu_slot_acquired = False
 
         try:
             def _simple_build_adaptive_rect_crop_variants(
