@@ -2,7 +2,7 @@ import io
 import json
 import re
 import unittest
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -66,8 +66,7 @@ class _AnalyzePatchContext:
         self.crop_count = crop_count
         self.labels = labels or ["top" if i == 0 else "bottom" for i in range(crop_count)]
         self.bboxes = bboxes
-        self.orig_detect = api_main.engine.yolo.detect_instances
-        self.orig_get_crops = api_main.engine.yolo.get_crops
+        self.orig_detect = api_main.engine.cloth_detector.detect_fashion_candidates
         self.orig_desc_short = api_main.engine.florence.describe_garment_short
         self.orig_desc_detailed = api_main.engine.florence.describe_garment
         self.orig_run_vton = getattr(api_main, "_run_vton_cloth_only_fallback", None)
@@ -89,10 +88,7 @@ class _AnalyzePatchContext:
         self.orig_collapse_same_type_iou = api_main.ANALYZE_COLLAPSE_SAME_TYPE_MIN_IOU
 
     def __enter__(self):
-        def fake_detect_instances(_img: Image.Image) -> List[Any]:
-            return [{"label": "top", "confidence": 0.9, "bbox": (0, 0, 64, 96), "mask": None}] * self.crop_count
-
-        def fake_get_crops(_img: Image.Image, _instances: List[Any]) -> List[Any]:
+        def fake_detect_candidates(img: Image.Image, requested_type: Optional[str] = None, threshold: Optional[float] = None) -> List[Any]:
             out = []
             for idx in range(self.crop_count):
                 crop = Image.new("RGB", (96, 120), (80 + idx, 70, 60))
@@ -104,10 +100,13 @@ class _AnalyzePatchContext:
                     {
                         "id": idx,
                         "label": label,
+                        "type": label,
                         "confidence": 0.91 - (0.1 * idx),
-                        "image": crop,
+                        "image": img.crop(tuple(bbox)),
                         "bbox": bbox,
                         "mask": None,
+                        "source": "fashion_object_detection",
+                        "metrics": {},
                     }
                 )
             return out
@@ -128,8 +127,7 @@ class _AnalyzePatchContext:
                 },
             }
 
-        api_main.engine.yolo.detect_instances = fake_detect_instances
-        api_main.engine.yolo.get_crops = fake_get_crops
+        api_main.engine.cloth_detector.detect_fashion_candidates = fake_detect_candidates
         api_main.engine.florence.describe_garment_short = lambda _img: "short floral cotton top"
         api_main.engine.florence.describe_garment = lambda _img: "detailed floral cotton top with long sleeves"
         if hasattr(api_main, "_run_vton_cloth_only_fallback"):
@@ -155,8 +153,7 @@ class _AnalyzePatchContext:
         return self
 
     def __exit__(self, exc_type, exc, tb):
-        api_main.engine.yolo.detect_instances = self.orig_detect
-        api_main.engine.yolo.get_crops = self.orig_get_crops
+        api_main.engine.cloth_detector.detect_fashion_candidates = self.orig_detect
         api_main.engine.florence.describe_garment_short = self.orig_desc_short
         api_main.engine.florence.describe_garment = self.orig_desc_detailed
         if self.orig_run_vton is not None and hasattr(api_main, "_run_vton_cloth_only_fallback"):

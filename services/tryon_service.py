@@ -53,10 +53,9 @@ class TryonService:
         **_kwargs,
     ):
         """
-        Perform virtual try-on - delegates to legacy implementation.
-        
-        This is a temporary bridge to maintain functionality while the refactoring
-        is completed. The actual implementation logic remains in main_legacy.py.
+        Perform virtual try-on.
+
+        Placeholder implementation while the try-on pipeline is refactored.
         """
         return {
             "status": "not_implemented",
@@ -65,7 +64,7 @@ class TryonService:
 
     async def try_on_legacy_flux(self, request):
         """
-        Perform legacy Flux try-on - delegates to legacy implementation.
+        Perform legacy Flux try-on (placeholder).
         """
         return {
             "status": "not_implemented",

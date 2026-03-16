@@ -62,7 +62,10 @@ class YoloRunner:
     """
 
     def __init__(self, model_path: Optional[str] = None, device: Optional[str] = None):
-        self.model_path = model_path or os.getenv("YOLO_MODEL_PATH", "yolov8x-seg.pt")
+        self.model_path = model_path or os.getenv(
+            "YOLO_MODEL_PATH",
+            "models/yolo/deepfashion2_yolov8s_seg.pt",
+        )
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.expected_label_family = os.getenv("YOLO_EXPECTED_LABEL_FAMILY", "deepfashion2").strip().lower() or "deepfashion2"
         self.strict_label_family = os.getenv("YOLO_STRICT_LABEL_FAMILY", "1") == "1"

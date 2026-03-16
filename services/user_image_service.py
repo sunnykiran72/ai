@@ -40,10 +40,9 @@ class UserImageService:
         authorization: Optional[str] = None,
     ):
         """
-        Prepare user image - delegates to legacy implementation.
-        
-        This is a temporary bridge to maintain functionality while the refactoring
-        is completed. The actual implementation logic remains in main_legacy.py.
+        Prepare user image.
+
+        Placeholder implementation while the user-prep pipeline is refactored.
         """
         if upload is None or not hasattr(upload, "read"):
             return {

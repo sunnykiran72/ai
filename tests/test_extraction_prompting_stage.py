@@ -527,7 +527,7 @@ class PromptingStageTests(unittest.TestCase):
         self.assertIn("white pants", bundle["extraction_avoid_clause"])
         self.assertEqual(bundle["json_contract_valid"], "true")
 
-    def test_top_bundle_uses_florence_for_contamination_avoid_clause(self):
+    def test_top_bundle_uses_joycaption_for_contamination_avoid_clause(self):
         class _MiniCPM:
             def describe_garment(self, image, prompt_override=None):
                 return (
@@ -535,12 +535,12 @@ class PromptingStageTests(unittest.TestCase):
                     '"extraction_avoid_clause":"ignore background only. Do not simplify the gathered halter neckline."}'
                 )
 
-        class _Florence:
-            def describe_garment_short(self, image):
+        class _JoyCaption:
+            def describe_garment(self, image, instruction_override=None):
                 return "a woman taking a mirror selfie in a white halter top and skirt while holding a phone"
 
         original_engine = main_mod.engine
-        main_mod.engine = types.SimpleNamespace(minicpm=_MiniCPM(), florence=_Florence())
+        main_mod.engine = types.SimpleNamespace(minicpm=_MiniCPM(), joycaption=_JoyCaption(), florence=None)
         try:
             image = Image.new("RGB", (320, 480), "white")
             bundle = main_mod._describe_garment_prompt_bundle_with_backend(

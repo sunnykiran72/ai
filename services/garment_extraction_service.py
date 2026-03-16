@@ -54,10 +54,9 @@ class GarmentExtractionService:
         authorization: Optional[str] = None,
     ):
         """
-        Extract garment - delegates to legacy implementation.
-        
-        This is a temporary bridge to maintain functionality while the refactoring
-        is completed. The actual implementation logic remains in main_legacy.py.
+        Extract garment.
+
+        Placeholder implementation while the extraction pipeline is refactored.
         """
         return {
             "status": "not_implemented",

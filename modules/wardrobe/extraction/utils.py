@@ -142,6 +142,7 @@ def build_success_response(
         reason_codes.append("UNCERTAIN_FULLBODY_DRESS_FALLBACK")
     if requested_type:
         reason_codes.append("TYPE_FORCED_EXTRACT")
+        reason_codes.append("TYPE_FORCED_VTON")
 
     output_image_url = public_item.get("output_image_url", public_item.get("url")) if public_item else None
     multipart_data = build_multipart_parts(items=[], cloth_url=output_image_url)

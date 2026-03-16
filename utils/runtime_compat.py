@@ -1,7 +1,7 @@
 """
-Legacy compatibility helpers extracted from main.py.
+Runtime compatibility helpers extracted from main.py.
 
-This module is intentionally centralized for legacy test and API shims.
+Centralized shims used by tests and API adapters during the refactor.
 """
 
 import logging
@@ -133,7 +133,10 @@ def _default_minicpm_family_backend() -> str:
 
 def _normalize_descriptor_backend(raw: Optional[str]) -> str:
     value = str(raw or FLUX2_DESCRIPTOR_BACKEND).strip().lower()
-    if value not in {"florence", "qwen2_5_vl", "joycaption", "minicpm", "minicpm_service"}:
+    # Florence is intentionally disabled in the refactor; fall back to MiniCPM family.
+    if value in {"florence", ""}:
+        return _default_minicpm_family_backend()
+    if value not in {"qwen2_5_vl", "joycaption", "minicpm", "minicpm_service"}:
         return _default_minicpm_family_backend()
     if value == "qwen2_5_vl" and not FLUX2_ALLOW_QWEN_BACKEND:
         return _default_minicpm_family_backend()
@@ -379,16 +382,28 @@ def _apply_florence_avoid_clause(
 ) -> Dict[str, str]:
     gtype = _normalize_garment_type(garment_type) or ""
     try:
-        florence = getattr(engine, "florence", None)
-        if florence is None:
+        joycaption = getattr(engine, "joycaption", None)
+        if joycaption is None:
             return bundle
-        florence_caption = " ".join(str(florence.describe_garment_short(image) or "").split()).strip()
+        instruction = (
+            "Describe non-garment elements in the image (person/body parts, accessories, background objects, "
+            "other garments). One short sentence."
+        )
+        joycaption_caption = " ".join(
+            str(
+                joycaption.describe_garment(
+                    image,
+                    instruction_override=instruction,
+                )
+                or ""
+            ).split()
+        ).strip()
     except Exception as err:
-        logger.warning("Florence avoid-clause support failed: %s", err)
+        logger.warning("JoyCaption avoid-clause support failed: %s", err)
         return bundle
 
     florence_clause = _build_florence_contamination_avoid_clause(
-        florence_caption,
+        joycaption_caption,
         garment_type=gtype,
     )
     if not florence_clause:
@@ -409,7 +424,7 @@ def _apply_florence_avoid_clause(
         f"BASE_GARMENT_PROMPT: {updated.get('base_garment_prompt') or 'Garment.'}\n"
         f"EXTRACTION_AVOID_CLAUSE: {merged_clause}"
     )
-    updated["avoid_clause_source"] = "florence_support"
+    updated["avoid_clause_source"] = "joycaption_support"
     return updated
 
 
@@ -504,7 +519,7 @@ def _describe_garment_with_backend(
         try:
             return str(engine.joycaption.describe_garment(image)).strip()
         except Exception as err:
-            logger.warning(f"JoyCaption garment description failed; fallback to Florence. error={err}")
+            logger.warning(f"JoyCaption garment description failed; fallback to MiniCPM. error={err}")
     if resolved == "qwen2_5_vl":
         try:
             qwen_img = _resize_for_qwen_caption(
@@ -514,8 +529,17 @@ def _describe_garment_with_backend(
             )
             return str(engine.qwen25vl.describe_garment(qwen_img)).strip()
         except Exception as err:
-            logger.warning(f"Qwen2.5-VL garment description failed; fallback to Florence. error={err}")
-    return str(engine.florence.describe_garment(image)).strip()
+            logger.warning(f"Qwen2.5-VL garment description failed; fallback to MiniCPM. error={err}")
+    # Final fallback: MiniCPM (local only; service path handled above).
+    try:
+        minicpm_img = _resize_for_qwen_caption(
+            image=image,
+            max_side=FLUX2_MINICPM_PRODUCT_CAPTION_MAX_SIDE,
+            min_side=FLUX2_MINICPM_PRODUCT_CAPTION_MIN_SIDE,
+        )
+        return str(engine.minicpm.describe_garment(minicpm_img)).strip()
+    except Exception as err:
+        raise RuntimeError(f"MiniCPM garment description failed: {err}") from err
 
 
 def _describe_garment_prompt_bundle_with_backend(
@@ -529,7 +553,8 @@ def _describe_garment_prompt_bundle_with_backend(
     accent_hexes: Optional[List[str]] = None,
     accent_hints: Optional[List[str]] = None,
 ) -> Dict[str, str]:
-    resolved = _normalize_descriptor_backend(backend)
+    # Prompt bundle extraction must always use MiniCPM family for base garment prompt.
+    resolved = _normalize_prompt_descriptor_backend(backend)
 
     def _parse_minicpm_bundle_or_retry(fetch_raw_text) -> Dict[str, str]:
         primary_prompt = _build_minicpm_garment_prompt(
