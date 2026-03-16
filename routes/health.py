@@ -21,7 +21,10 @@ router = APIRouter()
 
 def get_ai_engine() -> AIEngine:
     """Dependency to get AIEngine instance."""
-    from ai import main as _main
+    try:
+        from ai import main as _main
+    except ModuleNotFoundError:
+        import main as _main
     return _main.get_ai_engine()
 
 

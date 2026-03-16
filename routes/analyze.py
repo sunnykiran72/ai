@@ -28,7 +28,10 @@ router = APIRouter()
 
 def get_analyze_service() -> AnalyzeService:
     """Dependency to get AnalyzeService instance."""
-    from ai import main as _main
+    try:
+        from ai import main as _main
+    except ModuleNotFoundError:
+        import main as _main
     return _main.get_analyze_service()
 
 

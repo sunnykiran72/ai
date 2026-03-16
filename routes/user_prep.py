@@ -24,7 +24,10 @@ router = APIRouter()
 
 def get_user_prep_service() -> UserImageService:
     """Dependency to get UserImageService instance."""
-    from ai import main as _main
+    try:
+        from ai import main as _main
+    except ModuleNotFoundError:
+        import main as _main
     return _main.get_user_prep_service()
 
 

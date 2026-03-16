@@ -23,7 +23,10 @@ router = APIRouter()
 
 def get_tryon_service() -> TryonService:
     """Dependency to get TryonService instance."""
-    from ai import main as _main
+    try:
+        from ai import main as _main
+    except ModuleNotFoundError:
+        import main as _main
     return _main.get_tryon_service()
 
 

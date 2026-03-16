@@ -23,7 +23,10 @@ router = APIRouter()
 
 def get_extract_service() -> GarmentExtractionService:
     """Dependency to get GarmentExtractionService instance."""
-    from ai import main as _main
+    try:
+        from ai import main as _main
+    except ModuleNotFoundError:
+        import main as _main
     return _main.get_extract_service()
 
 
