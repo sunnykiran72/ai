@@ -401,8 +401,6 @@ class AnalyzeService:
                 desc_image = image
 
             # Run MiniCPM and JoyCaption in parallel for efficiency
-            import asyncio
-
             async def run_minicpm():
                 if not minicpm_runner:
                     return ""
