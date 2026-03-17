@@ -71,10 +71,15 @@ def apply_selected_item_prompting(
     # Get prompts from centralized configuration
     base_garment_prompt = get_flux2_positive_prompt(selected_type)
     avoid_prompt = get_flux2_negative_prompt(selected_type)
-    
+
     # Get MiniCPM and JoyCaption descriptions
     minicpm_desc = selected_item.get("minicpm_description", "")
     joycaption_desc = selected_item.get("joycaption_description", "")
+    
+    # Use MiniCPM description to drive the positive prompt when available
+    positive_prompt = base_garment_prompt
+    if minicpm_desc:
+        positive_prompt = f"{base_garment_prompt} {minicpm_desc}".strip()
     
     # Enhance negative prompt with JoyCaption insights
     # JoyCaption helps identify unwanted elements (person, accessories, background)
@@ -86,9 +91,9 @@ def apply_selected_item_prompting(
             avoid_prompt = f"{avoid_prompt}, {unwanted_terms}"
     
     # Set the prompts on the item
-    selected_item["baseGarmentPrompt"] = base_garment_prompt
-    selected_item["promptDescription"] = base_garment_prompt
-    selected_item["description"] = base_garment_prompt
+    selected_item["baseGarmentPrompt"] = positive_prompt
+    selected_item["promptDescription"] = positive_prompt
+    selected_item["description"] = positive_prompt
     selected_item["extractionAvoidClause"] = avoid_prompt
     selected_item["type"] = selected_type
     
@@ -101,8 +106,8 @@ def apply_selected_item_prompting(
     # Build simplified metadata (no color information, includes MiniCPM + JoyCaption descriptions)
     garment_metadata = {
         "prompt": {
-            "base_garment_prompt": base_garment_prompt,
-            "prompt_description": base_garment_prompt,
+            "base_garment_prompt": positive_prompt,
+            "prompt_description": positive_prompt,
             "avoid_clause": avoid_prompt,
             "minicpm_description": minicpm_desc,  # MiniCPM description
             "joycaption_description": joycaption_desc,  # JoyCaption description
@@ -123,7 +128,7 @@ def apply_selected_item_prompting(
 
     return selected_item, {
         "selected_type": selected_type,
-        "prompt_description": base_garment_prompt,
+        "prompt_description": positive_prompt,
         "avoid_prompt": avoid_prompt,
         "sync_category": sync_category,
         "garment_metadata": garment_metadata,

@@ -195,6 +195,7 @@ class AnalyzeService:
             # MiniCPM: Generates detailed garment description for metadata
             # JoyCaption: Generates additional context for negative prompts
             minicpm_runner = getattr(self.engine, "minicpm", None)  # Fixed: was minicpm_runner
+            joycaption_runner = getattr(self.engine, "joycaption", None)
             florence_runner = getattr(self.engine, "florence", None)
 
             # Helper functions for extraction
@@ -418,30 +419,31 @@ class AnalyzeService:
                     logger.warning(f"MiniCPM description failed: {e}")
                     return ""
 
-            async def run_florence():
-                if not florence_runner:
+            async def run_joycaption():
+                runner = joycaption_runner
+                if not runner:
                     return ""
                 try:
                     loop = asyncio.get_event_loop()
                     description = await loop.run_in_executor(
                         None,
-                        lambda: florence_runner.describe_garment(image=desc_image)
+                        lambda: runner.describe_garment(image=desc_image)
                     )
                     return description
                 except Exception as e:
-                    logger.warning(f"Florence description failed: {e}")
+                    logger.warning(f"JoyCaption description failed: {e}")
                     return ""
 
             t_description = time.time()
-            minicpm_desc, florence_desc = await asyncio.gather(
+            minicpm_desc, joycaption_desc = await asyncio.gather(
                 run_minicpm(),
-                run_florence()
+                run_joycaption()
             )
             description_time = round(time.time() - t_description, 4)
 
             selected_item["minicpm_description"] = minicpm_desc
             # Keep the existing key to avoid downstream changes in prompting_stage.
-            selected_item["joycaption_description"] = florence_desc
+            selected_item["joycaption_description"] = joycaption_desc
             analyze_stage_timings["minicpm_s"] = description_time
             analyze_stage_timings["joycaption_s"] = description_time
 

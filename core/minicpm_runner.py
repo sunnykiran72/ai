@@ -61,6 +61,12 @@ class MiniCPMVRunner:
 
     def _load_model(self) -> None:
         logger.info(f"Loading MiniCPM-V from {self.model_id}...")
+        try:
+            from transformers.modeling_utils import PreTrainedModel
+            if not hasattr(PreTrainedModel, "all_tied_weights_keys"):
+                PreTrainedModel.all_tied_weights_keys = {}
+        except Exception:
+            pass
         model_kwargs = {
             "trust_remote_code": True,
             "attn_implementation": self.attn_implementation,
@@ -71,11 +77,16 @@ class MiniCPMVRunner:
         model = AutoModel.from_pretrained(self.model_id, **model_kwargs)
         if self.device == "cuda":
             model = model.to(self.device)
+        # PreTrainedModel is patched to expose all_tied_weights_keys via property.
         model = model.eval()
 
         tokenizer = AutoTokenizer.from_pretrained(self.model_id, trust_remote_code=True)
         self._model = model
         self._tokenizer = tokenizer
+
+    @staticmethod
+    def _ensure_tied_keys(_root: Any) -> None:
+        return
 
     def ensure_ready(self) -> None:
         if self.is_loaded:
@@ -125,6 +136,9 @@ class MiniCPMVRunner:
                 if isinstance(response, (list, tuple)) and response:
                     return self._normalize_text(response[0])
                 return self._normalize_text(response)
+            except AttributeError as err:
+                last_err = err
+                continue
             except TypeError as err:
                 last_err = err
                 continue

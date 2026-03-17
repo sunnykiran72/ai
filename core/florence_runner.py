@@ -152,29 +152,69 @@ class FlorenceRunner:
         """
         Some transformers versions expect forced_bos/forced_eos fields to exist.
         Florence remote code may not define them on every nested config object.
+        Patch all reachable config-like objects defensively.
         """
         if self._model is None:
             return
 
-        maybe_configs = [
-            getattr(self._model, "config", None),
-            getattr(self._model, "generation_config", None),
-        ]
-        language_model = getattr(self._model, "language_model", None)
-        if language_model is not None:
-            maybe_configs.append(getattr(language_model, "config", None))
-            maybe_configs.append(getattr(language_model, "generation_config", None))
-
-        for cfg in maybe_configs:
+        def _patch_cfg(cfg: Any, seen: Optional[set] = None) -> None:
             if cfg is None:
-                continue
+                return
+            if not hasattr(cfg, "__dict__"):
+                if not hasattr(cfg, "forced_bos_token_id"):
+                    setattr(cfg.__class__, "forced_bos_token_id", None)
+                if not hasattr(cfg, "forced_eos_token_id"):
+                    setattr(cfg.__class__, "forced_eos_token_id", None)
+                return
+            if seen is None:
+                seen = set()
+            obj_id = id(cfg)
+            if obj_id in seen:
+                return
+            seen.add(obj_id)
+
             if not hasattr(cfg, "forced_bos_token_id"):
                 setattr(cfg, "forced_bos_token_id", None)
             if not hasattr(cfg, "forced_eos_token_id"):
                 setattr(cfg, "forced_eos_token_id", None)
+            if not hasattr(cfg.__class__, "forced_bos_token_id"):
+                setattr(cfg.__class__, "forced_bos_token_id", None)
+            if not hasattr(cfg.__class__, "forced_eos_token_id"):
+                setattr(cfg.__class__, "forced_eos_token_id", None)
+
+            for value in cfg.__dict__.values():
+                if hasattr(value, "__dict__"):
+                    _patch_cfg(value, seen)
+
+        def _patch_model_tree(obj: Any, seen: Optional[set] = None) -> None:
+            if obj is None or not hasattr(obj, "__dict__"):
+                return
+            if seen is None:
+                seen = set()
+            obj_id = id(obj)
+            if obj_id in seen:
+                return
+            seen.add(obj_id)
+
+            _patch_cfg(getattr(obj, "config", None))
+            _patch_cfg(getattr(obj, "generation_config", None))
+
+            for value in obj.__dict__.values():
+                if hasattr(value, "__dict__"):
+                    _patch_model_tree(value, seen)
+
+        _patch_model_tree(self._model)
 
     def _ensure_loaded(self):
         if self._model is None:
+            try:
+                from transformers.configuration_utils import PretrainedConfig
+                if not hasattr(PretrainedConfig, "forced_bos_token_id"):
+                    PretrainedConfig.forced_bos_token_id = None
+                if not hasattr(PretrainedConfig, "forced_eos_token_id"):
+                    PretrainedConfig.forced_eos_token_id = None
+            except Exception:
+                pass
             logger.info(f"Loading Florence-2 from {self.model_id}...")
             self._model = AutoModelForCausalLM.from_pretrained(
                 self.model_id, 
@@ -184,6 +224,29 @@ class FlorenceRunner:
             ).to(self.device)
             self._processor = AutoProcessor.from_pretrained(self.model_id, trust_remote_code=True)
             self._apply_generation_compat()
+
+    def _force_config_attrs(self) -> None:
+        if self._model is None:
+            return
+        candidates: List[Any] = []
+        for obj in [self._model, getattr(self._model, "language_model", None)]:
+            if obj is None:
+                continue
+            for attr in ("config", "generation_config", "text_config", "language_config"):
+                cfg = getattr(obj, attr, None)
+                if cfg is not None:
+                    candidates.append(cfg)
+        for cfg in candidates:
+            try:
+                setattr(cfg, "forced_bos_token_id", None)
+                setattr(cfg, "forced_eos_token_id", None)
+            except Exception:
+                pass
+            try:
+                setattr(cfg.__class__, "forced_bos_token_id", None)
+                setattr(cfg.__class__, "forced_eos_token_id", None)
+            except Exception:
+                pass
 
     def run_task(
         self,
@@ -218,13 +281,25 @@ class FlorenceRunner:
 
         inputs = self._processor(text=prompt, images=image, return_tensors="pt").to(self.device, self.torch_dtype)
 
-        generated_ids = self._model.generate(
-            input_ids=inputs["input_ids"],
-            pixel_values=inputs["pixel_values"],
-            max_new_tokens=resolved_max_tokens,
-            num_beams=resolved_num_beams,
-            use_cache=use_cache_generate,
-        )
+        try:
+            generated_ids = self._model.generate(
+                input_ids=inputs["input_ids"],
+                pixel_values=inputs["pixel_values"],
+                max_new_tokens=resolved_max_tokens,
+                num_beams=resolved_num_beams,
+                use_cache=use_cache_generate,
+            )
+        except AttributeError as err:
+            if "forced_bos_token_id" not in str(err):
+                raise
+            self._force_config_attrs()
+            generated_ids = self._model.generate(
+                input_ids=inputs["input_ids"],
+                pixel_values=inputs["pixel_values"],
+                max_new_tokens=resolved_max_tokens,
+                num_beams=resolved_num_beams,
+                use_cache=use_cache_generate,
+            )
 
         generated_text = self._processor.batch_decode(generated_ids, skip_special_tokens=False)[0]
         parsed_answer = self._processor.post_process_generation(
