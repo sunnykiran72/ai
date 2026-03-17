@@ -59,6 +59,12 @@ class UserImageService:
         image = Image.open(io.BytesIO(payload)).convert("RGB")
 
         candidates, detect_meta = main_mod._user_prep_detect_person_candidates(image)
+        if not candidates:
+            return {
+                "error": "no_person",
+                "message": "No person detected in the image.",
+                "meta": detect_meta,
+            }
         if main_mod._user_prep_has_multiple_prominent_people(candidates):
             return {
                 "error": "multiple_people",
@@ -69,10 +75,23 @@ class UserImageService:
         crop, bbox = main_mod._user_prep_crop_main_person(image, candidates)
         focus_score = main_mod._focus_score(crop)
 
-        prepared_bytes, bg_meta = main_mod._remove_user_background_strict(crop)
+        # Background removal disabled for now (use raw crop)
+        buf = io.BytesIO()
+        crop.convert("RGB").save(buf, format="PNG")
+        prepared_bytes = buf.getvalue()
+        bg_meta = {"enabled": False, "backend": "none"}
         url = main_mod._upload_or_raise(prepared_bytes)
 
-        description_raw = main_mod._describe_user_image_for_prepare(crop, description_backend=None)
+        # Use MiniCPM for user description when available
+        description_raw = ""
+        minicpm_runner = getattr(self.engine, "minicpm", None)
+        if minicpm_runner is not None:
+            try:
+                description_raw = str(minicpm_runner.describe_person_and_outfit(crop)).strip()
+            except Exception:
+                description_raw = ""
+        if not description_raw:
+            description_raw = main_mod._describe_user_image_for_prepare(crop, description_backend=None)
         prompt_description = main_mod._normalize_user_prepare_api_prompt_description(description_raw)
 
         return {
