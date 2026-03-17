@@ -10,6 +10,7 @@ import asyncio
 import inspect
 import logging
 import time
+import io
 import requests
 
 from PIL import Image
@@ -281,32 +282,96 @@ class AnalyzeService:
                     desc = f"{desc}."
                 return desc or "Garment."
 
-            def _run_flux2_cloth_only_extract(**kwargs) -> Dict[str, object]:
-                fallback_fn = getattr(main_mod, "_run_vton_cloth_only_fallback", None)
-                if fallback_fn is None:
-                    raise RuntimeError("Flux2 extract pipeline not available in refactor.")
-
-                payload = {
-                    "image_url": str(getattr(upload, "filename", "") or "upload"),
-                    "garment_type": str(kwargs.get("garment_type") or ""),
-                    "vto_mode": False,
-                    "base_prompt": kwargs.get("base_prompt", ""),
-                    "negative_prompt": kwargs.get("negative_prompt", ""),
-                    "minicpm_description": kwargs.get("minicpm_description", ""),
-                    "prompt_description": kwargs.get("prompt_description", ""),
-                    "fallback_prompt_description": kwargs.get("fallback_prompt_description", ""),
-                    "source_image": kwargs.get("source_image"),
-                    "steps": kwargs.get("steps"),
-                    "seed": kwargs.get("seed"),
-                }
+            def _run_flux2_extraction(**kwargs) -> Dict[str, object]:
+                """
+                Run Flux2 extraction directly (no HTTP calls).
+                Uses the Flux2CVTONRunner.run_extraction() method.
+                """
+                flux_runner = getattr(self.engine, "flux2", None)
+                if flux_runner is None:
+                    raise RuntimeError("Flux2 runner not available")
+                
+                source_image = kwargs.get("source_image")
+                if source_image is None:
+                    raise RuntimeError("source_image is required for extraction")
+                
+                base_prompt = str(kwargs.get("base_prompt") or "").strip()
+                if not base_prompt:
+                    base_prompt = "garment"
+                
+                steps = kwargs.get("steps")
+                if steps is None:
+                    steps = int(self.config.flux2_single_garment_extract_default_steps)
+                
+                seed = kwargs.get("seed")
+                if seed is None:
+                    seed = int(self.config.flux2_single_garment_extract_default_seed)
+                
+                # Run Flux2 extraction
+                result = flux_runner.run_extraction(
+                    garment_image=source_image,
+                    prompt=base_prompt,
+                    steps=int(steps),
+                    seed=int(seed),
+                )
+                
+                # Upload extracted image to storage
+                extracted_image = result.get("image")
+                if not isinstance(extracted_image, Image.Image):
+                    raise RuntimeError("Flux2 extraction did not return a valid image")
+                
+                # Apply postprocessing if enabled
+                output_image = extracted_image
+                if bool(self.config.garment_postprocess_enabled):
+                    output_image = main_mod._enhance_image(output_image)
+                
+                # Pad to target aspect ratio
+                output_image = main_mod._pad_image(
+                    output_image,
+                    int(self.config.garment_target_aspect_w),
+                    int(self.config.garment_target_aspect_h),
+                )
+                
+                # Handle background format (white vs transparent)
+                if str(self.config.garment_output_background).lower() == "white":
+                    if output_image.mode != "RGBA":
+                        output_image = output_image.convert("RGBA")
+                    white_bg = Image.new("RGB", output_image.size, (255, 255, 255))
+                    white_bg.paste(output_image, mask=output_image.split()[-1])
+                    output_image = white_bg.convert("RGB")
+                
+                # Save to bytes
+                out_buf = io.BytesIO()
+                output_image.save(out_buf, format="PNG")
+                processed_bytes = out_buf.getvalue()
+                
+                # Upload to storage
+                url = ""
                 try:
-                    sig = inspect.signature(fallback_fn)
-                    if any(param.kind == param.VAR_KEYWORD for param in sig.parameters.values()):
-                        return fallback_fn(**payload)
-                    filtered = {k: v for k, v in payload.items() if k in sig.parameters}
-                    return fallback_fn(**filtered)
-                except Exception:
-                    return fallback_fn(**payload)
+                    url = main_mod._upload_or_raise(processed_bytes)
+                except Exception as exc:
+                    logger.error(f"Upload failed: {exc}")
+                    url = ""
+                
+                # Build metadata
+                metadata = result.get("metadata") or {}
+                metadata.update({
+                    "path": "flux2_extraction",
+                    "pipeline": "flux2_extraction",
+                    "base_garment_prompt": base_prompt,
+                    "extraction_avoid_clause": "",
+                    "prompt_description": base_prompt,
+                    "prompt_sections_raw": "",
+                    "descriptor_raw_text": str(kwargs.get("minicpm_description") or "").strip(),
+                    "negative_prompt_mode": "none",
+                })
+                
+                return {
+                    "url": url,
+                    "raw_url": url,
+                    "_processed_image_bytes": processed_bytes,
+                    "meta": metadata,
+                }
 
             def _suppress_auxiliary_instances(
                 instances: list[dict],
@@ -481,7 +546,7 @@ class AnalyzeService:
                 prepare_extract_source_image=_prepare_extract_source_image,
                 build_error_payload=build_error_payload,
                 multipart_form_response=multipart_form_response,
-                run_flux2_cloth_only_extract=_run_flux2_cloth_only_extract,
+                run_flux2_cloth_only_extract=_run_flux2_extraction,
                 descriptor_is_weak=main_mod._descriptor_is_weak,
                 caption_non_garment_signal=lambda _text: False,
                 download_image=download_image,

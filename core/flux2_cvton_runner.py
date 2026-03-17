@@ -213,6 +213,7 @@ class Flux2CVTONRunner:
         self.lora_path = cfg.get("lora_path") or os.getenv("FLUX2_LORA_PATH", "fal/flux-klein-9b-virtual-tryon-lora")
         self.lora_weight_name = cfg.get("lora_weight_name") or os.getenv("FLUX2_LORA_WEIGHT_NAME", "flux-klein-tryon.safetensors")
         self.adapter_name = cfg.get("adapter_name") or os.getenv("FLUX2_ADAPTER_NAME", "fal_tryon")
+        self._adapter_name_effective = str(self.adapter_name or "")
         self.device = cfg.get("device") or os.getenv("FLUX2_DEVICE", "cuda")
         self.dtype = self._resolve_dtype(cfg.get("dtype") or os.getenv("FLUX2_DTYPE", "fp16"))
 
@@ -337,6 +338,30 @@ class Flux2CVTONRunner:
             seen.add(key)
             dedup.append(key)
         return dedup
+
+    @staticmethod
+    def _list_loaded_adapters(pipe: Any) -> List[str]:
+        adapters: List[str] = []
+        try:
+            if hasattr(pipe, "get_active_adapters"):
+                active = pipe.get_active_adapters()
+                if isinstance(active, (list, tuple)):
+                    adapters.extend([str(a) for a in active if a])
+            if hasattr(pipe, "get_list_adapters"):
+                listed = pipe.get_list_adapters()
+                if isinstance(listed, (list, tuple)):
+                    adapters.extend([str(a) for a in listed if a])
+        except Exception:
+            pass
+        # Deduplicate while preserving order
+        seen = set()
+        uniq: List[str] = []
+        for name in adapters:
+            if name in seen:
+                continue
+            seen.add(name)
+            uniq.append(name)
+        return uniq
 
     def _download_lora_snapshot(self, repo_id: str, local_dir: Path) -> None:
         try:
@@ -519,7 +544,23 @@ class Flux2CVTONRunner:
                 lora_source = str(load_meta.get("source") or "")
                 lora_weight_loaded = str(load_meta.get("weight_name") or "")
                 lora_downloaded = bool(load_meta.get("downloaded"))
-                pipe.set_adapters([self.adapter_name], adapter_weights=[self.lora_scale])
+                adapter_name = self.adapter_name
+                available_adapters = self._list_loaded_adapters(pipe)
+                try:
+                    if available_adapters:
+                        if adapter_name not in available_adapters:
+                            adapter_name = available_adapters[0]
+                        if hasattr(pipe, "set_adapters"):
+                            pipe.set_adapters([adapter_name], adapter_weights=[self.lora_scale])
+                        elif hasattr(pipe, "set_adapter"):
+                            pipe.set_adapter(adapter_name)
+                    else:
+                        logger.warning("LoRA adapters not reported; skipping adapter activation.")
+                        adapter_name = ""
+                except Exception as err:
+                    logger.warning(f"LoRA adapter activation failed; continuing without explicit activation: {err}")
+                    adapter_name = ""
+                self._adapter_name_effective = str(adapter_name or "")
                 if self.fuse_lora and hasattr(pipe, "fuse_lora"):
                     pipe.fuse_lora()
                     self._lora_fused = True
@@ -584,8 +625,15 @@ class Flux2CVTONRunner:
                 pipe.enable_lora()
             if hasattr(pipe, "enable_adapters"):
                 pipe.enable_adapters()
-            if hasattr(pipe, "set_adapters"):
-                pipe.set_adapters([self.adapter_name], adapter_weights=[self.lora_scale])
+            adapter_name = str(self._adapter_name_effective or "")
+            if adapter_name:
+                try:
+                    if hasattr(pipe, "set_adapters"):
+                        pipe.set_adapters([adapter_name], adapter_weights=[self.lora_scale])
+                    elif hasattr(pipe, "set_adapter"):
+                        pipe.set_adapter(adapter_name)
+                except Exception as err:
+                    logger.warning(f"Runtime LoRA adapter activation failed; continuing without explicit activation: {err}")
             self._lora_runtime_enabled = True
             return True
 
@@ -594,7 +642,12 @@ class Flux2CVTONRunner:
         elif hasattr(pipe, "disable_adapters"):
             pipe.disable_adapters()
         elif hasattr(pipe, "set_adapters"):
-            pipe.set_adapters([self.adapter_name], adapter_weights=[0.0])
+            adapter_name = str(self._adapter_name_effective or "")
+            if adapter_name:
+                try:
+                    pipe.set_adapters([adapter_name], adapter_weights=[0.0])
+                except Exception as err:
+                    logger.warning(f"Runtime LoRA disable failed; continuing without explicit deactivation: {err}")
         else:
             raise RuntimeError("Pipeline does not expose a runtime LoRA disable API.")
         self._lora_runtime_enabled = False
@@ -776,6 +829,81 @@ class Flux2CVTONRunner:
                 "lora_requested": bool(requested_lora),
                 "lora_effective": bool(effective_lora),
                 "runtime_lora_toggle": bool(self.runtime_lora_toggle),
+                "startup_metrics": dict(self._startup_metrics),
+            },
+        }
+
+
+    def run_extraction(
+        self,
+        garment_image: Image.Image,
+        prompt: str,
+        steps: int = 30,
+        seed: Optional[int] = None,
+        guidance_scale: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """
+        Extract clean garment from image (background removal + enhancement).
+        
+        This method is optimized for garment extraction in the /analyze API:
+        - Takes a single garment image (no person image)
+        - Removes background and enhances garment details
+        - Returns clean garment on transparent/white background
+        
+        Args:
+            garment_image: Input garment image (can have background)
+            prompt: Text description of the garment (e.g., "Top with crew neck")
+            steps: Number of inference steps (default: 30)
+            seed: Random seed for reproducibility
+            guidance_scale: Guidance scale override (default: uses config)
+            
+        Returns:
+            Dict with:
+                - image: PIL Image of extracted garment
+                - latency: Generation time in seconds
+                - metadata: Generation parameters and metrics
+        """
+        self.ensure_ready()
+
+        run_t0 = time.time()
+        gen_seed = seed if seed is not None else self.seed
+        generator = torch.Generator(device=self.device).manual_seed(gen_seed)
+        effective_guidance = guidance_scale if guidance_scale is not None else self.guidance_scale
+
+        # Flatten RGBA to white background for input
+        garment = _flatten_rgba_to_white_rgb(garment_image)
+
+        with self._infer_lock, torch.inference_mode():
+            # Enable LoRA for extraction (same as tryon)
+            self._set_runtime_lora_state(True)
+
+            call_kwargs: Dict[str, Any] = {
+                "image": garment,
+                "prompt": prompt,
+                "num_inference_steps": steps,
+                "guidance_scale": effective_guidance,
+                "width": self.width,
+                "height": self.height,
+                "generator": generator,
+            }
+
+            infer_t0 = time.time()
+            result = self._pipeline(**call_kwargs).images[0]
+            latency = time.time() - infer_t0
+
+        return {
+            "image": result,
+            "latency": latency,
+            "metadata": {
+                "pipeline": "flux2_extraction",
+                "steps": steps,
+                "seed": gen_seed,
+                "guidance_scale": effective_guidance,
+                "resolution": (self.width, self.height),
+                "request_total_seconds": time.time() - run_t0,
+                "base_garment_prompt": prompt,
+                "prompt_description": prompt,
+                "lora_enabled": bool(self._lora_runtime_enabled),
                 "startup_metrics": dict(self._startup_metrics),
             },
         }
