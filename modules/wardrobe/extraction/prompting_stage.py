@@ -116,9 +116,10 @@ def _build_flux2_prompt(selected_type: str, minicpm_desc: str) -> str:
         segments.append(attribute_clause)
     segments.extend([
         "Centered product presentation, front view or flat lay.",
-        "Professional studio product photography on a seamless backdrop, clean and uncluttered scene.",
+        "Professional studio product photography on a seamless pure white backdrop, clean and uncluttered scene.",
         "Soft diffused studio lighting with clear edge definition.",
         "Sharp focus, high detail.",
+        "Preserve the garment's original colors and overall appearance exactly as in the reference image.",
         "Preserve the exact silhouette, neckline, sleeve length, hem shape, fabric texture, and print placement from the reference image.",
     ])
     return " ".join(segments).strip()
