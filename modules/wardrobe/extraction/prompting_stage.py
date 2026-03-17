@@ -9,6 +9,8 @@ _COLOR_TERMS = {
     "gray", "grey", "beige", "cream", "ivory", "maroon", "navy", "teal", "cyan", "magenta",
     "gold", "silver", "bronze", "tan", "khaki", "mustard", "lavender", "peach", "coral",
     "turquoise", "lime", "olive", "indigo", "violet", "burgundy", "charcoal",
+    "multicolored", "multi-colored", "multicolor", "colorful", "colourful",
+    "color", "colour", "monochrome", "grayscale", "greyscale",
 }
 _BODY_TERMS = {
     "person", "people", "model", "mannequin", "woman", "man", "girl", "boy",
