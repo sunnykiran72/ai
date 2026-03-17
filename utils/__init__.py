@@ -151,6 +151,8 @@ from .prompt_generation import (
     
     # Prompt building functions
     build_tryon_prompt,
+    build_tryon_prompt_v2,
+    build_garment_prompt_natural,
     build_flux2_prompt,
     
     # Avoid clause functions

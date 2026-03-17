@@ -108,14 +108,16 @@ class TestTryonIntegration:
         """Test successful Flux2 tryon endpoint execution."""
         # Create Flux2 request
         flux2_request = Flux2TryonRequest(
-            user_image_url="https://example.com/user.jpg",
-            garment_image_url="https://example.com/garment.jpg",
-            garment_type="dress",
-            prompt_description="elegant evening dress",
+            user_image={"tryonImage": "https://example.com/user.jpg", "promptDescription": "portrait, soft studio"},
+            products=[
+                {
+                    "image": "https://example.com/garment.jpg",
+                    "promptDescription": "elegant evening dress",
+                    "targetType": "dress",
+                }
+            ],
             steps=25,
-            seed=123,
-            use_second_pass=True,
-            color_lock_enabled=True
+            seed=123
         )
         
         # Configure mock service
@@ -126,15 +128,11 @@ class TestTryonIntegration:
         
         # Verify service was called with Flux2 parameters
         mock_tryon_service.try_on.assert_called_once_with(
-            user_image_url=flux2_request.user_image_url,
-            garment_image_url=flux2_request.garment_image_url,
-            garment_type=flux2_request.garment_type,
-            prompt_description=flux2_request.prompt_description,
-            negative_prompt=flux2_request.negative_prompt,
+            user_image_url=flux2_request.user_image.tryonImage,
+            user_prompt_description=flux2_request.user_image.promptDescription,
+            products=flux2_request.products,
             steps=flux2_request.steps,
             seed=flux2_request.seed,
-            use_second_pass=flux2_request.use_second_pass,
-            color_lock_enabled=flux2_request.color_lock_enabled,
         )
         
         # Verify response

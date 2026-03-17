@@ -1,0 +1,61 @@
+========================================
+SIMPLE DEPLOYMENT ON RUNPOD
+========================================
+
+I've already pushed the code changes to GitHub.
+Now you just need to run these commands on RunPod.
+
+STEP 1: Connect to RunPod
+--------------------------
+Copy and paste this in your terminal:
+
+ssh root@157.157.221.30 -p 53061
+
+(Press Enter and wait for connection)
+
+
+STEP 2: Pull the Changes
+--------------------------
+Once connected, copy and paste these commands:
+
+cd /workspace/hybrid_vto_v1_latest_v1/ai
+git pull origin kiran/latest_v1
+
+
+STEP 3: Restart the Application
+--------------------------
+Copy and paste this:
+
+pkill -f "uvicorn main:app"
+sleep 2
+nohup python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 > /tmp/app.log 2>&1 &
+sleep 3
+echo "Application restarted!"
+
+
+STEP 4: Check if it's Running
+--------------------------
+Copy and paste this:
+
+ps aux | grep uvicorn
+tail -20 /tmp/app.log
+
+
+STEP 5: Test the API
+--------------------------
+You can test from your local machine:
+
+curl http://157.157.221.30:8000/docs
+
+(This should show the API documentation)
+
+
+THAT'S IT!
+========================================
+
+If you see any errors in the logs, copy them and share with me.
+
+To monitor logs in real-time:
+tail -f /tmp/app.log
+
+To stop monitoring: Press Ctrl+C

@@ -61,41 +61,41 @@ Be factual from visible pixels only; use 'unknown' for hidden details."""
 
 COLOR_PRESERVATION_CLAUSE = (
     "Preserve the garment's original colors, print placement, and material appearance exactly as in the reference. "
-    "Do not recolor, desaturate, oversaturate, or shift hue/value."
+    "Match the reference colors and print placement precisely."
 )
 
 FLUX2_POSITIVE_PROMPTS = {
     "top": (
-        "Generate only a top garment on pure white background. "
-        "Professional product photography, centered, well-lit, front view, flat lay style. "
-        "Keep neckline, sleeve geometry, shoulder width, and hem shape identical to reference. "
+        "A single top garment displayed alone as a standalone product, centered and front-view studio product photography "
+        "on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. "
+        "Soft diffused studio lighting with clear edge definition and crisp detail. "
+        "The neckline, shoulder line, sleeve geometry, waistline, and hem shape match the reference exactly. "
         f"{COLOR_PRESERVATION_CLAUSE} "
-        "Clean and crisp details, no wrinkles, properly arranged. "
-        "Never generate bottoms, dress silhouettes, legs, or shoes."
+        "The garment structure and overall silhouette match the reference exactly."
     ),
     "bottom": (
-        "Generate only bottom wear garment on pure white background. "
-        "Professional product photography, centered, well-lit, front view, flat lay style. "
-        "Keep waistline, hip shaping, leg width, and hem length identical to reference. "
+        "A single bottom garment displayed alone as a standalone product, centered and front-view studio product photography "
+        "on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. "
+        "Soft diffused studio lighting with clear edge definition and crisp detail. "
+        "The waistline, rise, hip shaping, leg shape, and hem length match the reference exactly. "
         f"{COLOR_PRESERVATION_CLAUSE} "
-        "Clean and crisp details, no wrinkles, properly arranged. "
-        "Never generate tops, upper body garments, or torso sections."
+        "The garment structure and overall silhouette match the reference exactly."
     ),
     "dress": (
-        "Generate only a full-length dress garment on pure white background. "
-        "Professional product photography, centered, well-lit, front view, flat lay style. "
-        "Keep bodice structure, waistline, skirt silhouette, and full length from top to bottom identical to reference. "
+        "A single dress garment displayed alone as a standalone product, centered and front-view studio product photography "
+        "on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. "
+        "Soft diffused studio lighting with clear edge definition and crisp detail. "
+        "The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. "
         f"{COLOR_PRESERVATION_CLAUSE} "
-        "Clean and crisp details, no wrinkles, properly arranged, showing complete dress as single piece. "
-        "Never generate separate top and bottom pieces or two-piece outfits."
+        "The garment structure and overall silhouette match the reference exactly."
     ),
     "outer": (
-        "Generate only outerwear garment on pure white background. "
-        "Professional product photography, centered, well-lit, front view, flat lay style. "
-        "Keep collar, lapel, shoulder structure, sleeve length, and hem identical to reference. "
+        "A single outerwear garment displayed alone as a standalone product, centered and front-view studio product photography "
+        "on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. "
+        "Soft diffused studio lighting with clear edge definition and crisp detail. "
+        "The collar, lapel, shoulder structure, sleeve length, waistline, and hem match the reference exactly. "
         f"{COLOR_PRESERVATION_CLAUSE} "
-        "Clean and crisp details, no wrinkles, properly arranged. "
-        "Never generate inner garments, base layers, or bottom wear."
+        "The garment structure and overall silhouette match the reference exactly."
     ),
 }
 

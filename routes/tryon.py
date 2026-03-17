@@ -102,19 +102,14 @@ async def flux2_tryon_endpoint(
         TryonResponse with generated image and detailed metadata
     """
     try:
-        logger.info(f"Flux2 try-on request: user={request.user_image_url}, garment={request.garment_image_url}")
-        
-        # Delegate to service layer
+        logger.info("Flux2 try-on request: products=%s", len(request.products))
+
         result = await tryon_service.try_on(
-            user_image_url=request.user_image_url,
-            garment_image_url=request.garment_image_url,
-            garment_type=request.garment_type,
-            prompt_description=request.prompt_description,
-            negative_prompt=request.negative_prompt,
+            user_image_url=request.user_image.tryonImage,
+            user_prompt_description=request.user_image.promptDescription,
+            products=request.products,
             steps=request.steps,
             seed=request.seed,
-            use_second_pass=request.use_second_pass,
-            color_lock_enabled=request.color_lock_enabled,
         )
         
         return TryonResponse(

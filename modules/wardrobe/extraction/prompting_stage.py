@@ -3,6 +3,9 @@ from __future__ import annotations
 import re
 from typing import Callable, Dict, Optional, Tuple
 
+from utils import build_garment_prompt_natural
+from config.prompts import get_flux2_positive_prompt
+
 
 _COLOR_TERMS = {
     "red", "blue", "green", "yellow", "orange", "purple", "pink", "brown", "black", "white",
@@ -163,36 +166,11 @@ def _build_attribute_clause(minicpm_desc: str) -> str:
 
 
 def _build_flux2_prompt(selected_type: str, minicpm_desc: str) -> str:
-    garment_label = {
-        "top": "top garment",
-        "bottom": "bottom garment",
-        "dress": "dress garment",
-        "outer": "outerwear garment",
-    }.get(selected_type, "garment")
-
-    attribute_clause = _build_attribute_clause(minicpm_desc)
-    if selected_type == "bottom":
-        preserve_shape = "Preserve the exact waistline, leg shape, and hem shape from the reference image."
-    else:
-        preserve_shape = "Preserve the exact neckline, shoulder line, bodice shape, waistline, and hem shape from the reference image."
-
-    segments = [
-        preserve_shape,
-        f"A single {garment_label} displayed alone.",
-        "Exclude any other garments or accessories even if visible in the reference image.",
-        "Isolated garment only. No person, no mannequin, no hands, no body parts, no extra garments.",
-    ]
-    if attribute_clause:
-        segments.append(attribute_clause)
-    segments.extend([
-        "Centered product presentation, front view.",
-        "Seamless pure white backdrop, clean and uncluttered scene.",
-        "Neutral flat lighting. No color cast, no relighting, no stylization.",
-        "Sharp focus, high detail.",
-        "Preserve the garment's original colors and overall appearance exactly as in the reference image.",
-        "Preserve the exact silhouette, hem shape, fabric texture, and print placement from the reference image.",
-    ])
-    return " ".join(segments).strip()
+    static_prompt = get_flux2_positive_prompt(selected_type)
+    natural = build_garment_prompt_natural(minicpm_desc, garment_type_hint=selected_type)
+    if natural:
+        return f"{static_prompt} {natural}"
+    return static_prompt
 
 
 def apply_selected_item_prompting(
@@ -223,7 +201,7 @@ def apply_selected_item_prompting(
     # Get MiniCPM description (raw)
     minicpm_desc = selected_item.get("minicpm_description", "")
 
-    # Build FLUX prompt with sanitized MiniCPM attributes
+    # Build natural garment prompt from MiniCPM attributes
     positive_prompt = _build_flux2_prompt(selected_type, str(minicpm_desc or ""))
     avoid_prompt = ""
     

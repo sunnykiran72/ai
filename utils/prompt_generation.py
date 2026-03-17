@@ -361,6 +361,280 @@ def build_tryon_prompt(
     return " ".join(parts).strip()
 
 
+_COLOR_TERMS = {
+    "red", "blue", "green", "yellow", "orange", "purple", "pink", "brown", "black", "white",
+    "gray", "grey", "beige", "cream", "ivory", "maroon", "navy", "teal", "cyan", "magenta",
+    "gold", "silver", "bronze", "tan", "khaki", "mustard", "lavender", "peach", "coral",
+    "turquoise", "lime", "olive", "indigo", "violet", "burgundy", "charcoal",
+    "multicolored", "multi-colored", "multicolor", "colorful", "colourful",
+    "color", "colour", "monochrome", "grayscale", "greyscale",
+}
+
+
+def _clean_descriptor_value(value: str) -> str:
+    cleaned = " ".join(str(value or "").split()).strip()
+    if not cleaned:
+        return ""
+    low = cleaned.lower()
+    if low in {"unknown", "n/a", "none", "no", "yes"}:
+        return ""
+    # Remove hex colors
+    cleaned = re.sub(r"#(?:[0-9a-fA-F]{3}){1,2}\\b", " ", cleaned)
+    # Remove color terms
+    for term in _COLOR_TERMS:
+        cleaned = re.sub(rf"\\b{re.escape(term)}\\b", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\\s+", " ", cleaned).strip(" ,.;:/-")
+    return cleaned
+
+
+def _join_phrases(phrases: List[str]) -> str:
+    parts = [p for p in phrases if p]
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    if len(parts) == 2:
+        return f"{parts[0]} and {parts[1]}"
+    return ", ".join(parts[:-1]) + f", and {parts[-1]}"
+
+
+def _maybe_suffix(value: str, suffix: str, keyword: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if keyword.lower() in raw.lower():
+        return raw
+    return f"{raw} {suffix}".strip()
+
+
+def _extract_structured_fields(desc: str) -> Dict[str, str]:
+    raw = parse_structured_descriptor(desc)
+    aliases = {
+        "details": "special_details",
+        "fabric": "fabric_texture",
+        "hem": "length_hem",
+        "length": "length_hem",
+        "collar_style": "collar",
+        "lapels": "lapel",
+        "shoulder": "shoulder_style",
+        "waist": "waistline",
+        "type": "type",
+        "category": "category",
+        "material": "material",
+        "texture": "texture",
+        "fit": "fit",
+        "length": "length",
+        "pattern": "pattern",
+        "embellishments": "embellishments",
+        "special_details": "special_details",
+        "sleeves": "sleeves",
+        "neckline": "neckline",
+        "bodice_cut": "bodice_cut",
+        "silhouette": "silhouette",
+        "fabric_texture": "fabric_texture",
+        "length_hem": "length_hem",
+        "closure": "closure",
+        "pockets": "pockets",
+        "slits": "slits",
+        "straps": "straps",
+        "layering": "layering",
+        "opening": "opening",
+        "lining": "lining",
+        "sheer": "sheer",
+        "hardware": "hardware",
+        "rise": "rise",
+        "leg_shape": "leg_shape",
+        "skirt_style": "skirt_style",
+        "construction": "construction",
+    }
+    normalized: Dict[str, str] = {}
+    for key, value in raw.items():
+        alias = aliases.get(key, key)
+        if alias not in aliases.values():
+            continue
+        cleaned = _clean_descriptor_value(value)
+        if cleaned:
+            normalized[alias] = cleaned
+    return normalized
+
+
+def build_garment_prompt_natural(
+    desc: str,
+    garment_type_hint: Optional[str] = None,
+) -> str:
+    fields = _extract_structured_fields(desc)
+    garment_type = (fields.get("type") or "").strip()
+    if not garment_type:
+        hint = (garment_type_hint or "").strip().lower()
+        garment_type = {
+            "top": "top garment",
+            "bottom": "bottom garment",
+            "dress": "dress",
+            "outer": "outerwear",
+        }.get(hint, "garment")
+
+    construction_bits: List[str] = []
+    neckline = fields.get("neckline")
+    if neckline:
+        construction_bits.append(_maybe_suffix(neckline, "neckline", "neckline"))
+    collar = fields.get("collar")
+    if collar:
+        construction_bits.append(_maybe_suffix(collar, "collar", "collar"))
+    lapel = fields.get("lapel")
+    if lapel:
+        construction_bits.append(_maybe_suffix(lapel, "lapel", "lapel"))
+    shoulder = fields.get("shoulder_style")
+    if shoulder:
+        construction_bits.append(_maybe_suffix(shoulder, "shoulder", "shoulder"))
+    sleeves = fields.get("sleeves")
+    if sleeves:
+        construction_bits.append(_maybe_suffix(sleeves, "sleeves", "sleeve"))
+    bodice = fields.get("bodice_cut")
+    if bodice:
+        construction_bits.append(_maybe_suffix(bodice, "bodice", "bodice"))
+    waistline = fields.get("waistline")
+    if waistline:
+        construction_bits.append(_maybe_suffix(waistline, "waist", "waist"))
+    silhouette = fields.get("silhouette")
+    if silhouette:
+        construction_bits.append(_maybe_suffix(silhouette, "silhouette", "silhouette"))
+    length_hem = fields.get("length_hem")
+    if length_hem:
+        lowered = length_hem.lower()
+        if "hem" in lowered:
+            hem_phrase = length_hem
+        elif lowered in {"crop", "cropped"}:
+            hem_phrase = "cropped hem"
+        elif lowered in {"mini", "miniskirt"}:
+            hem_phrase = "mini hem"
+        elif lowered in {"midi"}:
+            hem_phrase = "midi hem"
+        elif lowered in {"maxi"}:
+            hem_phrase = "maxi hem"
+        else:
+            hem_phrase = f"{length_hem} hem"
+        construction_bits.append(hem_phrase)
+    length_value = fields.get("length")
+    if length_value:
+        construction_bits.append(_maybe_suffix(length_value, "length", "length"))
+    rise = fields.get("rise")
+    if rise:
+        construction_bits.append(f"{rise} rise")
+    leg_shape = fields.get("leg_shape")
+    if leg_shape:
+        construction_bits.append(f"{leg_shape} leg shape")
+    skirt_style = fields.get("skirt_style")
+    if skirt_style:
+        construction_bits.append(f"{skirt_style} skirt")
+
+    sentence_one = f"A {garment_type}".strip()
+    construction_clause = _join_phrases(construction_bits)
+    if construction_clause:
+        sentence_one += f" with {construction_clause}."
+    else:
+        sentence_one += "."
+
+    fabric_texture = fields.get("fabric_texture") or fields.get("texture")
+    material = fields.get("material")
+    sentence_two = ""
+    fit = fields.get("fit")
+    if material and fabric_texture:
+        sentence_two = f"Made of {material} with a {fabric_texture} texture."
+    elif material:
+        sentence_two = f"Made of {material}."
+    elif fabric_texture:
+        sentence_two = f"{fabric_texture.capitalize()} texture."
+    if fit:
+        sentence_two = (sentence_two + " " if sentence_two else "") + f"{fit.capitalize()} fit."
+
+    pattern = fields.get("pattern")
+    if pattern and pattern.lower() != "solid":
+        sentence_two = (sentence_two + " " if sentence_two else "") + f"Patterned with {pattern}."
+
+    details_bits: List[str] = []
+    for key in ("embellishments", "special_details", "closure", "pockets", "slits", "straps", "layering", "hardware"):
+        value = fields.get(key)
+        if value:
+            details_bits.append(value)
+    opening = fields.get("opening")
+    if opening:
+        details_bits.append(f"{opening} closure")
+    lining = fields.get("lining")
+    if lining:
+        details_bits.append(f"{lining} lining")
+    sheer = fields.get("sheer")
+    if sheer:
+        details_bits.append(f"{sheer} fabric")
+    if details_bits:
+        details_clause = _join_phrases(details_bits)
+        sentence_two = (sentence_two + " " if sentence_two else "") + f"Details include {details_clause}."
+
+    construction = fields.get("construction")
+    if construction:
+        sentence_two = (sentence_two + " " if sentence_two else "") + f"Construction details: {construction}."
+
+    output = " ".join([sentence_one, sentence_two]).strip()
+    return output or "A garment."
+
+
+def _strip_unknown_tokens(text: str) -> str:
+    raw = " ".join(str(text or "").split()).strip()
+    if not raw:
+        return ""
+    fragments = [frag.strip() for frag in raw.replace("\n", " ").split(";") if frag.strip()]
+    cleaned: List[str] = []
+    for frag in fragments:
+        if "unknown" in frag.lower():
+            continue
+        cleaned.append(frag)
+    if not cleaned:
+        return raw
+    return ", ".join(cleaned).strip(" ,")
+
+
+def build_tryon_prompt_v2(
+    user_description: str,
+    garment_descriptions: List[str],
+    target_types: List[str],
+    board_mode: str,
+) -> str:
+    """
+    Build a Flux2 try-on prompt following FLUX best practices:
+    - Natural language
+    - Positive preservation constraints
+    - Explicit scope for edits
+    """
+    safe_user = _strip_unknown_tokens(user_description)
+    garment_lines: List[str] = []
+    for desc in garment_descriptions or []:
+        cleaned = _strip_unknown_tokens(desc)
+        if cleaned:
+            garment_lines.append(cleaned if cleaned.endswith(".") else f"{cleaned}.")
+
+    intro = (
+        "A photorealistic virtual try-on image edit of the same person from the reference."
+    )
+    preserve = (
+        "Preserve the person's identity, face, skin tone, hair, body proportions, pose, hands, "
+        "and the original background and lighting."
+    )
+    if board_mode == "collage":
+        scope = "Apply all garments from the collage reference as a complete outfit."
+    else:
+        scope = "Replace only the target garment with the reference garment."
+
+    parts = [intro, preserve, scope]
+    if safe_user:
+        parts.append(f"User details: {safe_user}.")
+    if garment_lines:
+        if len(garment_lines) == 1:
+            parts.append(f"Garment details: {garment_lines[0]}")
+        else:
+            parts.append("Outfit pieces include: " + " ".join(garment_lines))
+    parts.append("Sharp focus, high detail, clean composition.")
+    return " ".join(part.strip() for part in parts if part).strip()
+
+
 def build_flux2_prompt(
     base_description: str,
     negative_prompt: str = "",

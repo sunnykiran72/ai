@@ -82,6 +82,75 @@ class TryonResponse(SuccessResponse):
     )
 
 
+class Flux2TryonProduct(BaseModel):
+    """Single garment entry for Flux2 multi-garment try-on."""
+    image: str = Field(..., description="Garment image URL")
+    promptDescription: str = Field(..., description="Garment prompt description")
+    targetType: Optional[str] = Field(None, description="Type of garment (top, bottom, dress, outer)")
+
+    @field_validator("image")
+    @classmethod
+    def _validate_product_url(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("image must be a string")
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("image must not be empty")
+        if not cleaned.startswith(("http://", "https://")):
+            raise ValueError("image must start with http:// or https://")
+        return cleaned
+
+    @field_validator("promptDescription")
+    @classmethod
+    def _validate_prompt_description(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("promptDescription must be a string")
+        cleaned = " ".join(value.split()).strip()
+        if not cleaned:
+            raise ValueError("promptDescription must not be empty")
+        return cleaned
+
+    @field_validator("targetType")
+    @classmethod
+    def _validate_product_target_type(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("targetType must be a string")
+        cleaned = value.strip().lower()
+        if not cleaned:
+            return None
+        if cleaned not in {"top", "bottom", "dress", "outer"}:
+            raise ValueError("targetType must be one of: top, bottom, dress, outer")
+        return cleaned
+
+
+class Flux2TryonUserImage(BaseModel):
+    """User image for Flux2 try-on."""
+    tryonImage: str = Field(..., description="User image URL")
+    promptDescription: Optional[str] = Field(None, description="User prompt description")
+
+    @field_validator("tryonImage")
+    @classmethod
+    def _validate_user_image_url(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("tryonImage must be a string")
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("tryonImage must not be empty")
+        if not cleaned.startswith(("http://", "https://")):
+            raise ValueError("tryonImage must start with http:// or https://")
+        return cleaned
+
+
+class Flux2TryonRequest(BaseModel):
+    """Request model for Flux2 try-on endpoint (multi-garment)."""
+    products: List[Flux2TryonProduct]
+    user_image: Flux2TryonUserImage
+    steps: int = Field(default=20, ge=4, le=50, description="Number of generation steps")
+    seed: int = Field(default=42, ge=0, le=2147483647, description="Random seed for generation")
+
+
 # ── Analyze Models ──
 
 class AnalyzeRequest(BaseModel):
@@ -156,10 +225,6 @@ class StatusResponse(BaseModel):
 
 
 # ── Flux2 and Legacy VTO Models ──
-
-class Flux2TryonRequest(TryonRequest):
-    """Request model for Flux2 try-on endpoint."""
-    pass
 
 
 class VTORequest(BaseModel):

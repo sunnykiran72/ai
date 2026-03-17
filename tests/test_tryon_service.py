@@ -71,7 +71,25 @@ class TestTryonServiceWorkflow(unittest.IsolatedAsyncioTestCase):
         self.mock_config.qwen_second_pass_enabled = True
         self.mock_config.color_guard_rerun_enabled = True
         
+        # Provide required engine components
+        self.mock_engine.board_builder = MagicMock()
+        self.mock_engine.board_builder.build_board.side_effect = lambda imgs: imgs[0]
+        self.mock_engine.flux2 = MagicMock()
+        self.mock_engine.flux2.run_tryon.return_value = {
+            "image": Image.new('RGB', (512, 768), color='white'),
+            "latency": 1.2,
+            "metadata": {"seed": 42, "lora_effective": True},
+        }
+
         self.service = TryonService(self.mock_engine, self.mock_config)
+
+        # Mock storage upload
+        self._upload_patcher = patch(
+            "services.tryon_service.storage.upload_image",
+            return_value="https://example.com/result.png",
+        )
+        self._upload_patcher.start()
+        self.addCleanup(self._upload_patcher.stop)
         
         # Create test images
         self.user_image = Image.new('RGB', (512, 768), color='white')
@@ -84,10 +102,9 @@ class TestTryonServiceWorkflow(unittest.IsolatedAsyncioTestCase):
             user_image=self.user_image,
             garment_images=self.garment_images
         )
-        
-        # Current implementation returns not_implemented status
-        self.assertEqual(result["status"], "not_implemented")
-        self.assertIn("message", result)
+        self.assertEqual(result["output_url"], "https://example.com/result.png")
+        self.assertIn("metadata", result)
+        self.assertEqual(result["metadata"].get("lora_effective"), True)
     
     async def test_try_on_with_custom_parameters(self):
         """Test try-on with custom steps, seed, and backend."""
@@ -99,9 +116,8 @@ class TestTryonServiceWorkflow(unittest.IsolatedAsyncioTestCase):
             description_backend="florence",
             negative_prompt="custom negative prompt"
         )
-        
-        # Current implementation returns not_implemented status
-        self.assertEqual(result["status"], "not_implemented")
+        self.assertEqual(result["steps"], 30)
+        self.assertEqual(result["seed"], 123)
     
     async def test_try_on_with_garment_metadata(self):
         """Test try-on with garment metadata provided."""
@@ -118,9 +134,7 @@ class TestTryonServiceWorkflow(unittest.IsolatedAsyncioTestCase):
             garment_images=self.garment_images,
             garment_metadata=garment_metadata
         )
-        
-        # Current implementation returns not_implemented status
-        self.assertEqual(result["status"], "not_implemented")
+        self.assertIn("output_url", result)
     
     async def test_try_on_with_multiple_garments(self):
         """Test try-on with multiple garment images."""
@@ -131,9 +145,7 @@ class TestTryonServiceWorkflow(unittest.IsolatedAsyncioTestCase):
             user_image=self.user_image,
             garment_images=garment_images
         )
-        
-        # Current implementation returns not_implemented status
-        self.assertEqual(result["status"], "not_implemented")
+        self.assertEqual(result["metadata"]["garment_count"], 2)
 
 
 class TestTryonServiceDescriptorGeneration(unittest.IsolatedAsyncioTestCase):

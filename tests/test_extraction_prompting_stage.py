@@ -277,8 +277,9 @@ class PromptingStageTests(unittest.TestCase):
         )
 
         self.assertNotIn("gold", calls["metadata_base_prompt"])
-        self.assertNotIn("gold", selected_item["promptDescription"])
-        self.assertEqual(selected_item["promptDescription"], "category=dress; type=mini dress; colors=sage green; details=ruched.")
+        self.assertNotIn("gold", selected_item["promptDescription"].lower())
+        self.assertIn("mini dress", selected_item["promptDescription"].lower())
+        self.assertIn("ruched", selected_item["promptDescription"].lower())
         self.assertEqual(selected_item["garmentMetadata"]["color"]["color_hints"], ["sage green"])
         self.assertEqual(context["selected_type"], "dress")
 
@@ -298,7 +299,7 @@ class PromptingStageTests(unittest.TestCase):
                 "_processed_image_bytes": b"png",
                 "meta": {
                     "prompt_description": "",
-                    "base_garment_prompt": "category=dress; type=maxi dress; details=pleated.",
+                    "base_garment_prompt": "A maxi dress with pleated detail.",
                     "extraction_avoid_clause": "",
                     "prompt_sections_raw": "",
                 },
@@ -930,7 +931,7 @@ class PromptingStageTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         data = response.json()["data"]
         self.assertEqual(data["url"], "https://example.com/prepared.png")
-        self.assertIn("identity: test subject", data["promptDescription"])
+        self.assertIn("test subject", data["promptDescription"])
         face_patch.assert_not_called()
 
     def test_build_flux2_targeted_prompt_adds_saree_limb_guard(self):
