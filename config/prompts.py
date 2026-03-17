@@ -20,15 +20,30 @@ Return exactly one single line with this schema:
 category=<dress|top|bottom|outerwear|set|unknown>; 
 type=<specific garment type>; 
 neckline=<neckline style>; 
+collar=<collar style>; 
+lapel=<lapel style>; 
+shoulder_style=<shoulder/strap style>; 
 sleeves=<sleeve style or length>; 
+cuffs=<cuff style>; 
 bodice_cut=<bodice or torso shaping>; 
+waistline=<waist placement or shaping>; 
 silhouette=<fit and overall shape>; 
 length_hem=<hem length>; 
+rise=<rise or waistband height for bottoms>; 
+leg_shape=<leg opening shape if applicable>; 
+skirt_style=<skirt shape if applicable>; 
 fabric_texture=<fabric/material texture>; 
+pattern=<print or pattern type>; 
 embellishments=<buttons, zipper, pleats, ruffles, lace, embroidery, pockets, slit, logo>; 
+closure=<closure type/placement>; 
+pockets=<pocket type/placement>; 
+slits=<slit type/placement>; 
+straps=<strap details if applicable>; 
+layering=<layers or overlays if present>; 
 special_details=<unique construction or design details>; 
 preserve=<state that garment structure and details must remain unchanged>. 
-Use 'unknown' when not visible. Do not mention colors, person, mannequin, background, camera, or recommendations."""
+Use 'unknown' only when truly not visible. Prefer a concrete value if it can be inferred from visible pixels.
+Do not mention colors, person, mannequin, background, camera, or recommendations."""
 
 MINICPM_PERSON_OUTFIT_DESCRIPTION_PROMPT = """Describe only the human subject for virtual try-on identity preservation. 
 Return exactly one single line with this schema: 

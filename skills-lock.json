@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "flux-best-practices": {
+      "source": "black-forest-labs/skills",
+      "sourceType": "github",
+      "computedHash": "8e6def03f1cde7d5900849d65773832af39174be8243d27715c148f901e2d649"
+    }
+  }
+}

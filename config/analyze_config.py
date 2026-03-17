@@ -110,11 +110,11 @@ class AnalyzeConfig(BaseModel):
     prompt_from_extracted: bool = Field(default=True, description="Generate prompt from extracted image")
     extract_parser_only: bool = Field(default=True, description="Use parser-only extraction mode")
     extract_force_bbox_crop: bool = Field(default=True, description="Force bbox crop in extraction")
-    extract_crop_pad_ratio: float = Field(default=0.18, description="Padding ratio for extraction crops")
-    extract_crop_pad_ratio_dress: float = Field(default=0.28, description="Padding ratio for dress extraction")
-    extract_crop_bottom_extra_ratio_dress: float = Field(default=0.32, description="Bottom extra ratio for dress crops")
-    extract_crop_top_extra_ratio_bottom: float = Field(default=0.12, description="Top extra ratio for bottom crops")
-    extract_crop_top_extra_ratio_bottom_multi: float = Field(default=0.12, description="Top extra ratio for multi-bottom")
+    extract_crop_pad_ratio: float = Field(default=0.08, description="Padding ratio for extraction crops")
+    extract_crop_pad_ratio_dress: float = Field(default=0.15, description="Padding ratio for dress extraction")
+    extract_crop_bottom_extra_ratio_dress: float = Field(default=0.18, description="Bottom extra ratio for dress crops")
+    extract_crop_top_extra_ratio_bottom: float = Field(default=0.04, description="Top extra ratio for bottom crops")
+    extract_crop_top_extra_ratio_bottom_multi: float = Field(default=0.04, description="Top extra ratio for multi-bottom")
     extract_dress_top_recovery_ratio: float = Field(default=0.14, description="Top recovery ratio for dress")
     extract_top_top_recovery_ratio: float = Field(default=0.08, description="Top recovery ratio for top garments")
     extract_min_mask_ratio: float = Field(default=0.01, description="Minimum mask ratio for extraction")
@@ -313,11 +313,11 @@ class AnalyzeConfig(BaseModel):
             prompt_from_extracted=env_bool("ANALYZE_PROMPT_FROM_EXTRACTED", "1"),
             extract_parser_only=env_bool("ANALYZE_EXTRACT_PARSER_ONLY", "1"),
             extract_force_bbox_crop=env_bool("ANALYZE_EXTRACT_FORCE_BBOX_CROP", "1"),
-            extract_crop_pad_ratio=env_float("ANALYZE_EXTRACT_CROP_PAD_RATIO", 0.18),
-            extract_crop_pad_ratio_dress=env_float("ANALYZE_EXTRACT_CROP_PAD_RATIO_DRESS", 0.28),
-            extract_crop_bottom_extra_ratio_dress=env_float("ANALYZE_EXTRACT_CROP_BOTTOM_EXTRA_RATIO_DRESS", 0.32),
-            extract_crop_top_extra_ratio_bottom=env_float("ANALYZE_EXTRACT_CROP_TOP_EXTRA_RATIO_BOTTOM", 0.12),
-            extract_crop_top_extra_ratio_bottom_multi=env_float("ANALYZE_EXTRACT_CROP_TOP_EXTRA_RATIO_BOTTOM_MULTI", 0.12),
+            extract_crop_pad_ratio=env_float("ANALYZE_EXTRACT_CROP_PAD_RATIO", 0.08),
+            extract_crop_pad_ratio_dress=env_float("ANALYZE_EXTRACT_CROP_PAD_RATIO_DRESS", 0.15),
+            extract_crop_bottom_extra_ratio_dress=env_float("ANALYZE_EXTRACT_CROP_BOTTOM_EXTRA_RATIO_DRESS", 0.18),
+            extract_crop_top_extra_ratio_bottom=env_float("ANALYZE_EXTRACT_CROP_TOP_EXTRA_RATIO_BOTTOM", 0.04),
+            extract_crop_top_extra_ratio_bottom_multi=env_float("ANALYZE_EXTRACT_CROP_TOP_EXTRA_RATIO_BOTTOM_MULTI", 0.04),
             extract_dress_top_recovery_ratio=env_float("ANALYZE_EXTRACT_DRESS_TOP_RECOVERY_RATIO", 0.14),
             extract_top_top_recovery_ratio=env_float("ANALYZE_EXTRACT_TOP_TOP_RECOVERY_RATIO", 0.08),
             extract_min_mask_ratio=env_float("ANALYZE_EXTRACT_MIN_MASK_RATIO", 0.01),

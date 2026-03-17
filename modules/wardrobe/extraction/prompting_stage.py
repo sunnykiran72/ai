@@ -50,20 +50,47 @@ def _sanitize_minicpm_attributes(desc: str) -> Dict[str, str]:
         raw["fabric_texture"] = raw.get("fabric", "")
     if "hem" in raw and "length_hem" not in raw:
         raw["length_hem"] = raw.get("hem", "")
+    if "collar_style" in raw and "collar" not in raw:
+        raw["collar"] = raw.get("collar_style", "")
+    if "lapels" in raw and "lapel" not in raw:
+        raw["lapel"] = raw.get("lapels", "")
+    if "shoulder" in raw and "shoulder_style" not in raw:
+        raw["shoulder_style"] = raw.get("shoulder", "")
+    if "waist" in raw and "waistline" not in raw:
+        raw["waistline"] = raw.get("waist", "")
+    if "length" in raw and "length_hem" not in raw:
+        raw["length_hem"] = raw.get("length", "")
 
-    # Keep only low-risk structural attributes to avoid overriding the reference shape.
+    # Keep only garment attributes (no colors/body terms) and drop unknown values.
     allowed = [
+        "neckline",
+        "collar",
+        "lapel",
+        "shoulder_style",
+        "sleeves",
+        "cuffs",
+        "bodice_cut",
+        "waistline",
         "silhouette",
         "length_hem",
+        "rise",
+        "leg_shape",
+        "skirt_style",
         "fabric_texture",
+        "pattern",
         "embellishments",
+        "closure",
+        "pockets",
+        "slits",
+        "straps",
+        "layering",
         "special_details",
     ]
 
     sanitized: Dict[str, str] = {}
     for key in allowed:
         value = raw.get(key, "")
-        if not value or str(value).strip().lower() in {"unknown", "n/a", "none"}:
+        if not value or str(value).strip().lower() in {"unknown", "n/a", "none", "no", "yes"}:
             continue
         # Remove hex colors and color/body terms
         cleaned = re.sub(r"#(?:[0-9a-fA-F]{3}){1,2}\\b", " ", value)
@@ -76,25 +103,60 @@ def _sanitize_minicpm_attributes(desc: str) -> Dict[str, str]:
     return sanitized
 
 
+def _format_attribute(label: str, value: str) -> str:
+    value = str(value).strip()
+    if not value:
+        return ""
+    if label == "shoulder style":
+        return f"{value} style"
+    if label == "sleeves":
+        return f"{value} sleeves"
+    if label == "cuffs":
+        return f"{value} cuffs"
+    if label == "straps":
+        return f"{value} straps"
+    if label == "lapel":
+        return f"{value} lapel"
+    if label == "collar":
+        return f"{value} collar"
+    return f"{label} {value}"
+
+
 def _build_attribute_clause(minicpm_desc: str) -> str:
     attributes = _sanitize_minicpm_attributes(minicpm_desc)
     if not attributes:
         return ""
     label_map = {
         "neckline": "neckline",
+        "collar": "collar",
+        "lapel": "lapel",
+        "shoulder_style": "shoulder style",
         "sleeves": "sleeves",
+        "cuffs": "cuffs",
         "bodice_cut": "bodice cut",
+        "waistline": "waistline",
         "silhouette": "silhouette",
         "length_hem": "hem length",
+        "rise": "rise",
+        "leg_shape": "leg shape",
+        "skirt_style": "skirt style",
         "fabric_texture": "fabric texture",
+        "pattern": "pattern",
         "embellishments": "embellishments",
+        "closure": "closure",
+        "pockets": "pockets",
+        "slits": "slits",
+        "straps": "straps",
+        "layering": "layering",
         "special_details": "special details",
     }
     parts = []
     for key in label_map:
         value = attributes.get(key)
         if value:
-            parts.append(f"{label_map[key]} {value}")
+            formatted = _format_attribute(label_map[key], value)
+            if formatted:
+                parts.append(formatted)
     if not parts:
         return ""
     return "Garment attributes: " + "; ".join(parts) + "."
@@ -109,16 +171,23 @@ def _build_flux2_prompt(selected_type: str, minicpm_desc: str) -> str:
     }.get(selected_type, "garment")
 
     attribute_clause = _build_attribute_clause(minicpm_desc)
+    if selected_type == "bottom":
+        preserve_shape = "Preserve the exact waistline, leg shape, and hem shape from the reference image."
+    else:
+        preserve_shape = "Preserve the exact neckline, shoulder line, bodice shape, waistline, and hem shape from the reference image."
+
     segments = [
-        "Preserve the exact neckline, shoulder line, bodice shape, waistline, and hem shape from the reference image.",
+        preserve_shape,
         f"A single {garment_label} displayed alone.",
+        "Exclude any other garments or accessories even if visible in the reference image.",
+        "Isolated garment only. No person, no mannequin, no hands, no body parts, no extra garments.",
     ]
     if attribute_clause:
         segments.append(attribute_clause)
     segments.extend([
         "Centered product presentation, front view.",
-        "Professional studio product photography on a seamless pure white backdrop, clean and uncluttered scene.",
-        "Soft diffused studio lighting with clear edge definition.",
+        "Seamless pure white backdrop, clean and uncluttered scene.",
+        "Neutral flat lighting. No color cast, no relighting, no stylization.",
         "Sharp focus, high detail.",
         "Preserve the garment's original colors and overall appearance exactly as in the reference image.",
         "Preserve the exact silhouette, hem shape, fabric texture, and print placement from the reference image.",

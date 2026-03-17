@@ -10,6 +10,7 @@ import asyncio
 import inspect
 import logging
 import time
+import requests
 
 from PIL import Image
 
@@ -44,6 +45,7 @@ from modules.wardrobe.extraction.utils import (
 from modules.wardrobe.extraction.detection_stage import (
     run_detection_stage_or_response,
     resolve_selected_item_or_response,
+    build_selection_required_response,
 )
 from modules.wardrobe.extraction.generation_stage import run_selected_item_extraction_or_response
 from modules.wardrobe.extraction.prompting_stage import apply_selected_item_prompting
@@ -376,6 +378,26 @@ class AnalyzeService:
             heuristic_split_used = bool(detection_result.get("heuristic_split_used"))
             auto_selected_index = detection_result.get("auto_selected_index")
 
+            if not requested_type and len(items) > 1:
+                return build_selection_required_response(
+                    items=items,
+                    full_image=image,
+                    started_at=started_at,
+                    gpu_queue_wait_s=gpu_queue_wait_s,
+                    raw_detected_count=raw_detected_count,
+                    parser_split_used=parser_split_used,
+                    heuristic_split_used=heuristic_split_used,
+                    selection_preview_format=str(self.config.selection_preview_format),
+                    selection_preview_max_side=int(self.config.selection_preview_max_side),
+                    selection_preview_jpeg_quality=int(self.config.selection_preview_jpeg_quality),
+                    to_public_item=main_mod._to_public_item,
+                    build_adaptive_rect_crop_variants=_simple_build_adaptive_rect_crop_variants,
+                    prepare_extract_source_image=_prepare_extract_source_image,
+                    build_multipart_parts=build_multipart_parts,
+                    build_success_payload=build_success_payload,
+                    multipart_form_response=multipart_form_response,
+                )
+
             selected_item, _selected_index_internal, selected_item_response = resolve_selected_item_or_response(
                 items=items,
                 requested_type=requested_type,
@@ -472,18 +494,80 @@ class AnalyzeService:
                 return extraction_response
 
             # Stage: Sync Progress
+            def _sync_wardrobe_progress_dispatch(
+                *,
+                authorization: Optional[str],
+                progress_id: str,
+                output_url: str,
+                prompt_description: str,
+                garment_metadata: Dict[str, object],
+                metadata: Dict[str, object],
+            ) -> Dict[str, object]:
+                base_url = str(main_mod.config.app.wardrobe_progress_api_base_url or "").strip()
+                if not base_url:
+                    return {
+                        "enabled": bool(main_mod.config.app.enable_wardrobe_progress_sync),
+                        "synced": False,
+                        "reason": "missing_base_url",
+                        "id": progress_id,
+                    }
+
+                payload = {
+                    "id": progress_id,
+                    "progressId": progress_id,
+                    "progress_id": progress_id,
+                    "outputUrl": output_url,
+                    "output_url": output_url,
+                    "promptDescription": prompt_description,
+                    "prompt_description": prompt_description,
+                    "garmentMetadata": garment_metadata,
+                    "garment_metadata": garment_metadata,
+                    "metadata": metadata,
+                }
+
+                if bool(main_mod.config.app.wardrobe_progress_include_input_image):
+                    input_url = str(selected_item.get("raw_image_url") or "")
+                    if input_url:
+                        payload["inputImageUrl"] = input_url
+                        payload["input_image_url"] = input_url
+
+                headers = {"Content-Type": "application/json"}
+                if authorization:
+                    headers["Authorization"] = authorization
+
+                try:
+                    resp = requests.post(
+                        base_url,
+                        json=payload,
+                        headers=headers,
+                        timeout=float(main_mod.config.app.wardrobe_progress_sync_timeout_s),
+                    )
+                    try:
+                        body = resp.json()
+                    except Exception:
+                        body = resp.text
+                    return {
+                        "enabled": True,
+                        "synced": bool(resp.ok),
+                        "status_code": resp.status_code,
+                        "id": progress_id,
+                        "response": body,
+                    }
+                except Exception as exc:
+                    return {
+                        "enabled": True,
+                        "synced": False,
+                        "reason": f"request_failed: {exc}",
+                        "id": progress_id,
+                    }
+
             selected_item, _postprocess_context = sync_selected_item_progress(
                 selected_item=selected_item,
                 requested_type=requested_type,
                 stage_timings=analyze_stage_timings,
                 enable_progress_sync=bool(main_mod.config.app.enable_wardrobe_progress_sync),
                 authorization=authorization,
-                sync_wardrobe_progress_dispatch=lambda **_kwargs: {
-                    "enabled": bool(main_mod.config.app.enable_wardrobe_progress_sync),
-                    "synced": False,
-                    "reason": "disabled",
-                    "id": "",
-                },
+                sync_wardrobe_progress_dispatch=_sync_wardrobe_progress_dispatch,
                 prompting_context=prompting_context,
             )
 

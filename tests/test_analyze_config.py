@@ -93,8 +93,8 @@ class TestAnalyzeConfigDefaults:
         assert config.prompt_from_extracted is True
         assert config.extract_parser_only is True
         assert config.extract_force_bbox_crop is True
-        assert config.extract_crop_pad_ratio == 0.18
-        assert config.extract_crop_pad_ratio_dress == 0.28
+        assert config.extract_crop_pad_ratio == 0.08
+        assert config.extract_crop_pad_ratio_dress == 0.15
         assert config.extract_min_mask_ratio == 0.01
         assert config.extract_relaxed_rescue is True
         assert config.extract_edge_feather_px == 1
