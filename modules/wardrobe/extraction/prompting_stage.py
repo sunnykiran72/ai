@@ -51,10 +51,8 @@ def _sanitize_minicpm_attributes(desc: str) -> Dict[str, str]:
     if "hem" in raw and "length_hem" not in raw:
         raw["length_hem"] = raw.get("hem", "")
 
+    # Keep only low-risk structural attributes to avoid overriding the reference shape.
     allowed = [
-        "neckline",
-        "sleeves",
-        "bodice_cut",
         "silhouette",
         "length_hem",
         "fabric_texture",
@@ -112,17 +110,18 @@ def _build_flux2_prompt(selected_type: str, minicpm_desc: str) -> str:
 
     attribute_clause = _build_attribute_clause(minicpm_desc)
     segments = [
+        "Preserve the exact neckline, shoulder line, bodice shape, waistline, and hem shape from the reference image.",
         f"A single {garment_label} displayed alone.",
     ]
     if attribute_clause:
         segments.append(attribute_clause)
     segments.extend([
-        "Centered product presentation, front view or flat lay.",
+        "Centered product presentation, front view.",
         "Professional studio product photography on a seamless pure white backdrop, clean and uncluttered scene.",
         "Soft diffused studio lighting with clear edge definition.",
         "Sharp focus, high detail.",
         "Preserve the garment's original colors and overall appearance exactly as in the reference image.",
-        "Preserve the exact silhouette, neckline, sleeve length, hem shape, fabric texture, and print placement from the reference image.",
+        "Preserve the exact silhouette, hem shape, fabric texture, and print placement from the reference image.",
     ])
     return " ".join(segments).strip()
 
