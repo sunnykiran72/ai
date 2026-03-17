@@ -1,45 +1,127 @@
 from __future__ import annotations
 
+import re
 from typing import Callable, Dict, Optional, Tuple
 
-from config.prompts import get_flux2_positive_prompt, get_flux2_negative_prompt
+
+_COLOR_TERMS = {
+    "red", "blue", "green", "yellow", "orange", "purple", "pink", "brown", "black", "white",
+    "gray", "grey", "beige", "cream", "ivory", "maroon", "navy", "teal", "cyan", "magenta",
+    "gold", "silver", "bronze", "tan", "khaki", "mustard", "lavender", "peach", "coral",
+    "turquoise", "lime", "olive", "indigo", "violet", "burgundy", "charcoal",
+}
+_BODY_TERMS = {
+    "person", "people", "model", "mannequin", "woman", "man", "girl", "boy",
+    "body", "torso", "chest", "waist", "hip", "hips", "leg", "legs", "arm", "arms",
+    "hand", "hands", "finger", "fingers", "face", "neck", "shoulder", "shoulders",
+}
 
 
-def _extract_unwanted_terms_from_joycaption(joycaption_desc: str, garment_type: str) -> str:
-    """
-    Extract unwanted terms from JoyCaption description to enhance negative prompts.
-    
-    JoyCaption often mentions person, accessories, or background elements that should be avoided.
-    This function identifies those terms and adds them to the negative prompt.
-    """
-    if not joycaption_desc:
+def _strip_terms(text: str, terms: set[str]) -> str:
+    cleaned = str(text or "")
+    for term in terms:
+        cleaned = re.sub(rf"\\b{re.escape(term)}\\b", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\\s+", " ", cleaned).strip(" ,.;:/-")
+    return cleaned
+
+
+def _parse_minicpm_kv(desc: str) -> Dict[str, str]:
+    parsed: Dict[str, str] = {}
+    for chunk in str(desc or "").split(";"):
+        if "=" not in chunk:
+            continue
+        key, value = chunk.split("=", 1)
+        key = key.strip().lower()
+        value = value.strip()
+        if not key:
+            continue
+        parsed[key] = value
+    return parsed
+
+
+def _sanitize_minicpm_attributes(desc: str) -> Dict[str, str]:
+    raw = _parse_minicpm_kv(desc)
+    # Normalize key aliases
+    if "details" in raw and "special_details" not in raw:
+        raw["special_details"] = raw.get("details", "")
+    if "fabric" in raw and "fabric_texture" not in raw:
+        raw["fabric_texture"] = raw.get("fabric", "")
+    if "hem" in raw and "length_hem" not in raw:
+        raw["length_hem"] = raw.get("hem", "")
+
+    allowed = [
+        "neckline",
+        "sleeves",
+        "bodice_cut",
+        "silhouette",
+        "length_hem",
+        "fabric_texture",
+        "embellishments",
+        "special_details",
+    ]
+
+    sanitized: Dict[str, str] = {}
+    for key in allowed:
+        value = raw.get(key, "")
+        if not value or str(value).strip().lower() in {"unknown", "n/a", "none"}:
+            continue
+        # Remove hex colors and color/body terms
+        cleaned = re.sub(r"#(?:[0-9a-fA-F]{3}){1,2}\\b", " ", value)
+        cleaned = _strip_terms(cleaned, _COLOR_TERMS)
+        cleaned = _strip_terms(cleaned, _BODY_TERMS)
+        cleaned = re.sub(r"\\bcolors?\\b", " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\\s+", " ", cleaned).strip(" ,.;:/-")
+        if cleaned:
+            sanitized[key] = cleaned
+    return sanitized
+
+
+def _build_attribute_clause(minicpm_desc: str) -> str:
+    attributes = _sanitize_minicpm_attributes(minicpm_desc)
+    if not attributes:
         return ""
-    
-    desc_lower = joycaption_desc.lower()
-    unwanted = []
-    
-    # Common unwanted terms that JoyCaption might mention
-    person_terms = ["woman", "man", "person", "model", "girl", "lady", "taking", "holding", "wearing", "posing"]
-    accessory_terms = ["phone", "mirror", "selfie", "jewelry", "necklace", "earring", "bracelet", "bag", "purse"]
-    background_terms = ["room", "wall", "background", "indoor", "outdoor", "scene"]
-    
-    # Check for person-related terms
-    for term in person_terms:
-        if term in desc_lower:
-            unwanted.append(term)
-    
-    # Check for accessories
-    for term in accessory_terms:
-        if term in desc_lower:
-            unwanted.append(term)
-    
-    # Check for background
-    for term in background_terms:
-        if term in desc_lower:
-            unwanted.append(term)
-    
-    # Remove duplicates and return
-    return ", ".join(sorted(set(unwanted))) if unwanted else ""
+    label_map = {
+        "neckline": "neckline",
+        "sleeves": "sleeves",
+        "bodice_cut": "bodice cut",
+        "silhouette": "silhouette",
+        "length_hem": "hem length",
+        "fabric_texture": "fabric texture",
+        "embellishments": "embellishments",
+        "special_details": "special details",
+    }
+    parts = []
+    for key in label_map:
+        value = attributes.get(key)
+        if value:
+            parts.append(f"{label_map[key]} {value}")
+    if not parts:
+        return ""
+    return "Garment attributes: " + "; ".join(parts) + "."
+
+
+def _build_flux2_prompt(selected_type: str, minicpm_desc: str) -> str:
+    garment_label = {
+        "top": "top garment",
+        "bottom": "bottom garment",
+        "dress": "dress garment",
+        "outer": "outerwear garment",
+    }.get(selected_type, "garment")
+
+    attribute_clause = _build_attribute_clause(minicpm_desc)
+    segments = [
+        f"A single {garment_label} displayed alone.",
+    ]
+    if attribute_clause:
+        segments.append(attribute_clause)
+    segments.extend([
+        "Centered product presentation, front view or flat lay.",
+        "Professional studio product photography on a seamless backdrop, clean and uncluttered scene.",
+        "Soft diffused studio lighting with clear edge definition.",
+        "Sharp focus, high detail.",
+        "Preserve the exact silhouette, neckline, sleeve length, hem shape, fabric texture, and print placement from the reference image.",
+    ])
+    return " ".join(segments).strip()
 
 
 def apply_selected_item_prompting(
@@ -55,11 +137,10 @@ def apply_selected_item_prompting(
     strip_descriptor_color_clause: Callable[[str], str],
 ) -> Tuple[Optional[Dict[str, object]], Dict[str, object]]:
     """
-    Simplified prompting stage that generates detailed semantic prompts based on garment type only.
-    Uses centralized prompts from config.prompts for consistency and easy debugging.
-    No color extraction - just semantic type-based prompts with proper structure and details.
-    
-    JoyCaption description is used to enhance negative prompts by identifying unwanted elements.
+    Prompting stage that builds FLUX-friendly positive prompts only.
+    - No negative prompts (FLUX does not support them).
+    - No color terms (preserve reference colors implicitly).
+    - MiniCPM contributes only structural garment attributes.
     """
     if not selected_item:
         return selected_item, {}
@@ -68,27 +149,12 @@ def apply_selected_item_prompting(
     forced_type = requested_type if requested_type in {"top", "bottom", "dress", "outer"} else None
     selected_type = forced_type or normalize_garment_type(str(selected_item.get("type") or "")) or "top"
     
-    # Get prompts from centralized configuration
-    base_garment_prompt = get_flux2_positive_prompt(selected_type)
-    avoid_prompt = get_flux2_negative_prompt(selected_type)
-
-    # Get MiniCPM and JoyCaption descriptions
+    # Get MiniCPM description (raw)
     minicpm_desc = selected_item.get("minicpm_description", "")
-    joycaption_desc = selected_item.get("joycaption_description", "")
-    
-    # Use MiniCPM description to drive the positive prompt when available
-    positive_prompt = base_garment_prompt
-    if minicpm_desc:
-        positive_prompt = f"{base_garment_prompt} {minicpm_desc}".strip()
-    
-    # Enhance negative prompt with JoyCaption insights
-    # JoyCaption helps identify unwanted elements (person, accessories, background)
-    if joycaption_desc:
-        # Extract unwanted terms from JoyCaption description
-        unwanted_terms = _extract_unwanted_terms_from_joycaption(joycaption_desc, selected_type)
-        if unwanted_terms:
-            # Append to negative prompt
-            avoid_prompt = f"{avoid_prompt}, {unwanted_terms}"
+
+    # Build FLUX prompt with sanitized MiniCPM attributes
+    positive_prompt = _build_flux2_prompt(selected_type, str(minicpm_desc or ""))
+    avoid_prompt = ""
     
     # Set the prompts on the item
     selected_item["baseGarmentPrompt"] = positive_prompt
@@ -103,20 +169,19 @@ def apply_selected_item_prompting(
     selected_item["category_key"] = sync_category["category_key"]
     selected_item["style"] = sync_category["style"]
     
-    # Build simplified metadata (no color information, includes MiniCPM + JoyCaption descriptions)
+    # Build simplified metadata (no color information)
     garment_metadata = {
         "prompt": {
             "base_garment_prompt": positive_prompt,
             "prompt_description": positive_prompt,
             "avoid_clause": avoid_prompt,
             "minicpm_description": minicpm_desc,  # MiniCPM description
-            "joycaption_description": joycaption_desc,  # JoyCaption description
         },
         "type": selected_type,
         "style": sync_category["style"],
         "primary_category_key": sync_category["primary_category_key"],
         "category_key": sync_category["category_key"],
-        "prompt_source": "type_based_semantic_with_joycaption",
+        "prompt_source": "type_based_semantic_minicpm_only",
         # No color information
         "dominant_hexes": [],
         "accent_hexes": [],
@@ -132,7 +197,6 @@ def apply_selected_item_prompting(
         "avoid_prompt": avoid_prompt,
         "sync_category": sync_category,
         "garment_metadata": garment_metadata,
-        "prompt_source": "type_based_semantic_with_joycaption",
+        "prompt_source": "type_based_semantic_minicpm_only",
         "minicpm_description": minicpm_desc,  # Pass through for extraction stage
-        "joycaption_description": joycaption_desc,  # Pass through for extraction stage
     }

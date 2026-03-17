@@ -19,15 +19,16 @@ MINICPM_GARMENT_DESCRIPTION_PROMPT = """Describe only the product garment for hi
 Return exactly one single line with this schema: 
 category=<dress|top|bottom|outerwear|set|unknown>; 
 type=<specific garment type>; 
-colors=<primary and secondary colors>; 
-pattern=<solid|striped|floral|graphic|etc>; 
-material=<fabric/material>; 
-silhouette=<fit and shape>; 
-construction=<neckline, sleeve style, waist/hip shaping, hem/length>; 
-details=<buttons, zipper, pleats, ruffles, lace, embroidery, pockets, slit, logo>; 
-coverage=<what body area it should replace>; 
-preserve=<state that garment colors, print placement, and structure must remain unchanged>. 
-Use 'unknown' when not visible. Do not mention person, mannequin, background, camera, or recommendations."""
+neckline=<neckline style>; 
+sleeves=<sleeve style or length>; 
+bodice_cut=<bodice or torso shaping>; 
+silhouette=<fit and overall shape>; 
+length_hem=<hem length>; 
+fabric_texture=<fabric/material texture>; 
+embellishments=<buttons, zipper, pleats, ruffles, lace, embroidery, pockets, slit, logo>; 
+special_details=<unique construction or design details>; 
+preserve=<state that garment structure and details must remain unchanged>. 
+Use 'unknown' when not visible. Do not mention colors, person, mannequin, background, camera, or recommendations."""
 
 MINICPM_PERSON_OUTFIT_DESCRIPTION_PROMPT = """Describe only the human subject for virtual try-on identity preservation. 
 Return exactly one single line with this schema: 
