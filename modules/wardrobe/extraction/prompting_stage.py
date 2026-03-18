@@ -4,7 +4,7 @@ import re
 from typing import Callable, Dict, Optional, Tuple
 
 from utils import build_garment_prompt_natural
-from config.prompts import get_flux2_positive_prompt
+from config.prompts import get_analyze_flux2_positive_prompt
 
 
 _COLOR_TERMS = {
@@ -163,12 +163,15 @@ def _build_attribute_clause(minicpm_desc: str) -> str:
     return "Garment attributes: " + "; ".join(parts) + "."
 
 
-def _build_flux2_prompt(selected_type: str, minicpm_desc: str) -> str:
-    static_prompt = get_flux2_positive_prompt(selected_type)
-    natural = build_garment_prompt_natural(minicpm_desc, garment_type_hint=selected_type)
-    if natural:
-        return f"{static_prompt} {natural}"
-    return static_prompt
+def _build_flux2_prompt(selected_type: str, minicpm_desc: str) -> tuple[str, str]:
+    static_prompt = get_analyze_flux2_positive_prompt(selected_type)
+    natural = build_garment_prompt_natural(
+        minicpm_desc,
+        garment_type_hint=selected_type,
+        ignore_layering=True,
+    )
+    flux_prompt = f"{static_prompt} {natural}".strip() if natural else static_prompt
+    return flux_prompt, natural
 
 
 def apply_selected_item_prompting(
@@ -200,13 +203,14 @@ def apply_selected_item_prompting(
     minicpm_desc = selected_item.get("minicpm_description", "")
 
     # Build natural garment prompt from MiniCPM attributes
-    positive_prompt = _build_flux2_prompt(selected_type, str(minicpm_desc or ""))
+    positive_prompt, natural_prompt = _build_flux2_prompt(selected_type, str(minicpm_desc or ""))
+    prompt_desc = natural_prompt or positive_prompt
     avoid_prompt = ""
     
     # Set the prompts on the item
     selected_item["baseGarmentPrompt"] = positive_prompt
-    selected_item["promptDescription"] = positive_prompt
-    selected_item["description"] = positive_prompt
+    selected_item["promptDescription"] = prompt_desc
+    selected_item["description"] = prompt_desc
     selected_item["extractionAvoidClause"] = avoid_prompt
     selected_item["type"] = selected_type
     
@@ -220,7 +224,7 @@ def apply_selected_item_prompting(
     garment_metadata = {
         "prompt": {
             "base_garment_prompt": positive_prompt,
-            "prompt_description": positive_prompt,
+            "prompt_description": prompt_desc,
             "avoid_clause": avoid_prompt,
             "minicpm_description": minicpm_desc,  # MiniCPM description
         },
@@ -240,7 +244,7 @@ def apply_selected_item_prompting(
 
     return selected_item, {
         "selected_type": selected_type,
-        "prompt_description": positive_prompt,
+        "prompt_description": prompt_desc,
         "avoid_prompt": avoid_prompt,
         "sync_category": sync_category,
         "garment_metadata": garment_metadata,

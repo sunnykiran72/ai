@@ -7,6 +7,9 @@ from typing import Callable, Dict, Optional, Tuple
 import numpy as np
 from PIL import Image
 
+from config.prompts import get_analyze_flux2_positive_prompt
+from utils.prompt_generation import build_garment_prompt_natural
+
 
 def run_selected_item_extraction_or_response(
     *,
@@ -121,9 +124,17 @@ def run_selected_item_extraction_or_response(
     ):
         selected_prompt_hint = ""
 
-    base_prompt = str(selected_item.get("baseGarmentPrompt") or "").strip()
     negative_prompt = str(selected_item.get("extractionAvoidClause") or "").strip()
     minicpm_description = str(selected_item.get("minicpm_description") or "").strip()
+    # Rebuild base prompt here to ensure latest analyze prompt clauses are applied.
+    static_prompt = get_analyze_flux2_positive_prompt(selected_type)
+    natural_prompt = build_garment_prompt_natural(
+        minicpm_description,
+        garment_type_hint=selected_type,
+        ignore_layering=True,
+    )
+    base_prompt = f"{static_prompt} {natural_prompt}".strip() if natural_prompt else static_prompt
+    prompt_desc = natural_prompt or ""
 
     extracted_url = ""
     extraction_meta = {}
@@ -166,7 +177,7 @@ def run_selected_item_extraction_or_response(
         flux_fallback = run_flux2_cloth_only_extract(
             source_image=extract_source_image,
             garment_type=selected_type,
-            prompt_description="",
+            prompt_description=prompt_desc,
             fallback_prompt_description=selected_prompt_hint,
             description_backend="minicpm_service",
             steps=flux2_single_garment_extract_default_steps,

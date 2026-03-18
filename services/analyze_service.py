@@ -287,7 +287,11 @@ class AnalyzeService:
                 Run Flux2 extraction directly (no HTTP calls).
                 Uses the Flux2CVTONRunner.run_extraction() method.
                 """
-                flux_runner = getattr(self.engine, "flux2", None)
+                flux_runner = (
+                    self.engine.get_flux2_for_analyze()
+                    if hasattr(self.engine, "get_flux2_for_analyze")
+                    else getattr(self.engine, "flux2", None)
+                )
                 if flux_runner is None:
                     raise RuntimeError("Flux2 runner not available")
                 
@@ -355,12 +359,16 @@ class AnalyzeService:
                 
                 # Build metadata
                 metadata = result.get("metadata") or {}
+                prompt_description = str(kwargs.get("prompt_description") or "").strip()
+                if not prompt_description:
+                    prompt_description = base_prompt
+
                 metadata.update({
                     "path": "flux2_extraction",
                     "pipeline": "flux2_extraction",
                     "base_garment_prompt": base_prompt,
                     "extraction_avoid_clause": "",
-                    "prompt_description": base_prompt,
+                    "prompt_description": prompt_description,
                     "prompt_sections_raw": "",
                     "descriptor_raw_text": str(kwargs.get("minicpm_description") or "").strip(),
                     "negative_prompt_mode": "none",
@@ -581,6 +589,8 @@ class AnalyzeService:
                     "id": progress_id,
                     "progressId": progress_id,
                     "progress_id": progress_id,
+                    "outputImage": output_url,
+                    "output_image": output_url,
                     "outputUrl": output_url,
                     "output_url": output_url,
                     "promptDescription": prompt_description,
@@ -593,6 +603,8 @@ class AnalyzeService:
                 if bool(main_mod.config.app.wardrobe_progress_include_input_image):
                     input_url = str(selected_item.get("raw_image_url") or "")
                     if input_url:
+                        payload["inputImage"] = input_url
+                        payload["input_image"] = input_url
                         payload["inputImageUrl"] = input_url
                         payload["input_image_url"] = input_url
 

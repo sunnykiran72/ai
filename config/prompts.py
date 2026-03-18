@@ -68,8 +68,6 @@ FLUX2_POSITIVE_PROMPTS = {
     "top": (
         "A single top garment displayed alone as a standalone product, centered and front-view studio product photography "
         "on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. "
-        "Flat-lay product presentation with the garment laid flat and unsupported, showing only the fabric and seams. "
-        "The frame contains only the upper-torso garment; below the hem is clean white background. "
         "Soft diffused studio lighting with clear edge definition and crisp detail. "
         "The neckline, shoulder line, sleeve geometry, waistline, and hem shape match the reference exactly. "
         f"{COLOR_PRESERVATION_CLAUSE} "
@@ -78,7 +76,6 @@ FLUX2_POSITIVE_PROMPTS = {
     "bottom": (
         "A single bottom garment displayed alone as a standalone product, centered and front-view studio product photography "
         "on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. "
-        "Ghost-mannequin product presentation with empty waistband and leg openings and a hollow interior. "
         "Soft diffused studio lighting with clear edge definition and crisp detail. "
         "The waistline, rise, hip shaping, leg shape, and hem length match the reference exactly. "
         f"{COLOR_PRESERVATION_CLAUSE} "
@@ -87,7 +84,6 @@ FLUX2_POSITIVE_PROMPTS = {
     "dress": (
         "A single dress garment displayed alone as a standalone product, centered and front-view studio product photography "
         "on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. "
-        "Ghost-mannequin product presentation with empty neckline and arm openings and a hollow interior. "
         "Soft diffused studio lighting with clear edge definition and crisp detail. "
         "The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. "
         f"{COLOR_PRESERVATION_CLAUSE} "
@@ -96,13 +92,28 @@ FLUX2_POSITIVE_PROMPTS = {
     "outer": (
         "A single outerwear garment displayed alone as a standalone product, centered and front-view studio product photography "
         "on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. "
-        "Ghost-mannequin product presentation with empty neckline and arm openings and a hollow interior. "
         "Soft diffused studio lighting with clear edge definition and crisp detail. "
         "The collar, lapel, shoulder structure, sleeve length, waistline, and hem match the reference exactly. "
         f"{COLOR_PRESERVATION_CLAUSE} "
         "The garment structure and overall silhouette match the reference exactly."
     ),
 }
+
+# Analyze-only positive clause to suppress human/body leakage in extraction outputs.
+ANALYZE_GARMENT_ONLY_CLAUSE = (
+    "Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. "
+    "Ghost mannequin style is acceptable only if the mannequin is completely invisible. "
+    "Hollow interior: no chest volume, no torso form, no body contours beneath the fabric. "
+    "No hangers, no props, no accessories. Pure white background, clean studio product photo."
+)
+
+# Top-only refinement to prevent extra fabric above neckline or below hem.
+ANALYZE_TOP_ONLY_CLAUSE = (
+    "Top-only: no fabric above the garment’s upper edge, no fabric below the hem, no lower-body garments or legs visible. "
+    "Crop to the garment bounds only; no extra fabric beyond the original top silhouette. "
+    "No added panels, yokes, underlayers, or secondary garment sections above the neckline or below the hem. "
+    "Do not add padding, cups, or extra bust volume; keep bust shaping, seams, and underbust placement exactly as the reference."
+)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # FLUX2 NEGATIVE PROMPTS (What NOT to Generate)
@@ -191,6 +202,16 @@ def get_flux2_positive_prompt(garment_type: str) -> str:
         garment_type,
         f"Generate only a garment on pure white background, professional product photography. {COLOR_PRESERVATION_CLAUSE}"
     )
+
+
+def get_analyze_flux2_positive_prompt(garment_type: str) -> str:
+    """
+    Get the Flux2 positive prompt for analyze extraction only.
+    Appends the analyze-only garment clause to reduce human artifacts.
+    """
+    base = get_flux2_positive_prompt(garment_type)
+    extra = ANALYZE_TOP_ONLY_CLAUSE if garment_type == "top" else ""
+    return f"{base} {ANALYZE_GARMENT_ONLY_CLAUSE} {extra}".strip()
 
 
 def get_flux2_negative_prompt(garment_type: str) -> str:
