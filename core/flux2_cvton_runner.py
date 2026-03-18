@@ -873,9 +873,12 @@ class Flux2CVTONRunner:
         # Flatten RGBA to white background for input
         garment = _flatten_rgba_to_white_rgb(garment_image)
 
+        effective_lora = False
         with self._infer_lock, torch.inference_mode():
-            # Enable LoRA for extraction (same as tryon)
-            self._set_runtime_lora_state(True)
+            # Disable LoRA for extraction to avoid try-on artifacts.
+            prev_lora_state = bool(self._lora_runtime_enabled)
+            self._set_runtime_lora_state(False)
+            effective_lora = bool(self._lora_runtime_enabled)
 
             call_kwargs: Dict[str, Any] = {
                 "image": garment,
@@ -888,8 +891,11 @@ class Flux2CVTONRunner:
             }
 
             infer_t0 = time.time()
-            result = self._pipeline(**call_kwargs).images[0]
-            latency = time.time() - infer_t0
+            try:
+                result = self._pipeline(**call_kwargs).images[0]
+                latency = time.time() - infer_t0
+            finally:
+                self._set_runtime_lora_state(prev_lora_state)
 
         return {
             "image": result,
@@ -903,7 +909,7 @@ class Flux2CVTONRunner:
                 "request_total_seconds": time.time() - run_t0,
                 "base_garment_prompt": prompt,
                 "prompt_description": prompt,
-                "lora_enabled": bool(self._lora_runtime_enabled),
+                "lora_enabled": bool(effective_lora),
                 "startup_metrics": dict(self._startup_metrics),
             },
         }

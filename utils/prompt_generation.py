@@ -463,15 +463,38 @@ def build_garment_prompt_natural(
     garment_type_hint: Optional[str] = None,
 ) -> str:
     fields = _extract_structured_fields(desc)
+    hint_norm = (garment_type_hint or "").strip().lower()
+    innerwear_types = {"bra", "bralette", "brassiere", "bikini", "sports bra", "crop bra"}
+    raw_type = (fields.get("type") or "").strip().lower()
+    if hint_norm == "top" and raw_type in innerwear_types:
+        # Preserve key asymmetric construction cues if they exist, while stripping lingerie-specific terms.
+        raw_desc = str(desc or "").lower()
+        has_one_shoulder = "one-shoulder" in raw_desc or "one shoulder" in raw_desc
+        has_asym = "asymmetric" in raw_desc or "asymmetrical" in raw_desc
+        has_wrap = "wrap" in raw_desc
+        fields["type"] = "top garment"
+        innerwear_terms = {"bra", "bralette", "brassiere", "bandeau", "strapless", "push-up", "underwire", "cup", "bust", "cleavage"}
+        for key in ("neckline", "bodice_cut", "silhouette", "shoulder_style", "straps", "special_details", "embellishments"):
+            value = (fields.get(key) or "").lower()
+            if any(term in value for term in innerwear_terms):
+                fields.pop(key, None)
+        # Re-inject asymmetric geometry cues if they were present in the original description.
+        if has_one_shoulder and not fields.get("shoulder_style"):
+            fields["shoulder_style"] = "one-shoulder"
+        if has_wrap and not fields.get("bodice_cut"):
+            fields["bodice_cut"] = "wrap"
+        if has_asym and not fields.get("neckline"):
+            fields["neckline"] = "asymmetrical"
     garment_type = (fields.get("type") or "").strip()
     if not garment_type:
-        hint = (garment_type_hint or "").strip().lower()
+        hint = hint_norm
         garment_type = {
             "top": "top garment",
             "bottom": "bottom garment",
             "dress": "dress",
             "outer": "outerwear",
         }.get(hint, "garment")
+    skip_waistline = hint_norm in {"top", "outer"}
 
     construction_bits: List[str] = []
     neckline = fields.get("neckline")
@@ -493,7 +516,7 @@ def build_garment_prompt_natural(
     if bodice:
         construction_bits.append(_maybe_suffix(bodice, "bodice", "bodice"))
     waistline = fields.get("waistline")
-    if waistline:
+    if waistline and not skip_waistline:
         construction_bits.append(_maybe_suffix(waistline, "waist", "waist"))
     silhouette = fields.get("silhouette")
     if silhouette:
@@ -552,7 +575,7 @@ def build_garment_prompt_natural(
         sentence_two = (sentence_two + " " if sentence_two else "") + f"Patterned with {pattern}."
 
     details_bits: List[str] = []
-    for key in ("embellishments", "special_details", "closure", "pockets", "slits", "straps", "layering", "hardware"):
+    for key in ("embellishments", "special_details", "closure", "pockets", "slits", "straps", "hardware"):
         value = fields.get(key)
         if value:
             details_bits.append(value)

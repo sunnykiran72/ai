@@ -86,7 +86,6 @@ def _sanitize_minicpm_attributes(desc: str) -> Dict[str, str]:
         "pockets",
         "slits",
         "straps",
-        "layering",
         "special_details",
     ]
 
@@ -150,7 +149,6 @@ def _build_attribute_clause(minicpm_desc: str) -> str:
         "pockets": "pockets",
         "slits": "slits",
         "straps": "straps",
-        "layering": "layering",
         "special_details": "special details",
     }
     parts = []

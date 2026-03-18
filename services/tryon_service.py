@@ -238,10 +238,16 @@ class TryonService:
             images: List[Image.Image] = []
             descriptions: List[str] = []
             target_types: List[str] = []
+
+            def _safe_get(obj, key: str):
+                if isinstance(obj, dict):
+                    return obj.get(key)
+                return getattr(obj, key, None)
+
             for idx, product in enumerate(products):
-                image_url = getattr(product, "image", None) or (product or {}).get("image")
-                prompt_desc = getattr(product, "promptDescription", None) or (product or {}).get("promptDescription")
-                target_type = getattr(product, "targetType", None) or (product or {}).get("targetType") or ""
+                image_url = _safe_get(product, "image")
+                prompt_desc = _safe_get(product, "promptDescription")
+                target_type = _safe_get(product, "targetType") or ""
                 if not image_url:
                     raise ValueError(f"products[{idx}].image is required")
                 if not prompt_desc or not str(prompt_desc).strip():

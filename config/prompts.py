@@ -68,6 +68,8 @@ FLUX2_POSITIVE_PROMPTS = {
     "top": (
         "A single top garment displayed alone as a standalone product, centered and front-view studio product photography "
         "on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. "
+        "Flat-lay product presentation with the garment laid flat and unsupported, showing only the fabric and seams. "
+        "The frame contains only the upper-torso garment; below the hem is clean white background. "
         "Soft diffused studio lighting with clear edge definition and crisp detail. "
         "The neckline, shoulder line, sleeve geometry, waistline, and hem shape match the reference exactly. "
         f"{COLOR_PRESERVATION_CLAUSE} "
@@ -76,6 +78,7 @@ FLUX2_POSITIVE_PROMPTS = {
     "bottom": (
         "A single bottom garment displayed alone as a standalone product, centered and front-view studio product photography "
         "on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. "
+        "Ghost-mannequin product presentation with empty waistband and leg openings and a hollow interior. "
         "Soft diffused studio lighting with clear edge definition and crisp detail. "
         "The waistline, rise, hip shaping, leg shape, and hem length match the reference exactly. "
         f"{COLOR_PRESERVATION_CLAUSE} "
@@ -84,6 +87,7 @@ FLUX2_POSITIVE_PROMPTS = {
     "dress": (
         "A single dress garment displayed alone as a standalone product, centered and front-view studio product photography "
         "on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. "
+        "Ghost-mannequin product presentation with empty neckline and arm openings and a hollow interior. "
         "Soft diffused studio lighting with clear edge definition and crisp detail. "
         "The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. "
         f"{COLOR_PRESERVATION_CLAUSE} "
@@ -92,6 +96,7 @@ FLUX2_POSITIVE_PROMPTS = {
     "outer": (
         "A single outerwear garment displayed alone as a standalone product, centered and front-view studio product photography "
         "on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. "
+        "Ghost-mannequin product presentation with empty neckline and arm openings and a hollow interior. "
         "Soft diffused studio lighting with clear edge definition and crisp detail. "
         "The collar, lapel, shoulder structure, sleeve length, waistline, and hem match the reference exactly. "
         f"{COLOR_PRESERVATION_CLAUSE} "

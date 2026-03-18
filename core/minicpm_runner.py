@@ -118,10 +118,13 @@ class MiniCPMVRunner:
         msgs = [{"role": "user", "content": [rgb, instruction]}]
 
         # Remote-code chat signatures vary slightly across MiniCPM releases.
+        # Prefer deterministic decoding (sampling=False) to reduce prompt volatility.
         attempts = [
-            ({"msgs": msgs, "tokenizer": self._tokenizer, "max_new_tokens": int(max_new_tokens), "enable_thinking": False}, False),
             ({"msgs": msgs, "tokenizer": self._tokenizer, "sampling": False, "temperature": 0.0, "max_new_tokens": int(max_new_tokens), "enable_thinking": False}, False),
+            ({"msgs": msgs, "tokenizer": self._tokenizer, "sampling": False, "max_new_tokens": int(max_new_tokens), "enable_thinking": False}, False),
+            ({"msgs": msgs, "tokenizer": self._tokenizer, "sampling": False, "temperature": 0.0, "max_new_tokens": int(max_new_tokens)}, False),
             ({"msgs": msgs, "tokenizer": self._tokenizer, "sampling": False, "max_new_tokens": int(max_new_tokens)}, False),
+            ({"msgs": msgs, "tokenizer": self._tokenizer, "max_new_tokens": int(max_new_tokens), "enable_thinking": False}, False),
             ({"msgs": msgs, "tokenizer": self._tokenizer, "max_new_tokens": int(max_new_tokens)}, False),
             ({"image": None, "msgs": msgs, "tokenizer": self._tokenizer, "sampling": False, "temperature": 0.0, "max_new_tokens": int(max_new_tokens)}, True),
             ({"image": None, "msgs": msgs, "tokenizer": self._tokenizer, "sampling": False, "max_new_tokens": int(max_new_tokens)}, True),
