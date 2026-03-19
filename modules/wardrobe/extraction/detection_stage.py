@@ -136,6 +136,45 @@ def run_detection_stage_or_response(
     heuristic_split_used = False
     raw_detected_count = 0
     items: List[Dict[str, object]] = []
+    normalized_requested = normalize_garment_type(requested_type)
+
+    def _build_direct_requested_item() -> Dict[str, object]:
+        fallback_type = normalized_requested or "top"
+        category_meta = wardrobe_category_from_garment_type(fallback_type, style=None)
+        prompt_desc = _build_detector_prompt_description(
+            str(requested_type or fallback_type or "garment"),
+            fallback_type,
+        )
+        return {
+            "garment_id": 0,
+            "type": fallback_type,
+            "garment_type": fallback_type,
+            "type_source": "requested_type_direct",
+            "detection_source": "requested_type_direct_full_image",
+            "promptDescription": prompt_desc,
+            "description": prompt_desc,
+            "style": category_meta["style"],
+            "category_key": category_meta["category_key"],
+            "primary_category_key": category_meta["primary_category_key"],
+            "url": None,
+            "bbox": [0, 0, image.width, image.height],
+            "crop": {
+                "width": image.width,
+                "height": image.height,
+                "area_ratio": 1.0,
+            },
+            "confidence": {
+                "yolo": 0.01,
+                "detector": 0.01,
+                "hybrid": 0.01,
+            },
+            "_image_obj": image.copy(),
+            "_mask_obj": None,
+            "detector_label": str(requested_type or fallback_type or "garment"),
+            "detector_metrics": {
+                "fallback": "direct_requested_type_full_image",
+            },
+        }
 
     t_stage = time.time()
     detector = getattr(engine, "cloth_detector", None)
@@ -152,6 +191,20 @@ def run_detection_stage_or_response(
     stage_timings["yolo_crop_s"] = 0.0
 
     if not detector_candidates:
+        if normalized_requested in {"top", "bottom", "dress", "outer"}:
+            direct_requested_type_mode = True
+            items = [_build_direct_requested_item()]
+            raw_detected_count = 0
+        else:
+            payload = build_error_payload(
+                title="No Clothing Found",
+                description="No clothing item was detected in the uploaded image.",
+                reason_codes=["NO_CLOTHING"],
+                status_code=400,
+            )
+            return None, multipart_form_response(payload)
+
+    if not detector_candidates and not items:
         payload = build_error_payload(
             title="No Clothing Found",
             description="No clothing item was detected in the uploaded image.",
@@ -175,15 +228,18 @@ def run_detection_stage_or_response(
             items.append(item)
 
     if not items:
-        payload = build_error_payload(
-            title="No Clothing Found",
-            description="No clothing item was detected in the uploaded image.",
-            reason_codes=["NO_CLOTHING"],
-            status_code=400,
-        )
-        return None, multipart_form_response(payload)
+        if normalized_requested in {"top", "bottom", "dress", "outer"}:
+            direct_requested_type_mode = True
+            items = [_build_direct_requested_item()]
+        else:
+            payload = build_error_payload(
+                title="No Clothing Found",
+                description="No clothing item was detected in the uploaded image.",
+                reason_codes=["NO_CLOTHING"],
+                status_code=400,
+            )
+            return None, multipart_form_response(payload)
 
-    normalized_requested = normalize_garment_type(requested_type)
     # For explicit typed requests, always let parser prerouting challenge a bad detector pick.
     # This stays narrow because we only keep parser candidates when they score materially better.
     if normalized_requested in {"top", "bottom", "dress", "outer"}:

@@ -70,6 +70,7 @@ FLUX2_POSITIVE_PROMPTS = {
         "on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. "
         "Soft diffused studio lighting with clear edge definition and crisp detail. "
         "The neckline, shoulder line, sleeve geometry, waistline, and hem shape match the reference exactly. "
+        "Keep the garment front panel flat and cloth-like with no torso volume, chest projection, or mannequin-shaped curvature beneath the fabric. "
         f"{COLOR_PRESERVATION_CLAUSE} "
         "The garment structure and overall silhouette match the reference exactly."
     ),
@@ -111,6 +112,7 @@ ANALYZE_GARMENT_ONLY_CLAUSE = (
 ANALYZE_TOP_ONLY_CLAUSE = (
     "Top-only: no fabric above the garment’s upper edge, no fabric below the hem, no lower-body garments or legs visible. "
     "Crop to the garment bounds only; no extra fabric beyond the original top silhouette. "
+    "Keep the front panel flat and cloth-like; do not introduce torso curvature, chest projection, or mannequin form beneath the fabric. "
     "No added panels, yokes, underlayers, or secondary garment sections above the neckline or below the hem. "
     "Do not add padding, cups, or extra bust volume; keep bust shaping, seams, and underbust placement exactly as the reference."
 )

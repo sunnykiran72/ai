@@ -379,11 +379,11 @@ def _clean_descriptor_value(value: str) -> str:
     if low in {"unknown", "n/a", "none", "no", "yes"}:
         return ""
     # Remove hex colors
-    cleaned = re.sub(r"#(?:[0-9a-fA-F]{3}){1,2}\\b", " ", cleaned)
+    cleaned = re.sub(r"#(?:[0-9a-fA-F]{3}){1,2}\b", " ", cleaned)
     # Remove color terms
     for term in _COLOR_TERMS:
-        cleaned = re.sub(rf"\\b{re.escape(term)}\\b", " ", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\\s+", " ", cleaned).strip(" ,.;:/-")
+        cleaned = re.sub(rf"\b{re.escape(term)}\b", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:/-")
     return cleaned
 
 
@@ -430,7 +430,7 @@ def _strip_bust_terms(value: str) -> str:
         return ""
     pattern = r"\b(?:" + "|".join(re.escape(t) for t in _BUST_TERMS) + r")\b"
     cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\\s+", " ", cleaned).strip(" ,.;:/-")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:/-")
     return cleaned
 
 
@@ -491,7 +491,9 @@ def build_garment_prompt_natural(
     *,
     ignore_layering: bool = False,
 ) -> str:
-    fields = _extract_structured_fields(desc)
+    text = " ".join(str(desc or "").split()).strip()
+    fields = _extract_structured_fields(text)
+    has_structured_fields = bool(fields)
     garment_type = (fields.get("type") or "").strip()
     if not garment_type:
         hint = (garment_type_hint or "").strip().lower()
@@ -507,6 +509,17 @@ def build_garment_prompt_natural(
     is_bust_garment = any(
         key in type_lower for key in ("bra", "bralette", "bustier", "corset", "bandeau")
     )
+
+    def _remove_layering_terms(value: str) -> str:
+        cleaned = str(value or "")
+        cleaned = re.sub(
+            r"\b(?:layering|layer|layers|underlayer|underlayers|undershirt|inner layer|secondary garment|secondary section)\b",
+            " ",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:/-")
+        return cleaned
 
     construction_bits: List[str] = []
     neckline = fields.get("neckline")
@@ -616,7 +629,26 @@ def build_garment_prompt_natural(
         sentence_two = (sentence_two + " " if sentence_two else "") + f"Construction details: {construction}."
 
     output = " ".join([sentence_one, sentence_two]).strip()
-    return output or "A garment."
+    if has_structured_fields and output:
+        return output
+
+    # Freeform fallback: keep the garment text when MiniCPM did not emit the strict schema.
+    fallback = sanitize_florence_garment_description(text)
+    fallback = _clean_descriptor_value(fallback)
+    if ignore_layering:
+        fallback = _remove_layering_terms(fallback)
+    if is_top and not is_bust_garment:
+        fallback = _strip_bust_terms(fallback)
+    fallback = re.sub(r"\s+", " ", fallback).strip(" ,.;:/-")
+    if fallback:
+        if fallback[0].islower():
+            fallback = fallback[0].upper() + fallback[1:]
+        if not re.match(r"^(A|An)\s", fallback):
+            fallback = f"A {fallback}"
+        if not fallback.endswith("."):
+            fallback = f"{fallback}."
+        return fallback
+    return "A garment."
 
 
 def _strip_unknown_tokens(text: str) -> str:

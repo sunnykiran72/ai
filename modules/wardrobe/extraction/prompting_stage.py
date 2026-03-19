@@ -4,6 +4,7 @@ import re
 from typing import Callable, Dict, Optional, Tuple
 
 from utils import build_garment_prompt_natural
+from utils.validation import descriptor_is_weak
 from config.prompts import get_analyze_flux2_positive_prompt
 
 
@@ -25,8 +26,8 @@ _BODY_TERMS = {
 def _strip_terms(text: str, terms: set[str]) -> str:
     cleaned = str(text or "")
     for term in terms:
-        cleaned = re.sub(rf"\\b{re.escape(term)}\\b", " ", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\\s+", " ", cleaned).strip(" ,.;:/-")
+        cleaned = re.sub(rf"\b{re.escape(term)}\b", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:/-")
     return cleaned
 
 
@@ -95,11 +96,11 @@ def _sanitize_minicpm_attributes(desc: str) -> Dict[str, str]:
         if not value or str(value).strip().lower() in {"unknown", "n/a", "none", "no", "yes"}:
             continue
         # Remove hex colors and color/body terms
-        cleaned = re.sub(r"#(?:[0-9a-fA-F]{3}){1,2}\\b", " ", value)
+        cleaned = re.sub(r"#(?:[0-9a-fA-F]{3}){1,2}\b", " ", value)
         cleaned = _strip_terms(cleaned, _COLOR_TERMS)
         cleaned = _strip_terms(cleaned, _BODY_TERMS)
-        cleaned = re.sub(r"\\bcolors?\\b", " ", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(r"\\s+", " ", cleaned).strip(" ,.;:/-")
+        cleaned = re.sub(r"\bcolors?\b", " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:/-")
         if cleaned:
             sanitized[key] = cleaned
     return sanitized
@@ -163,13 +164,18 @@ def _build_attribute_clause(minicpm_desc: str) -> str:
     return "Garment attributes: " + "; ".join(parts) + "."
 
 
-def _build_flux2_prompt(selected_type: str, minicpm_desc: str) -> tuple[str, str]:
+def _build_flux2_prompt(
+    selected_type: str,
+    minicpm_desc: str,
+) -> tuple[str, str]:
     static_prompt = get_analyze_flux2_positive_prompt(selected_type)
     natural = build_garment_prompt_natural(
         minicpm_desc,
         garment_type_hint=selected_type,
         ignore_layering=True,
     )
+    if descriptor_is_weak(natural, garment_type=selected_type):
+        natural = ""
     flux_prompt = f"{static_prompt} {natural}".strip() if natural else static_prompt
     return flux_prompt, natural
 
@@ -198,13 +204,24 @@ def apply_selected_item_prompting(
     # Determine the garment type
     forced_type = requested_type if requested_type in {"top", "bottom", "dress", "outer"} else None
     selected_type = forced_type or normalize_garment_type(str(selected_item.get("type") or "")) or "top"
+    sync_category = wardrobe_category_from_garment_type(selected_type, style=None)
     
     # Get MiniCPM description (raw)
-    minicpm_desc = selected_item.get("minicpm_description", "")
+    minicpm_desc = (
+        selected_item.get("minicpm_description")
+        or selected_item.get("baseGarmentPrompt")
+        or selected_item.get("promptDescription")
+        or selected_item.get("description")
+        or ""
+    )
 
     # Build natural garment prompt from MiniCPM attributes
-    positive_prompt, natural_prompt = _build_flux2_prompt(selected_type, str(minicpm_desc or ""))
-    prompt_desc = natural_prompt or positive_prompt
+    positive_prompt, natural_prompt = _build_flux2_prompt(
+        selected_type,
+        str(minicpm_desc or ""),
+    )
+    fallback_prompt_desc = strip_descriptor_color_clause(str(minicpm_desc or ""))
+    prompt_desc = natural_prompt or fallback_prompt_desc
     avoid_prompt = ""
     
     # Set the prompts on the item
@@ -214,31 +231,30 @@ def apply_selected_item_prompting(
     selected_item["extractionAvoidClause"] = avoid_prompt
     selected_item["type"] = selected_type
     
-    # Get category information
-    sync_category = wardrobe_category_from_garment_type(selected_type, style=None)
     selected_item["primary_category_key"] = sync_category["primary_category_key"]
     selected_item["category_key"] = sync_category["category_key"]
     selected_item["style"] = sync_category["style"]
     
-    # Build simplified metadata (no color information)
-    garment_metadata = {
-        "prompt": {
-            "base_garment_prompt": positive_prompt,
-            "prompt_description": prompt_desc,
-            "avoid_clause": avoid_prompt,
-            "minicpm_description": minicpm_desc,  # MiniCPM description
-        },
-        "type": selected_type,
-        "style": sync_category["style"],
-        "primary_category_key": sync_category["primary_category_key"],
-        "category_key": sync_category["category_key"],
-        "prompt_source": "type_based_semantic_minicpm_only",
-        # No color information
-        "dominant_hexes": [],
-        "accent_hexes": [],
-        "color_hints": [],
-        "color_profile": {},
-    }
+    garment_metadata = build_garment_metadata(
+        base_garment_prompt=positive_prompt,
+        extraction_avoid_clause=avoid_prompt,
+        prompt_sections_raw="",
+        descriptor_raw_text=minicpm_desc,
+        prompt_description=prompt_desc,
+        prompt_source="type_based_semantic_minicpm_only",
+        target_type=selected_type,
+        backend_target_type=selected_type,
+        style=sync_category["style"],
+        primary_category_key=sync_category["primary_category_key"],
+        category_key=sync_category["category_key"],
+        dominant_hexes=[],
+        accent_hexes=[],
+        color_hints=[],
+        color_profile={},
+        color_mask_source="",
+        fashion_color_classifier={},
+        color_sampling_mask_meta={},
+    )
     
     selected_item["garmentMetadata"] = garment_metadata
 

@@ -18,7 +18,9 @@ from utils.prompt_generation import (
     ensure_target_type_in_description,
     clean_prompt_section_text,
     join_avoid_terms,
+    build_garment_prompt_natural,
 )
+from config.prompts import get_analyze_flux2_positive_prompt
 
 
 class TestStructuredDescriptorParsing:
@@ -403,6 +405,25 @@ class TestPromptGenerationHelpers:
         
         # Should be comma-separated with Oxford comma
         assert result == "jewelry, accessories, and bright colors"
+
+
+class TestGarmentPromptNatural:
+    def test_freeform_description_is_preserved_instead_of_collapsing_to_generic_prompt(self):
+        prompt = build_garment_prompt_natural(
+            "Beige long-sleeve wrap blouse with a crossover V-neckline, draped front, and blouson waist.",
+            garment_type_hint="top",
+        )
+
+        assert "wrap blouse" in prompt.lower()
+        assert "crossover v-neckline" in prompt.lower()
+        assert "beige" not in prompt.lower()
+        assert "a top garment" not in prompt.lower()
+
+    def test_analyze_top_prompt_contains_flat_front_guard(self):
+        prompt = get_analyze_flux2_positive_prompt("top").lower()
+
+        assert "flat and cloth-like" in prompt
+        assert "torso volume" in prompt
 
 
 if __name__ == "__main__":

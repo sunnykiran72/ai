@@ -133,8 +133,10 @@ def run_selected_item_extraction_or_response(
         garment_type_hint=selected_type,
         ignore_layering=True,
     )
+    if descriptor_is_weak(natural_prompt) and selected_prompt_hint:
+        natural_prompt = selected_prompt_hint
     base_prompt = f"{static_prompt} {natural_prompt}".strip() if natural_prompt else static_prompt
-    prompt_desc = natural_prompt or ""
+    prompt_desc = natural_prompt or selected_prompt_hint
 
     extracted_url = ""
     extraction_meta = {}
