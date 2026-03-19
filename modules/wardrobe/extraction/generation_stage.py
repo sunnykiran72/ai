@@ -253,7 +253,10 @@ def run_selected_item_extraction_or_response(
 
     if analyze_prompt_from_extracted:
         prompt_desc = ""
-        if extracted_prompt_desc:
+        if prompt_bundle_desc:
+            prompt_desc = prompt_bundle_desc
+            selected_item["promptDescriptionSource"] = "prompt_generation_natural"
+        elif extracted_prompt_desc:
             prompt_desc = extracted_prompt_desc
             selected_item["promptDescriptionSource"] = "flux2_extract_descriptor"
         elif analyze_require_extracted_prompt:

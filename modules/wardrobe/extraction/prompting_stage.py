@@ -4,7 +4,6 @@ import re
 from typing import Callable, Dict, Optional, Tuple
 
 from utils import build_garment_prompt_natural
-from utils.validation import descriptor_is_weak
 from config.prompts import get_analyze_flux2_positive_prompt
 
 
@@ -176,8 +175,6 @@ def _build_flux2_prompt(
         ignore_layering=True,
     )
     natural = strip_descriptor_color_clause(natural)
-    if descriptor_is_weak(natural, garment_type=selected_type):
-        natural = ""
     flux_prompt = f"{static_prompt} {natural}".strip() if natural else static_prompt
     return flux_prompt, natural
 
@@ -223,8 +220,7 @@ def apply_selected_item_prompting(
         str(minicpm_desc or ""),
         strip_descriptor_color_clause,
     )
-    fallback_prompt_desc = strip_descriptor_color_clause(str(minicpm_desc or ""))
-    prompt_desc = strip_descriptor_color_clause(natural_prompt or fallback_prompt_desc)
+    prompt_desc = natural_prompt
     avoid_prompt = ""
     
     # Set the prompts on the item

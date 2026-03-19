@@ -283,6 +283,39 @@ class PromptingStageTests(unittest.TestCase):
         self.assertEqual(selected_item["garmentMetadata"]["color"]["color_hints"], ["sage green"])
         self.assertEqual(context["selected_type"], "dress")
 
+    def test_apply_prompting_keeps_natural_prompt_as_canonical_prompt_description(self):
+        selected_item, context = apply_selected_item_prompting(
+            selected_item={
+                "type": "top",
+                "minicpm_description": (
+                    "category=top; type=brassiere; neckline=v-neck; sleeves=long sleeves; "
+                    "length_hem=cropped; fabric_texture=smooth; special_details=ruched center front."
+                ),
+            },
+            requested_type="top",
+            analyze_prompt_from_extracted=True,
+            normalize_garment_type=lambda raw: raw,
+            infer_style_from_text=lambda *_args, **_kwargs: "fitted",
+            wardrobe_category_from_garment_type=lambda *_args, **_kwargs: {
+                "style": "fitted",
+                "primary_category_key": "tops",
+                "category_key": "tops",
+            },
+            product_prompt_description=lambda text, **_kwargs: text,
+            build_garment_metadata=lambda **kwargs: {"prompt": kwargs},
+            strip_descriptor_color_clause=lambda text: text,
+        )
+
+        self.assertTrue(selected_item["baseGarmentPrompt"].startswith("A single top garment displayed alone"))
+        self.assertEqual(selected_item["promptDescription"], context["prompt_description"])
+        self.assertNotIn("category=top", selected_item["promptDescription"])
+        self.assertIn("long sleeves", selected_item["promptDescription"].lower())
+        self.assertIn("ruched center front", selected_item["promptDescription"].lower())
+        self.assertEqual(
+            selected_item["garmentMetadata"]["prompt"]["descriptor_raw_text"],
+            selected_item["minicpm_description"],
+        )
+
     def test_generation_uses_selected_type_for_color_mask_without_forced_request(self):
         captured = {}
 
@@ -533,6 +566,72 @@ class PromptingStageTests(unittest.TestCase):
             "category=dress; waistline=high; length_hem=ankle; layering=tiered layers; colors=red.",
         )
         self.assertEqual(updated_item["url"], "https://example.com/out.png")
+
+    def test_generation_keeps_prompt_generation_description_as_selected_item_prompt(self):
+        def run_flux2_cloth_only_extract(**kwargs):
+            return {
+                "url": "https://example.com/out.png",
+                "_processed_image_bytes": b"png",
+                "meta": {
+                    "prompt_description": "An extracted fallback prompt.",
+                    "base_garment_prompt": kwargs["base_prompt"],
+                    "extraction_avoid_clause": "",
+                    "prompt_sections_raw": "",
+                },
+            }
+
+        engine = types.SimpleNamespace(florence=types.SimpleNamespace())
+        image = Image.new("RGB", (100, 120), "white")
+        selected_item = {
+            "type": "top",
+            "bbox": [1, 2, 50, 80],
+            "_image_obj": Image.new("RGB", (49, 78), "white"),
+            "_mask_obj": np.ones((120, 100), dtype=bool),
+            "promptDescription": "A cropped top with long sleeves and a ruched center front.",
+            "baseGarmentPrompt": "A single top garment displayed alone with a cropped hem and long sleeves.",
+            "minicpm_description": "category=top; type=brassiere; sleeves=long sleeves.",
+            "description": "",
+        }
+
+        updated_item, response = run_selected_item_extraction_or_response(
+            selected_item=selected_item,
+            requested_type="top",
+            direct_requested_type_mode=False,
+            full_image=image,
+            all_items_count=1,
+            stage_timings={},
+            engine=engine,
+            logger=types.SimpleNamespace(error=lambda *args, **kwargs: None, warning=lambda *args, **kwargs: None),
+            analyze_extract_cloth=True,
+            analyze_prompt_from_extracted=True,
+            analyze_require_extracted_prompt=False,
+            analyze_caption_mode="short",
+            flux2_single_garment_extract_default_steps=12,
+            flux2_single_garment_extract_default_seed=7,
+            normalize_garment_type=lambda raw: raw,
+            prepare_extract_source_image=lambda **kwargs: _Plan(kwargs["full_image"]),
+            build_error_payload=lambda **kwargs: kwargs,
+            multipart_form_response=lambda payload: payload,
+            run_flux2_cloth_only_extract=run_flux2_cloth_only_extract,
+            descriptor_is_weak=lambda text: not bool(text.strip()),
+            caption_non_garment_signal=lambda _text: False,
+            download_image=lambda _url: image,
+            flatten_rgba_on_white=lambda img: img,
+            sanitize_garment_description=lambda text: text,
+            infer_style_from_text=lambda *_args, **_kwargs: "fitted",
+            wardrobe_category_from_garment_type=lambda *_args, **_kwargs: {
+                "style": "fitted",
+                "primary_category_key": "tops",
+                "category_key": "tops",
+            },
+        )
+
+        self.assertIsNone(response)
+        self.assertEqual(
+            updated_item["promptDescription"],
+            "A cropped top with long sleeves and a ruched center front.",
+        )
+        self.assertEqual(updated_item["promptDescriptionSource"], "prompt_generation_natural")
 
     def test_local_minicpm_uses_structured_prompt_override_for_garment_description(self):
         captured = {}
