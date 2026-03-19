@@ -103,7 +103,7 @@ FLUX2_POSITIVE_PROMPTS = {
 ANALYZE_GARMENT_ONLY_CLAUSE = (
     "Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. "
     "Ghost mannequin style is acceptable only if the mannequin is completely invisible. "
-    "Hollow interior: no chest volume, no torso form, no body contours beneath the fabric. "
+    "Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. "
     "No hangers, no props, no accessories. Pure white background, clean studio product photo."
 )
 

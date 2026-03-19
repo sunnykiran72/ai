@@ -406,6 +406,33 @@ def _maybe_suffix(value: str, suffix: str, keyword: str) -> str:
         return raw
     return f"{raw} {suffix}".strip()
 
+_BUST_TERMS = {
+    "bust",
+    "bustline",
+    "cup",
+    "cups",
+    "underwire",
+    "push-up",
+    "pushup",
+    "padding",
+    "padded",
+    "cleavage",
+    "bra",
+    "bralette",
+    "bustier",
+    "corset",
+}
+
+
+def _strip_bust_terms(value: str) -> str:
+    cleaned = " ".join(str(value or "").split()).strip()
+    if not cleaned:
+        return ""
+    pattern = r"\b(?:" + "|".join(re.escape(t) for t in _BUST_TERMS) + r")\b"
+    cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\\s+", " ", cleaned).strip(" ,.;:/-")
+    return cleaned
+
 
 def _extract_structured_fields(desc: str) -> Dict[str, str]:
     raw = parse_structured_descriptor(desc)
@@ -475,6 +502,12 @@ def build_garment_prompt_natural(
             "outer": "outerwear",
         }.get(hint, "garment")
 
+    type_lower = str(fields.get("type") or "").lower()
+    is_top = (garment_type_hint or "").strip().lower() == "top"
+    is_bust_garment = any(
+        key in type_lower for key in ("bra", "bralette", "bustier", "corset", "bandeau")
+    )
+
     construction_bits: List[str] = []
     neckline = fields.get("neckline")
     if neckline:
@@ -493,7 +526,10 @@ def build_garment_prompt_natural(
         construction_bits.append(_maybe_suffix(sleeves, "sleeves", "sleeve"))
     bodice = fields.get("bodice_cut")
     if bodice:
-        construction_bits.append(_maybe_suffix(bodice, "bodice", "bodice"))
+        if is_top and not is_bust_garment:
+            bodice = _strip_bust_terms(bodice)
+        if bodice:
+            construction_bits.append(_maybe_suffix(bodice, "bodice", "bodice"))
     waistline = fields.get("waistline")
     if waistline:
         construction_bits.append(_maybe_suffix(waistline, "waist", "waist"))
@@ -558,6 +594,8 @@ def build_garment_prompt_natural(
         if ignore_layering and key == "layering":
             continue
         value = fields.get(key)
+        if value and is_top and not is_bust_garment:
+            value = _strip_bust_terms(value)
         if value:
             details_bits.append(value)
     opening = fields.get("opening")
