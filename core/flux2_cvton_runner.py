@@ -42,6 +42,30 @@ def _looks_like_hf_repo_id(raw: str) -> bool:
     return "/" in value
 
 
+def _resolve_existing_path(raw: str, fallbacks: Tuple[str, ...] = ()) -> str:
+    """
+    Resolve a model path against known local locations before treating it as a repo id.
+
+    The pod keeps large model weights under /workspace/models, while older env files
+    still point at relative paths such as ./flux2-klein. This helper makes the runner
+    robust to that mismatch without requiring local installs.
+    """
+    value = str(raw or "").strip()
+    if not value:
+        return value
+
+    candidate = Path(value).expanduser()
+    if candidate.exists():
+        return str(candidate.resolve())
+
+    for fallback in fallbacks:
+        fallback_path = Path(str(fallback or "").strip()).expanduser()
+        if fallback_path.exists():
+            return str(fallback_path.resolve())
+
+    return value
+
+
 def _torch_version_at_least(version: str) -> bool:
     def _parts(raw: str) -> List[int]:
         out: List[int] = []
@@ -209,8 +233,20 @@ class Flux2CVTONRunner:
 
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         cfg = config or {}
-        self.model_path = cfg.get("model_path") or os.getenv("FLUX2_MODEL_PATH", "./flux2-klein")
-        self.lora_path = cfg.get("lora_path") or os.getenv("FLUX2_LORA_PATH", "fal/flux-klein-9b-virtual-tryon-lora")
+        self.model_path = _resolve_existing_path(
+            cfg.get("model_path") or os.getenv("FLUX2_MODEL_PATH", "./flux2-klein"),
+            (
+                "/workspace/models/flux2-klein",
+                "/workspace/hybrid_vto_v1_latest_v1/flux2-klein",
+            ),
+        )
+        self.lora_path = _resolve_existing_path(
+            cfg.get("lora_path") or os.getenv("FLUX2_LORA_PATH", "fal/flux-klein-9b-virtual-tryon-lora"),
+            (
+                "/workspace/models/flux2-lora/fal-virtual-tryon",
+                "/workspace/hybrid_vto_v1_latest_v1/models/flux2-lora/fal-virtual-tryon",
+            ),
+        )
         self.lora_weight_name = cfg.get("lora_weight_name") or os.getenv("FLUX2_LORA_WEIGHT_NAME", "flux-klein-tryon.safetensors")
         self.adapter_name = cfg.get("adapter_name") or os.getenv("FLUX2_ADAPTER_NAME", "fal_tryon")
         self._adapter_name_effective = str(self.adapter_name or "")

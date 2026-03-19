@@ -167,6 +167,7 @@ def _build_attribute_clause(minicpm_desc: str) -> str:
 def _build_flux2_prompt(
     selected_type: str,
     minicpm_desc: str,
+    strip_descriptor_color_clause: Callable[[str], str],
 ) -> tuple[str, str]:
     static_prompt = get_analyze_flux2_positive_prompt(selected_type)
     natural = build_garment_prompt_natural(
@@ -174,6 +175,7 @@ def _build_flux2_prompt(
         garment_type_hint=selected_type,
         ignore_layering=True,
     )
+    natural = strip_descriptor_color_clause(natural)
     if descriptor_is_weak(natural, garment_type=selected_type):
         natural = ""
     flux_prompt = f"{static_prompt} {natural}".strip() if natural else static_prompt
@@ -219,9 +221,10 @@ def apply_selected_item_prompting(
     positive_prompt, natural_prompt = _build_flux2_prompt(
         selected_type,
         str(minicpm_desc or ""),
+        strip_descriptor_color_clause,
     )
     fallback_prompt_desc = strip_descriptor_color_clause(str(minicpm_desc or ""))
-    prompt_desc = natural_prompt or fallback_prompt_desc
+    prompt_desc = strip_descriptor_color_clause(natural_prompt or fallback_prompt_desc)
     avoid_prompt = ""
     
     # Set the prompts on the item

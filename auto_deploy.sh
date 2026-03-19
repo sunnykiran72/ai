@@ -13,7 +13,7 @@ echo ""
 # Configuration
 REMOTE_HOST="root@157.157.221.30"
 REMOTE_PORT="53061"
-REMOTE_PATH="/workspace/hybrid_vto_v1_latest_v1/ai"
+REMOTE_PATH="/workspace/hybrid_vto_v1_latest_v1"
 
 echo "📡 Connecting to RunPod..."
 echo "Host: $REMOTE_HOST"
@@ -26,7 +26,7 @@ ssh -p $REMOTE_PORT $REMOTE_HOST << 'ENDSSH'
 echo "=========================================="
 echo "Step 1: Going to project directory..."
 echo "=========================================="
-cd /workspace/hybrid_vto_v1_latest_v1/ai
+cd /workspace/hybrid_vto_v1_latest_v1
 pwd
 echo ""
 
@@ -52,16 +52,17 @@ echo ""
 echo "=========================================="
 echo "Step 4: Starting application..."
 echo "=========================================="
-nohup python3 -m uvicorn main:app --host 0.0.0.0 --port 8000 > /tmp/app.log 2>&1 &
+FLUX2_ENABLE_LORA=0 FLUX2_REQUIRE_LORA=0 FLUX2_FUSE_LORA=0 ANALYZE_FLUX_DISABLE_LORA=1 \
+nohup .venv/bin/uvicorn main:app --host 0.0.0.0 --port 8000 > /tmp/app.log 2>&1 &
 sleep 5
 echo ""
 
 echo "=========================================="
 echo "Step 5: Checking if application started..."
 echo "=========================================="
-if pgrep -f "uvicorn main:app" > /dev/null; then
+if pgrep -f "../.venv/bin/uvicorn main:app" > /dev/null || pgrep -f "uvicorn main:app" > /dev/null; then
     echo "✅ Application is running!"
-    echo "PID: $(pgrep -f 'uvicorn main:app')"
+    echo "PID: $(pgrep -f '../.venv/bin/uvicorn main:app\|uvicorn main:app' | head -n 1)"
 else
     echo "❌ Application failed to start!"
     echo "Showing error logs:"

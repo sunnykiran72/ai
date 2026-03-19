@@ -23,6 +23,7 @@ neckline=<neckline style>;
 collar=<collar style>; 
 lapel=<lapel style>; 
 shoulder_style=<shoulder/strap style>; 
+asymmetry=<symmetric|asymmetric|one-shoulder|off-shoulder|single-sleeve|unknown>; 
 sleeves=<sleeve style or length>; 
 cuffs=<cuff style>; 
 bodice_cut=<bodice or torso shaping>; 
@@ -70,6 +71,10 @@ FLUX2_POSITIVE_PROMPTS = {
         "on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. "
         "Soft diffused studio lighting with clear edge definition and crisp detail. "
         "The neckline, shoulder line, sleeve geometry, waistline, and hem shape match the reference exactly. "
+        "If the reference is asymmetrical, preserve the asymmetry exactly; if it is one-shoulder or single-sleeve, keep one bare shoulder and one sleeve only. "
+        "Do not add a second shoulder, second strap, mirrored sleeve, or symmetric neckline on the open side. "
+        "Keep the open shoulder truly open and preserve the one-sided silhouette exactly as captured. "
+        "Keep one consistent source color family across all panels and drapes; do not introduce a second faded, aged, or shadow-tinted color on the exposed shoulder, sleeve, or hem. "
         "Keep the garment front panel flat and cloth-like with no torso volume, chest projection, or mannequin-shaped curvature beneath the fabric. "
         f"{COLOR_PRESERVATION_CLAUSE} "
         "The garment structure and overall silhouette match the reference exactly."
@@ -79,6 +84,9 @@ FLUX2_POSITIVE_PROMPTS = {
         "on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. "
         "Soft diffused studio lighting with clear edge definition and crisp detail. "
         "The waistline, rise, hip shaping, leg shape, and hem length match the reference exactly. "
+        "Keep the bottom as one continuous bottom garment with no detached upper panel, no upper-body panel, no torso-shaped top section, and no extra waistband layered above the original rise. "
+        "Do not split the garment into separate pants and skirt-like sections or add an extra fabric band above the waistband. "
+        "Keep the hip and leg geometry clean and cloth-like; do not add body-shaped curvature above the waistband. "
         f"{COLOR_PRESERVATION_CLAUSE} "
         "The garment structure and overall silhouette match the reference exactly."
     ),
@@ -87,6 +95,9 @@ FLUX2_POSITIVE_PROMPTS = {
         "on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. "
         "Soft diffused studio lighting with clear edge definition and crisp detail. "
         "The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. "
+        "Keep the dress as one continuous garment from bodice to hem; do not split it into a separate top and skirt. "
+        "Preserve the waist transition as part of the same garment and do not add a detached waistband, second skirt layer, or two-piece outfit look. "
+        "Keep the bodice-to-skirt flow smooth and cloth-like with no body-shaped volume under the waist. "
         f"{COLOR_PRESERVATION_CLAUSE} "
         "The garment structure and overall silhouette match the reference exactly."
     ),
@@ -95,6 +106,9 @@ FLUX2_POSITIVE_PROMPTS = {
         "on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. "
         "Soft diffused studio lighting with clear edge definition and crisp detail. "
         "The collar, lapel, shoulder structure, sleeve length, waistline, and hem match the reference exactly. "
+        "Keep the outerwear as one single layer with no inner base garment, no detached underlayer, and no extra body-shaped section beneath the fabric. "
+        "Preserve the open front, closure, or layering behavior exactly as shown, but do not invent a second garment underneath or outside the original silhouette. "
+        "Keep the coat or jacket structure clean, flat, and cloth-like rather than padded or torso-shaped. "
         f"{COLOR_PRESERVATION_CLAUSE} "
         "The garment structure and overall silhouette match the reference exactly."
     ),
@@ -110,12 +124,47 @@ ANALYZE_GARMENT_ONLY_CLAUSE = (
 
 # Top-only refinement to prevent extra fabric above neckline or below hem.
 ANALYZE_TOP_ONLY_CLAUSE = (
-    "Top-only: no fabric above the garment’s upper edge, no fabric below the hem, no lower-body garments or legs visible. "
+    "Top-only: no fabric above the garment's upper edge, no fabric below the hem, no lower-body garments or legs visible. "
     "Crop to the garment bounds only; no extra fabric beyond the original top silhouette. "
     "Keep the front panel flat and cloth-like; do not introduce torso curvature, chest projection, or mannequin form beneath the fabric. "
     "No added panels, yokes, underlayers, or secondary garment sections above the neckline or below the hem. "
-    "Do not add padding, cups, or extra bust volume; keep bust shaping, seams, and underbust placement exactly as the reference."
+    "If the source is one-shoulder, single-sleeve, or otherwise asymmetrical, preserve exactly one bare shoulder and one sleeve or strap layout only. Do not normalize it into a standard two-sleeve top. "
+    "Do not invent a second shoulder, mirrored strap, extra sleeve cap, or seam bridge across the open side. "
+    "Do not symmetrize the neckline or complete the missing side of the garment. "
+    "Keep the garment color uniform across the asymmetrical panels; do not add a faded, worn, or washed-out secondary shade on the exposed shoulder or sleeve. "
+    "Do not add padding, cups, or extra bust volume; keep bust shaping, seams, and underbust placement exactly as the reference. "
+    "Do not create a detached waistband, extra lower strip, separate abdominal band, or second garment section below the hem. "
+    "Keep the garment as one continuous top with the original cropped hem and asymmetrical shoulder structure."
 )
+
+ANALYZE_BOTTOM_ONLY_CLAUSE = (
+    "Bottom-only: no shirt, no blouse, no top, no torso section, and no upper-body garment visible above the waistband. "
+    "Crop to the bottom bounds only; keep the garment as one continuous bottom with the original rise, waistband, hips, and hem. "
+    "Do not add a detached upper panel, extra waistband, or torso-shaped section above the rise. "
+    "Do not split the garment into separate pieces or introduce skirt-like and pant-like sections in the same item. "
+    "Keep the waist and hip area flat and cloth-like rather than body-shaped."
+)
+
+ANALYZE_DRESS_ONLY_CLAUSE = (
+    "Dress-only: no separate top, no separate skirt, no two-piece outfit look, and no added waistband between bodice and skirt. "
+    "Keep the dress as one continuous garment from neckline through hem with the original waist transition preserved in a single piece. "
+    "Do not split the dress into bodice and skirt as if they were separate garments. "
+    "Keep the bodice and skirt flow smooth, flat, and cloth-like rather than body-shaped."
+)
+
+ANALYZE_OUTER_ONLY_CLAUSE = (
+    "Outerwear-only: no inner base layer, no shirt underneath, no separate underlayer, and no extra garment visible below the coat or jacket. "
+    "Keep the outerwear as one single layer with the original collar, lapel, opening, sleeves, and hem preserved. "
+    "Do not add a second garment inside the silhouette or convert the outerwear into a layered outfit. "
+    "Keep the front and body shape flat and cloth-like rather than torso-shaped."
+)
+
+ANALYZE_TYPE_ONLY_CLAUSES = {
+    "top": ANALYZE_TOP_ONLY_CLAUSE,
+    "bottom": ANALYZE_BOTTOM_ONLY_CLAUSE,
+    "dress": ANALYZE_DRESS_ONLY_CLAUSE,
+    "outer": ANALYZE_OUTER_ONLY_CLAUSE,
+}
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # FLUX2 NEGATIVE PROMPTS (What NOT to Generate)
@@ -137,10 +186,10 @@ FLUX2_NEGATIVE_COMMON = (
 
 # Type-specific negative elements
 FLUX2_NEGATIVE_TYPE_SPECIFIC = {
-    "top": "pants, trousers, skirt, shorts, dress, lower-body garment, shoes, lower-body structure, bottom garment overlay",
-    "bottom": "shirt, blouse, t-shirt, jacket, hoodie, dress, upper-body garment, torso garment overlay, sleeves",
-    "dress": "two-piece outfit, separate top and bottom, skirt with separate blouse, trouser plus shirt combo, incomplete dress replacement, split bodice, split hemline",
-    "outer": "inner garments, underwear, base layers, bottom wear, pants",
+    "top": "pants, trousers, skirt, shorts, dress, lower-body garment, shoes, lower-body structure, bottom garment overlay, second shoulder, mirrored shoulder, second strap, mirrored strap, second sleeve, symmetric neckline",
+    "bottom": "shirt, blouse, t-shirt, jacket, hoodie, dress, upper-body garment, torso garment overlay, sleeves, detached upper panel, extra waistband, split garment, body-shaped upper section",
+    "dress": "two-piece outfit, separate top and bottom, skirt with separate blouse, trouser plus shirt combo, incomplete dress replacement, split bodice, split hemline, detached bodice, detached skirt, extra waistband",
+    "outer": "inner garments, underwear, base layers, bottom wear, pants, inner shirt, base layer, detached underlayer, second garment underneath, padded torso",
 }
 
 # Combined negative prompts (common + type-specific)
@@ -212,7 +261,7 @@ def get_analyze_flux2_positive_prompt(garment_type: str) -> str:
     Appends the analyze-only garment clause to reduce human artifacts.
     """
     base = get_flux2_positive_prompt(garment_type)
-    extra = ANALYZE_TOP_ONLY_CLAUSE if garment_type == "top" else ""
+    extra = ANALYZE_TYPE_ONLY_CLAUSES.get(garment_type, "")
     return f"{base} {ANALYZE_GARMENT_ONLY_CLAUSE} {extra}".strip()
 
 

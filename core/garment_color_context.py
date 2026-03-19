@@ -142,6 +142,34 @@ def _is_neutral_color_token(color: str) -> bool:
     return _color_family(color) in {"neutral_dark", "neutral_mid", "neutral_light"}
 
 
+def _skin_like_mask(rgb_image: np.ndarray) -> np.ndarray:
+    rgb = np.asarray(rgb_image, dtype=np.uint8)
+    if rgb.ndim != 3 or rgb.shape[2] != 3:
+        return np.zeros((0, 0), dtype=bool)
+    r = rgb[:, :, 0].astype(np.int16)
+    g = rgb[:, :, 1].astype(np.int16)
+    b = rgb[:, :, 2].astype(np.int16)
+    skin_rgb = (
+        (r > 95) & (g > 40) & (b > 20)
+        & ((np.maximum(np.maximum(r, g), b) - np.minimum(np.minimum(r, g), b)) > 15)
+        & (np.abs(r - g) > 15)
+        & (r > g) & (r > b)
+    )
+    return skin_rgb.astype(bool)
+
+
+def _description_has_exposed_shoulder_signal(description: str) -> bool:
+    low = str(description or "").lower()
+    if not low:
+        return False
+    return bool(
+        re.search(
+            r"\b(?:one[-\s]?shoulder|single[-\s]?shoulder|off[-\s]?shoulder|single[-\s]?sleeve|asym(?:metric|metry)?)\b",
+            low,
+        )
+    )
+
+
 def _extract_text_color_terms(description: str, max_items: int = 4) -> List[str]:
     low = str(description or "").lower()
     if not low:
@@ -437,6 +465,7 @@ def _extract_dominant_hex_colors_with_coverage(
     mask: Optional[np.ndarray] = None,
     top_k: int = 4,
     allow_near_white: bool = False,
+    description: str = "",
 ) -> List[PaletteEntry]:
     try:
         rgb = image.convert("RGB")
@@ -450,6 +479,17 @@ def _extract_dominant_hex_colors_with_coverage(
             clean_mask = _get_clean_foreground_mask(image, settings=settings, mask=mask)
             if isinstance(clean_mask, np.ndarray):
                 use_mask = clean_mask
+        if isinstance(use_mask, np.ndarray):
+            try:
+                skin = _skin_like_mask(arr)
+                if isinstance(skin, np.ndarray) and skin.shape[:2] == use_mask.shape[:2]:
+                    trimmed = np.asarray(use_mask).astype(bool) & (~skin)
+                    trimmed_pixels = int(np.sum(trimmed))
+                    min_keep = max(96, int(float(image.width * image.height) * 0.004))
+                    if trimmed_pixels >= min_keep:
+                        use_mask = trimmed
+            except Exception:
+                pass
         if isinstance(use_mask, np.ndarray):
             keep_mask = np.asarray(use_mask).astype(bool)
             if keep_mask.shape[:2] == arr.shape[:2]:
@@ -714,6 +754,7 @@ def _extract_lab_color_profile(
     image: Image.Image,
     settings: GarmentColorContextSettings,
     mask: Optional[np.ndarray] = None,
+    description: str = "",
 ) -> ColorProfile:
     try:
         rgb = image.convert("RGB")
@@ -732,6 +773,15 @@ def _extract_lab_color_profile(
             use_mask = _extract_alpha_mask(image)
         if not settings.disable_masking and not isinstance(use_mask, np.ndarray):
             use_mask = _estimate_foreground_mask_from_border(image)
+        if isinstance(use_mask, np.ndarray):
+            try:
+                skin = _skin_like_mask(arr)
+                if isinstance(skin, np.ndarray) and skin.shape[:2] == use_mask.shape[:2]:
+                    trimmed = np.asarray(use_mask).astype(bool) & (~skin)
+                    if int(np.sum(trimmed)) >= 64:
+                        use_mask = trimmed
+            except Exception:
+                pass
 
         pixels = arr.reshape(-1, 3)
         if isinstance(use_mask, np.ndarray) and use_mask.shape[:2] == arr.shape[:2]:
@@ -909,7 +959,7 @@ def build_single_image_color_context(
             if idx == 0 or area >= dominant_area_floor:
                 dominant_hexes.append(hx)
 
-        if profile_is_neutral:
+        if profile_is_neutral and not _description_has_exposed_shoulder_signal(description):
             median_l = profile_for_hints.get("medianL")
             p90_l = profile_for_hints.get("p90L")
             mean_chroma = profile_for_hints.get("meanChroma")
@@ -962,12 +1012,35 @@ def build_single_image_color_context(
     if allow_near_white and mask_source == "clean_foreground":
         mask_source = "provided_mask"
 
+    description_low = str(description or "").lower()
+    exposed_shoulder_signal = bool(
+        re.search(
+            r"\b(?:one[-\s]?shoulder|single[-\s]?shoulder|off[-\s]?shoulder|single[-\s]?sleeve|asym(?:metric|metry)?)\b",
+            description_low,
+        )
+    )
+    if exposed_shoulder_signal and isinstance(use_mask, np.ndarray):
+        try:
+            skin_mask = _skin_like_mask(np.asarray(image.convert("RGB"), dtype=np.uint8))
+            if isinstance(skin_mask, np.ndarray) and skin_mask.shape[:2] == use_mask.shape[:2]:
+                trimmed = np.asarray(use_mask).astype(bool) & (~skin_mask)
+                trimmed_pixels = int(np.sum(trimmed))
+                min_keep = max(
+                    int(config.decontam_min_pixels),
+                    int(float(image.width * image.height) * float(config.decontam_min_coverage_ratio)),
+                )
+                if trimmed_pixels >= min_keep:
+                    use_mask = trimmed
+        except Exception:
+            pass
+
     raw_palette_metrics = _extract_dominant_hex_colors_with_coverage(
         image=image,
         settings=config,
         mask=use_mask if isinstance(use_mask, np.ndarray) else None,
         top_k=palette_top_k,
         allow_near_white=allow_near_white,
+        description=description,
     )
     palette_metrics_full = list(raw_palette_metrics)
 
@@ -975,6 +1048,7 @@ def build_single_image_color_context(
         image=image,
         settings=config,
         mask=use_mask if isinstance(use_mask, np.ndarray) else None,
+        description=description,
     )
     profile_is_neutral = bool(isinstance(profile, dict) and profile.get("isNeutral"))
     balance_max_scale = 1.12
@@ -1027,6 +1101,10 @@ def build_single_image_color_context(
         if apply_preprocess and isinstance(median_l, (int, float)) and float(median_l) <= 62.0:
             apply_clahe = True
 
+    if exposed_shoulder_signal:
+        apply_preprocess = False
+        apply_clahe = False
+
     cast_corrected_profile: Optional[Dict[str, object]] = None
     cast_corrected_hints: List[str] = []
     cast_corrected_palette: Optional[List[PaletteEntry]] = None
@@ -1053,6 +1131,7 @@ def build_single_image_color_context(
                 image=corrected_image,
                 settings=config,
                 mask=use_mask if isinstance(use_mask, np.ndarray) else None,
+                description=description,
             )
             corrected_palette = _extract_dominant_hex_colors_with_coverage(
                 image=corrected_image,
@@ -1060,6 +1139,7 @@ def build_single_image_color_context(
                 mask=use_mask if isinstance(use_mask, np.ndarray) else None,
                 top_k=palette_top_k,
                 allow_near_white=allow_near_white,
+                description=description,
             )
             cast_corrected_palette = list(corrected_palette or [])
             cast_corrected_hints = _color_labels_from_hex_palette(

@@ -221,7 +221,7 @@ def _build_minicpm_garment_prompt(
         "Return exactly one valid JSON object with keys \"base_garment_prompt\" and \"extraction_avoid_clause\"; "
         "these keys must always be present. "
         "The JSON must contain: base_garment_prompt (one detailed sentence describing type, neckline/opening, "
-        "sleeve or strap style, silhouette/fit, hem/length, fabric/texture, and visible trims/closures) and "
+        "sleeve or strap style, asymmetry if present, silhouette/fit, hem/length, fabric/texture, and visible trims/closures) and "
         "extraction_avoid_clause (short sentence listing what to ignore). "
         "Do not include any extra keys. Do not mention a person, pose, or background. "
         "If a detail is not visible, omit it; do not guess. "
@@ -1288,6 +1288,24 @@ def _build_garment_color_tone_guidance(
     phrase = primary
     negative_terms: List[str] = []
 
+    if family in {"neutral_light", "neutral_mid"}:
+        if (
+            isinstance(median_l, (int, float))
+            and isinstance(mean_c, (int, float))
+            and isinstance(mean_b, (int, float))
+            and float(median_l) >= 45.0
+            and float(mean_c) <= 18.0
+            and float(mean_b) >= 1.0
+            and isinstance(profile.get("meanA"), (int, float))
+            and float(profile.get("meanA")) <= -2.0
+        ):
+            phrase = "soft mint green"
+            negative_terms = ["gray", "silver", "beige", "ivory", "white", "washed-out fabric"]
+            return {
+                "phrase": phrase,
+                "negative_terms": negative_terms,
+            }
+
     if family == "yellow":
         if (
             isinstance(median_l, (int, float))
@@ -1309,6 +1327,14 @@ def _build_garment_color_tone_guidance(
             negative_terms = ["gold", "mustard", "beige", "champagne", "tan", "brown"]
     elif family == "green":
         if (
+            isinstance(mean_c, (int, float))
+            and isinstance(median_l, (int, float))
+            and float(median_l) >= 64.0
+            and float(mean_c) <= 24.0
+        ):
+            phrase = "soft mint green"
+            negative_terms = ["gray", "silver", "gold", "beige", "olive brown", "washed-out green"]
+        elif (
             isinstance(mean_c, (int, float))
             and isinstance(median_l, (int, float))
             and float(mean_c) < 18.0
@@ -1693,6 +1719,7 @@ def _extract_garment_descriptor_facts(
         "pattern",
         "material",
         "silhouette",
+        "asymmetry",
         "construction",
         "details",
         "coverage",
@@ -2947,7 +2974,8 @@ def _build_flux2_single_garment_extract_prompt(
     type_lock_clause = {
         "top": (
             "Generate only a top garment. Never generate bottoms, dress silhouettes, legs, or shoes. "
-            "Keep neckline, sleeve geometry, shoulder width, and hem shape identical to reference."
+            "Keep neckline, sleeve geometry, shoulder width, and hem shape identical to reference. "
+            "Keep the color uniform across all top panels and drapes; do not add a faded, aged, or shadow-tinted secondary shade."
         ),
         "bottom": (
             "Generate only a bottom garment. Never generate tops, jackets, dresses, torso, face, or arms. "
@@ -2983,7 +3011,8 @@ def _build_flux2_single_garment_extract_prompt(
     if any(token in low_desc for token in ("one-shoulder", "one shoulder", "single shoulder", "single-shoulder")):
         subtype_lock_clause += (
             " Preserve exactly one shoulder connection and one sleeve/strap layout only. "
-            "Do not generate a second strap, second shoulder panel, or any extra lower torso band."
+            "Do not generate a second strap, second shoulder panel, mirrored shoulder edge, mirrored sleeve cap, or any extra lower torso band. "
+            "Do not close the open side or complete the missing shoulder into a symmetric top."
         )
     descriptor_clause = ""
     if clean_desc:
@@ -3066,7 +3095,10 @@ def _build_flux2_single_garment_extract_negative_prompt(
         parts.append(", ".join(tone_negative_terms))
 
     if any(token in f"{custom.lower()} {prompt_low}" for token in ("one-shoulder", "one shoulder", "single shoulder", "single-shoulder")):
-        parts.append("second strap, second sleeve, extra shoulder panel, duplicate shoulder")
+        parts.append(
+            "second strap, second sleeve, extra shoulder panel, duplicate shoulder, mirrored shoulder, mirrored strap, "
+            "symmetrical neckline, closed open side, faded secondary shade, aged panel tint"
+        )
     if any(token in prompt_low for token in ("crop top", "cropped top", "bralette", "bra", "bustier", "corset")):
         parts.append("detached waistband, extra lower strip, separate abdominal band, extra lower torso panel, second garment section below hem, full-length top, tunic length, extended torso panel")
     if "pocket" not in prompt_low:

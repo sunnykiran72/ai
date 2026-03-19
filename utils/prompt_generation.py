@@ -41,7 +41,7 @@ def parse_structured_descriptor(text: str) -> Dict[str, str]:
     # "Category: dress Type: evening gown Colors: beige ..."
     known_labels = [
         "category", "type", "colors", "pattern", "material", "silhouette",
-        "construction", "details", "coverage", "preserve",
+        "construction", "details", "coverage", "preserve", "asymmetry", "sleeves",
         "identity", "body pose", "body_pose", "by pose", "by_pose",
         "framing lighting", "framing_lighting", "current outfit", "current_outfit",
         "occlusion",
@@ -230,6 +230,9 @@ def normalize_minicpm_descriptor_text(raw_text: str, kind: str) -> str:
         parts.append(f"{category} garment")
     if gtype:
         parts.append(f"type {gtype}")
+    asymmetry = fields.get("asymmetry", "")
+    if asymmetry:
+        parts.append(f"asymmetry {asymmetry}")
     if colors:
         parts.append(f"colors {colors}")
     if pattern:
@@ -434,6 +437,97 @@ def _strip_bust_terms(value: str) -> str:
     return cleaned
 
 
+_DRESS_SPLIT_TERMS = {
+    "two-piece",
+    "two piece",
+    "separate top",
+    "separate bottom",
+    "separate skirt",
+    "separate bodice",
+    "split bodice",
+    "split hem",
+    "split hemline",
+    "detached bodice",
+    "detached skirt",
+    "detached waistband",
+}
+
+
+def _strip_split_terms(value: str) -> str:
+    cleaned = " ".join(str(value or "").split()).strip()
+    if not cleaned:
+        return ""
+    pattern = r"\b(?:" + "|".join(re.escape(t) for t in _DRESS_SPLIT_TERMS) + r")\b"
+    cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:/-")
+    return cleaned
+
+
+_OUTER_LAYERING_TERMS = {
+    "layering",
+    "layer",
+    "layers",
+    "underlayer",
+    "underlayers",
+    "under layer",
+    "undershirt",
+    "inner layer",
+    "base layer",
+    "secondary garment",
+    "secondary section",
+    "inner garment",
+}
+
+
+def _strip_outer_layering_terms(value: str) -> str:
+    cleaned = " ".join(str(value or "").split()).strip()
+    if not cleaned:
+        return ""
+    pattern = r"\b(?:" + "|".join(re.escape(t) for t in _OUTER_LAYERING_TERMS) + r")\b"
+    cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:/-")
+    return cleaned
+
+
+def _infer_asymmetry_from_text(text: str) -> str:
+    low = " ".join(str(text or "").split()).strip().lower()
+    if not low:
+        return ""
+
+    patterns = (
+        (r"\bone[-\s]?shoulder\b", "one-shoulder"),
+        (r"\bsingle[-\s]?shoulder\b", "single-shoulder"),
+        (r"\boff[-\s]?shoulder\b", "off-shoulder"),
+        (r"\bsingle[-\s]?sleeve\b", "single-sleeve"),
+        (r"\basym(?:metric|metry)?\b", "asymmetric"),
+        (r"\buneven shoulder\b", "asymmetric"),
+        (r"\bmismatched shoulders\b", "asymmetric"),
+    )
+    for pattern, label in patterns:
+        if re.search(pattern, low, flags=re.IGNORECASE):
+            return label
+    return ""
+
+
+def _infer_sleeves_from_text(text: str) -> str:
+    low = " ".join(str(text or "").split()).strip().lower()
+    if not low:
+        return ""
+
+    patterns = (
+        (r"\bsingle[-\s]?long[-\s]?sleeve\b", "single long sleeve"),
+        (r"\bsingle[-\s]?sleeve\b", "single sleeve"),
+        (r"\bone[-\s]?sleeve\b", "single sleeve"),
+        (r"\blong[-\s]?sleeves?\b", "long sleeves"),
+        (r"\bshort[-\s]?sleeves?\b", "short sleeves"),
+        (r"\bsleeveless\b", "sleeveless"),
+    )
+    for pattern, label in patterns:
+        if re.search(pattern, low, flags=re.IGNORECASE):
+            return label
+    return ""
+
+
 def _extract_structured_fields(desc: str) -> Dict[str, str]:
     raw = parse_structured_descriptor(desc)
     aliases = {
@@ -444,6 +538,7 @@ def _extract_structured_fields(desc: str) -> Dict[str, str]:
         "collar_style": "collar",
         "lapels": "lapel",
         "shoulder": "shoulder_style",
+        "asymmetry": "asymmetry",
         "waist": "waistline",
         "type": "type",
         "category": "category",
@@ -482,6 +577,14 @@ def _extract_structured_fields(desc: str) -> Dict[str, str]:
         cleaned = _clean_descriptor_value(value)
         if cleaned:
             normalized[alias] = cleaned
+    if "asymmetry" not in normalized:
+        inferred_asymmetry = _infer_asymmetry_from_text(desc)
+        if inferred_asymmetry:
+            normalized["asymmetry"] = inferred_asymmetry
+    if "sleeves" not in normalized:
+        inferred_sleeves = _infer_sleeves_from_text(desc)
+        if inferred_sleeves:
+            normalized["sleeves"] = inferred_sleeves
     return normalized
 
 
@@ -492,8 +595,9 @@ def build_garment_prompt_natural(
     ignore_layering: bool = False,
 ) -> str:
     text = " ".join(str(desc or "").split()).strip()
+    explicit_fields = parse_structured_descriptor(text)
     fields = _extract_structured_fields(text)
-    has_structured_fields = bool(fields)
+    has_structured_fields = bool(explicit_fields)
     garment_type = (fields.get("type") or "").strip()
     if not garment_type:
         hint = (garment_type_hint or "").strip().lower()
@@ -510,6 +614,14 @@ def build_garment_prompt_natural(
         key in type_lower for key in ("bra", "bralette", "bustier", "corset", "bandeau")
     )
 
+    def _append_unique(parts: List[str], phrase: str) -> None:
+        cleaned = " ".join(str(phrase or "").split()).strip(" ,.;:/-")
+        if not cleaned:
+            return
+        low = cleaned.lower()
+        if low not in {str(item).strip().lower() for item in parts}:
+            parts.append(cleaned)
+
     def _remove_layering_terms(value: str) -> str:
         cleaned = str(value or "")
         cleaned = re.sub(
@@ -521,40 +633,76 @@ def build_garment_prompt_natural(
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:/-")
         return cleaned
 
+    def _cleanup_value_for_type(value: str) -> str:
+        cleaned = str(value or "")
+        garment_hint = (garment_type_hint or "").strip().lower()
+        if garment_hint == "dress":
+            cleaned = _strip_split_terms(cleaned)
+        elif garment_hint == "outer":
+            cleaned = _strip_outer_layering_terms(cleaned)
+        return cleaned
+
     construction_bits: List[str] = []
     neckline = fields.get("neckline")
     if neckline:
+        neckline = _cleanup_value_for_type(neckline)
         construction_bits.append(_maybe_suffix(neckline, "neckline", "neckline"))
     collar = fields.get("collar")
     if collar:
+        collar = _cleanup_value_for_type(collar)
         construction_bits.append(_maybe_suffix(collar, "collar", "collar"))
     lapel = fields.get("lapel")
     if lapel:
+        lapel = _cleanup_value_for_type(lapel)
         construction_bits.append(_maybe_suffix(lapel, "lapel", "lapel"))
+    sleeves = fields.get("sleeves")
     shoulder = fields.get("shoulder_style")
     if shoulder:
-        construction_bits.append(_maybe_suffix(shoulder, "shoulder", "shoulder"))
-    sleeves = fields.get("sleeves")
+        shoulder_text = " ".join(str(shoulder).split()).strip()
+        shoulder_low = shoulder_text.lower()
+        asymmetry_low = str(fields.get("asymmetry") or "").strip().lower()
+        if is_top and not is_bust_garment and sleeves and shoulder_low in {"strapless", "bare", "bare shoulder"}:
+            shoulder_text = ""
+        if shoulder_text and asymmetry_low and shoulder_low == asymmetry_low:
+            shoulder_text = ""
+        if shoulder_text:
+            _append_unique(construction_bits, _maybe_suffix(shoulder_text, "shoulder", "shoulder"))
+    asymmetry = fields.get("asymmetry") or _infer_asymmetry_from_text(text)
+    if asymmetry and asymmetry.lower() not in {"symmetric", "unknown", "none", "n/a"}:
+        _append_unique(construction_bits, f"{asymmetry} shoulder structure")
     if sleeves:
-        construction_bits.append(_maybe_suffix(sleeves, "sleeves", "sleeve"))
+        sleeves = _cleanup_value_for_type(sleeves)
+        _append_unique(construction_bits, _maybe_suffix(sleeves, "sleeves", "sleeve"))
     bodice = fields.get("bodice_cut")
     if bodice:
         if is_top and not is_bust_garment:
             bodice = _strip_bust_terms(bodice)
+        bodice = _cleanup_value_for_type(bodice)
         if bodice:
-            construction_bits.append(_maybe_suffix(bodice, "bodice", "bodice"))
+            _append_unique(construction_bits, _maybe_suffix(bodice, "bodice", "bodice"))
     waistline = fields.get("waistline")
     if waistline:
-        construction_bits.append(_maybe_suffix(waistline, "waist", "waist"))
+        waistline = _cleanup_value_for_type(waistline)
+        waist_low = str(waistline).strip().lower()
+        if is_top and not is_bust_garment:
+            hem_low = str(fields.get("length_hem") or "").strip().lower()
+            if hem_low in {"crop", "cropped", "midriff", "upper midriff"}:
+                waistline = ""
+        if waistline:
+            _append_unique(construction_bits, _maybe_suffix(waistline, "waist", "waist"))
     silhouette = fields.get("silhouette")
     if silhouette:
-        construction_bits.append(_maybe_suffix(silhouette, "silhouette", "silhouette"))
+        silhouette = _cleanup_value_for_type(silhouette)
+        _append_unique(construction_bits, _maybe_suffix(silhouette, "silhouette", "silhouette"))
     length_hem = fields.get("length_hem")
     if length_hem:
+        length_hem = _cleanup_value_for_type(length_hem)
         lowered = length_hem.lower()
         if "hem" in lowered:
             hem_phrase = length_hem
         elif lowered in {"crop", "cropped"}:
+            hem_phrase = "cropped hem"
+        elif lowered in {"midriff", "upper midriff"}:
             hem_phrase = "cropped hem"
         elif lowered in {"mini", "miniskirt"}:
             hem_phrase = "mini hem"
@@ -564,19 +712,23 @@ def build_garment_prompt_natural(
             hem_phrase = "maxi hem"
         else:
             hem_phrase = f"{length_hem} hem"
-        construction_bits.append(hem_phrase)
+        _append_unique(construction_bits, hem_phrase)
     length_value = fields.get("length")
     if length_value:
-        construction_bits.append(_maybe_suffix(length_value, "length", "length"))
+        length_value = _cleanup_value_for_type(length_value)
+        _append_unique(construction_bits, _maybe_suffix(length_value, "length", "length"))
     rise = fields.get("rise")
     if rise:
-        construction_bits.append(f"{rise} rise")
+        rise = _cleanup_value_for_type(rise)
+        _append_unique(construction_bits, f"{rise} rise")
     leg_shape = fields.get("leg_shape")
     if leg_shape:
-        construction_bits.append(f"{leg_shape} leg shape")
+        leg_shape = _cleanup_value_for_type(leg_shape)
+        _append_unique(construction_bits, f"{leg_shape} leg shape")
     skirt_style = fields.get("skirt_style")
     if skirt_style:
-        construction_bits.append(f"{skirt_style} skirt")
+        skirt_style = _cleanup_value_for_type(skirt_style)
+        _append_unique(construction_bits, f"{skirt_style} skirt")
 
     sentence_one = f"A {garment_type}".strip()
     construction_clause = _join_phrases(construction_bits)
@@ -609,17 +761,18 @@ def build_garment_prompt_natural(
         value = fields.get(key)
         if value and is_top and not is_bust_garment:
             value = _strip_bust_terms(value)
+        value = _cleanup_value_for_type(value)
         if value:
-            details_bits.append(value)
+            _append_unique(details_bits, value)
     opening = fields.get("opening")
     if opening:
-        details_bits.append(f"{opening} closure")
+        _append_unique(details_bits, f"{opening} closure")
     lining = fields.get("lining")
     if lining:
-        details_bits.append(f"{lining} lining")
+        _append_unique(details_bits, f"{lining} lining")
     sheer = fields.get("sheer")
     if sheer:
-        details_bits.append(f"{sheer} fabric")
+        _append_unique(details_bits, f"{sheer} fabric")
     if details_bits:
         details_clause = _join_phrases(details_bits)
         sentence_two = (sentence_two + " " if sentence_two else "") + f"Details include {details_clause}."
@@ -639,6 +792,7 @@ def build_garment_prompt_natural(
         fallback = _remove_layering_terms(fallback)
     if is_top and not is_bust_garment:
         fallback = _strip_bust_terms(fallback)
+    fallback = _cleanup_value_for_type(fallback)
     fallback = re.sub(r"\s+", " ", fallback).strip(" ,.;:/-")
     if fallback:
         if fallback[0].islower():
@@ -854,6 +1008,8 @@ def extract_prompt_fact_segments(text: str) -> Dict[str, str]:
         "pattern",
         "material",
         "silhouette",
+        "asymmetry",
+        "sleeves",
         "construction",
         "details",
         "coverage",
@@ -898,6 +1054,8 @@ def serialize_prompt_fact_segments(fields: Dict[str, str]) -> str:
         "pattern",
         "material",
         "silhouette",
+        "asymmetry",
+        "sleeves",
         "construction",
         "details",
         "coverage",

@@ -577,10 +577,36 @@ def strip_descriptor_color_clause(description: str) -> str:
     text = " ".join(str(description or "").split()).strip()
     if not text:
         return text
-    
+
+    def _strip_freeform_color_terms(value: str) -> str:
+        cleaned = str(value or "")
+        # Remove standalone color words and the most common color modifiers that
+        # tend to travel with them in freeform VLM prose.
+        color_modifiers = (
+            "light", "dark", "deep", "soft", "muted", "pale", "bright",
+            "vivid", "rich", "washed", "neutral", "warm", "cool", "solid",
+            "plain",
+        )
+        for term in color_modifiers:
+            cleaned = re.sub(rf"\b{re.escape(term)}\b", " ", cleaned, flags=re.IGNORECASE)
+        color_terms = (
+            "red", "blue", "green", "yellow", "orange", "purple", "pink", "brown",
+            "black", "white", "gray", "grey", "beige", "cream", "ivory", "maroon",
+            "navy", "teal", "cyan", "magenta", "gold", "silver", "bronze", "tan",
+            "khaki", "mustard", "lavender", "peach", "coral", "turquoise", "lime",
+            "olive", "indigo", "violet", "burgundy", "charcoal", "multicolored",
+            "multi-colored", "multicolor", "colorful", "colourful", "monochrome",
+            "grayscale", "greyscale",
+        )
+        for term in color_terms:
+            cleaned = re.sub(rf"\b{re.escape(term)}\b", " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\bcolors?\b", " ", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:/-")
+        return cleaned
+
     segments = [seg.strip() for seg in text.split(",") if seg.strip()]
     if not segments:
-        return text
+        return _strip_freeform_color_terms(text)
 
     key_prefixes = (
         "type ",
@@ -610,6 +636,8 @@ def strip_descriptor_color_clause(description: str) -> str:
         out.append(seg)
 
     normalized = ", ".join(out).strip(" ,")
+    normalized = normalized or text
+    normalized = _strip_freeform_color_terms(normalized)
     return normalized or text
 
 

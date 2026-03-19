@@ -80,6 +80,11 @@ class TestStructuredDescriptorParsing:
         
         result = parse_structured_descriptor("currentoutfit: casual")
         assert result == {"current_outfit": "casual"}
+
+    def test_parse_asymmetry_label_injection(self):
+        """Test parsing one-shoulder and single-sleeve asymmetry labels."""
+        result = parse_structured_descriptor("Type: top Asymmetry: one-shoulder Sleeves: single sleeve")
+        assert result == {"type": "top", "asymmetry": "one-shoulder", "sleeves": "single sleeve"}
     
     def test_parse_value_cleanup(self):
         """Test parsing with value cleanup (brackets, markdown, etc.)."""
@@ -173,14 +178,14 @@ class TestPromptFactExtraction:
         """Test extraction supports all expected labels."""
         text = (
             "category=formal; type=dress; colors=blue; pattern=floral; "
-            "material=silk; silhouette=a-line; construction=tailored; "
+            "material=silk; silhouette=a-line; asymmetry=one-shoulder; construction=tailored; "
             "details=beaded; coverage=full; preserve=original"
         )
         result = extract_prompt_fact_segments(text)
         
         expected_labels = [
             "category", "type", "colors", "pattern", "material",
-            "silhouette", "construction", "details", "coverage", "preserve"
+            "silhouette", "asymmetry", "construction", "details", "coverage", "preserve"
         ]
         
         for label in expected_labels:
@@ -419,11 +424,80 @@ class TestGarmentPromptNatural:
         assert "beige" not in prompt.lower()
         assert "a top garment" not in prompt.lower()
 
+    def test_asymmetry_is_preserved_from_freeform_description(self):
+        prompt = build_garment_prompt_natural(
+            "Mint one-shoulder crop top with a single long sleeve and asymmetric drape.",
+            garment_type_hint="top",
+        )
+
+        lowered = prompt.lower()
+        assert "one-shoulder" in lowered or "single-shoulder" in lowered
+        assert "single long sleeve" in lowered or "single sleeve" in lowered
+
+    def test_top_prompt_drops_contradictory_strapless_shoulder_and_midriff_phrase(self):
+        prompt = build_garment_prompt_natural(
+            "category=top; type=crop top; neckline=bishop; shoulder_style=strapless; sleeves=long sleeves; bodice_cut=ruched bust; waistline=high; silhouette=figure-hugging; length_hem=midriff; fabric_texture=smooth; special_details=ruched bust detail",
+            garment_type_hint="top",
+        )
+
+        lowered = prompt.lower()
+        assert "strapless shoulder" not in lowered
+        assert "midriff hem" not in lowered
+        assert "cropped hem" in lowered
+        assert "high waist" not in lowered
+        assert "long sleeves" in lowered or "long sleeve" in lowered
+
     def test_analyze_top_prompt_contains_flat_front_guard(self):
         prompt = get_analyze_flux2_positive_prompt("top").lower()
 
         assert "flat and cloth-like" in prompt
         assert "torso volume" in prompt
+
+    def test_analyze_bottom_prompt_contains_single_piece_guard(self):
+        prompt = get_analyze_flux2_positive_prompt("bottom").lower()
+
+        assert "one continuous bottom garment" in prompt
+        assert "upper-body panel" in prompt
+        assert "split the garment" in prompt
+
+    def test_analyze_dress_prompt_contains_single_piece_guard(self):
+        prompt = get_analyze_flux2_positive_prompt("dress").lower()
+
+        assert "one continuous garment from bodice to hem" in prompt
+        assert "do not split it into a separate top and skirt" in prompt
+        assert "two-piece outfit" in prompt
+
+    def test_analyze_outer_prompt_contains_single_layer_guard(self):
+        prompt = get_analyze_flux2_positive_prompt("outer").lower()
+
+        assert "single layer" in prompt
+        assert "no inner base garment" in prompt
+        assert "layered outfit" in prompt
+
+    def test_dress_prompt_drops_split_language(self):
+        prompt = build_garment_prompt_natural(
+            "category=dress; type=evening dress; bodice_cut=fitted; skirt_style=a-line; special_details=split bodice and separate skirt; layering=two-piece outfit",
+            garment_type_hint="dress",
+            ignore_layering=True,
+        )
+
+        lowered = prompt.lower()
+        assert "split bodice" not in lowered
+        assert "separate skirt" not in lowered
+        assert "two-piece" not in lowered
+        assert "dress" in lowered
+
+    def test_outer_prompt_drops_layering_language(self):
+        prompt = build_garment_prompt_natural(
+            "category=outerwear; type=coat; collar=notch; lapel=wide; sleeves=long; special_details=inner layer and secondary garment",
+            garment_type_hint="outer",
+            ignore_layering=True,
+        )
+
+        lowered = prompt.lower()
+        assert "inner layer" not in lowered
+        assert "secondary garment" not in lowered
+        assert "coat" in lowered or "outerwear" in lowered
 
 
 if __name__ == "__main__":
