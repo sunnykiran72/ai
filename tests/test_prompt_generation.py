@@ -19,6 +19,7 @@ from utils.prompt_generation import (
     clean_prompt_section_text,
     join_avoid_terms,
     build_garment_prompt_natural,
+    build_tryon_prompt_v2,
 )
 from config.prompts import get_analyze_flux2_positive_prompt
 
@@ -80,6 +81,14 @@ class TestStructuredDescriptorParsing:
         
         result = parse_structured_descriptor("currentoutfit: casual")
         assert result == {"current_outfit": "casual"}
+
+        result = parse_structured_descriptor(
+            "lower body pose: straight legs; held object: phone; object placement: left hand"
+        )
+        assert result == {
+            "body_pose": "straight legs",
+            "held_object": "left hand",
+        }
 
     def test_parse_asymmetry_label_injection(self):
         """Test parsing one-shoulder and single-sleeve asymmetry labels."""
@@ -217,6 +226,82 @@ class TestAvoidClauseGeneration:
         
         assert len(result) == 1
         assert result[0] == "Don't change the color."
+
+
+class TestTryonPromptBuilding:
+    """Test try-on prompt building for FLUX-friendly structure."""
+
+    def test_build_tryon_prompt_v2_keeps_identity_pose_and_background(self):
+        prompt = build_tryon_prompt_v2(
+            user_description=(
+                "identity: oval face, fair skin, straight black hair. "
+                "face: calm neutral expression looking forward. "
+                "pose: front-facing standing pose with arms relaxed. "
+                "lower body pose: straight legs with feet planted shoulder-width apart. "
+                "framing/lighting: full-body crop with soft indoor lighting. "
+                "occlusion: phone partially covering the face from the left hand. "
+                "preserve: face identity, pose, body proportions, and background unchanged."
+            ),
+            garment_descriptions=[
+                "category=top; type=top; asymmetry=one-shoulder; sleeves=single long sleeve; "
+                "silhouette=slim fit; length_hem=cropped; fabric_texture=smooth; "
+                "special_details=ruched bodice.",
+            ],
+            target_types=["top"],
+            board_mode="single",
+        )
+
+        assert "Identity-preserving virtual try-on edit of the same person from image 1." in prompt
+        assert "Treat the face in image 1 as the identity anchor" in prompt
+        assert "Do not beautify, restyle, or replace the face." in prompt
+        assert "Keep the exact body proportions, pose, hands, lower-body stance, leg spacing, knee angle, foot placement, hips, ankles, and camera framing from image 1." in prompt
+        assert "Preserve the original background and lighting from image 1 exactly." in prompt
+        assert "same grip, finger arrangement, wrist angle" in prompt
+        assert "Prepared user reference: identity: oval face, fair skin, straight black hair. face: calm neutral expression looking forward. pose: front-facing standing pose with arms relaxed." in prompt
+        assert "lower body pose: straight legs with feet planted shoulder-width apart" in prompt
+        assert "If a phone or other held object is present" in prompt
+        assert "Garment reference: A top with" in prompt
+        assert "single long sleeve" in prompt
+        assert "cropped hem" in prompt
+        assert "ruched bodice" in prompt
+        assert "Replace only the upper garment region from shoulders to hem." in prompt
+        assert "Keep the lower body, legs, shoes, and lower-body pose exactly as in image 1." in prompt
+        assert "Photorealistic fabric drape, realistic occlusion at the garment boundary, accurate seams, crisp detail, and clean composition." in prompt
+
+    def test_build_tryon_prompt_v2_scope_changes_by_target_type(self):
+        prompt = build_tryon_prompt_v2(
+            user_description=(
+                "identity: medium skin tone, long dark hair. "
+                "face: neutral expression. "
+                "pose: standing upright. "
+                "preserve: face identity, pose, and background unchanged."
+            ),
+            garment_descriptions=[
+                "category=bottom; type=wide leg trousers; silhouette=flowy; rise=high; length_hem=ankle.",
+            ],
+            target_types=["bottom"],
+            board_mode="single",
+        )
+
+        assert "Replace only the lower garment region from waistband to hem." in prompt
+        assert "Keep the top garment, face, hair, arms, and upper-body pose exactly as in image 1." in prompt
+
+        dress_prompt = build_tryon_prompt_v2(
+            user_description=(
+                "identity: medium skin tone, long dark hair. "
+                "face: neutral expression. "
+                "pose: standing upright. "
+                "preserve: face identity, pose, and background unchanged."
+            ),
+            garment_descriptions=[
+                "category=dress; type=maxi dress; silhouette=flowy; length_hem=ankle.",
+            ],
+            target_types=["dress"],
+            board_mode="single",
+        )
+
+        assert "Replace the full outfit with the dress reference." in dress_prompt
+        assert "Keep the same face, body proportions, pose, hands, hair, background, and lighting from image 1." in dress_prompt
     
     def test_extract_avoid_directives_never(self):
         """Test extracting 'never' directives."""

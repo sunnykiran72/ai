@@ -44,7 +44,8 @@ def parse_structured_descriptor(text: str) -> Dict[str, str]:
         "construction", "details", "coverage", "preserve", "asymmetry", "sleeves",
         "identity", "body pose", "body_pose", "by pose", "by_pose",
         "framing lighting", "framing_lighting", "current outfit", "current_outfit",
-        "occlusion",
+        "occlusion", "lower body pose", "lower_body_pose", "lowerbody pose", "lowerbody_pose",
+        "held object", "held_object", "object placement", "object_placement",
     ]
     for label in sorted(known_labels, key=len, reverse=True):
         pattern = rf"(?i)\b{re.escape(label)}\b\s*:"
@@ -66,6 +67,14 @@ def parse_structured_descriptor(text: str) -> Dict[str, str]:
             "body_pose": "body_pose",
             "by_pose": "body_pose",
             "bypose": "body_pose",
+            "lowerbodypose": "lower_body_pose",
+            "lower_body_pose": "lower_body_pose",
+            "lowerbody_pose": "lower_body_pose",
+            "lower_bodypose": "lower_body_pose",
+            "heldobject": "held_object",
+            "held_object": "held_object",
+            "objectplacement": "held_object",
+            "object_placement": "held_object",
             "framinglighting": "framing_lighting",
             "framing_lighting": "framing_lighting",
             "currentoutfit": "current_outfit",
@@ -820,6 +829,64 @@ def _strip_unknown_tokens(text: str) -> str:
     return ", ".join(cleaned).strip(" ,")
 
 
+def _build_tryon_user_reference(user_description: str) -> str:
+    text = re.sub(r"[<>]+", " ", " ".join(str(user_description or "").split())).strip()
+    if not text:
+        return ""
+
+    fields = parse_structured_descriptor(text)
+    if fields:
+        def _clean(value: object) -> str:
+            return " ".join(str(value or "").split()).strip(" ,.;:/-")
+
+        parts: List[str] = []
+        identity = _clean(fields.get("identity", ""))
+        face = _clean(fields.get("face", ""))
+        pose = _clean(fields.get("body_pose", "") or fields.get("by_pose", ""))
+        lower_body_pose = _clean(fields.get("lower_body_pose", ""))
+        framing = _clean(fields.get("framing_lighting", ""))
+        occlusion = _clean(fields.get("occlusion", ""))
+        held_object = _clean(fields.get("held_object", ""))
+        preserve = _clean(fields.get("preserve", ""))
+        if not lower_body_pose:
+            match = re.search(
+                r"(?i)\blower\s*body\s*pose\s*[:=]\s*([^.;|]+)",
+                text,
+            )
+            if match:
+                lower_body_pose = _clean(match.group(1))
+        if not held_object:
+            match = re.search(
+                r"(?i)\b(?:held\s*object|object\s*placement)\s*[:=]\s*([^.;|]+)",
+                text,
+            )
+            if match:
+                held_object = _clean(match.group(1))
+        if identity:
+            parts.append(f"identity: {identity}")
+        if face:
+            parts.append(f"face: {face}")
+        if pose:
+            parts.append(f"pose: {pose}")
+        if lower_body_pose:
+            parts.append(f"lower body pose: {lower_body_pose}")
+        if framing:
+            parts.append(f"framing/lighting: {framing}")
+        if occlusion and occlusion.lower() not in {"none", "no", "n/a"}:
+            parts.append(f"occlusion: {occlusion}")
+        if held_object:
+            parts.append(f"held object: {held_object}")
+        if preserve:
+            parts.append(f"preserve: {preserve}")
+        cleaned = ". ".join(parts).strip(" .")
+        if cleaned:
+            return cleaned
+
+    fallback = _strip_unknown_tokens(text)
+    fallback = augment_identity_lock(fallback)
+    return fallback
+
+
 def build_tryon_prompt_v2(
     user_description: str,
     garment_descriptions: List[str],
@@ -832,34 +899,95 @@ def build_tryon_prompt_v2(
     - Positive preservation constraints
     - Explicit scope for edits
     """
-    safe_user = _strip_unknown_tokens(user_description)
+    user_reference = _build_tryon_user_reference(user_description)
     garment_lines: List[str] = []
-    for desc in garment_descriptions or []:
-        cleaned = _strip_unknown_tokens(desc)
-        if cleaned:
-            garment_lines.append(cleaned if cleaned.endswith(".") else f"{cleaned}.")
+    for idx, desc in enumerate(garment_descriptions or []):
+        raw_desc = " ".join(str(desc or "").split()).strip()
+        if not raw_desc:
+            continue
+        target_type = ""
+        if idx < len(target_types or []):
+            target_type = str(target_types[idx] or "").strip().lower()
+        if parse_structured_descriptor(raw_desc):
+            normalized_desc = raw_desc
+        else:
+            normalized_desc = _strip_unknown_tokens(raw_desc)
+        if normalized_desc:
+            garment_lines.append(
+                build_garment_prompt_natural(
+                    normalized_desc,
+                    garment_type_hint=target_type or None,
+                )
+            )
 
-    intro = (
-        "A photorealistic virtual try-on image edit of the same person from the reference."
-    )
+    def _build_scope_clause(types: List[str], mode: str) -> str:
+        normalized_types = []
+        for raw_type in types or []:
+            kind = normalize_garment_type(str(raw_type or "")).strip().lower()
+            if kind and kind not in normalized_types:
+                normalized_types.append(kind)
+        if mode == "collage":
+            return (
+                "Apply all garments from the collage reference as one complete outfit. "
+                "Keep the same face, pose, body proportions, background, and lighting from image 1."
+            )
+        if not normalized_types:
+            normalized_types = ["top"]
+
+        clauses: List[str] = []
+        for kind in normalized_types:
+            if kind == "top":
+                clauses.append(
+                    "Replace only the upper garment region from shoulders to hem. "
+                    "Keep the lower body, legs, shoes, and lower-body pose exactly as in image 1."
+                )
+            elif kind == "bottom":
+                clauses.append(
+                    "Replace only the lower garment region from waistband to hem. "
+                    "Keep the top garment, face, hair, arms, and upper-body pose exactly as in image 1."
+                )
+            elif kind == "dress":
+                clauses.append(
+                    "Replace the full outfit with the dress reference. "
+                    "Keep the same face, body proportions, pose, hands, hair, background, and lighting from image 1."
+                )
+            elif kind == "outer":
+                clauses.append(
+                    "Replace only the outer layer. "
+                    "Keep the inner or base outfit, face, body, and pose unchanged."
+                )
+            else:
+                clauses.append(
+                    "Replace only the target garment region indicated by image 2 while preserving the rest of the person unchanged."
+                )
+        return " ".join(clauses)
+
+    intro = "Identity-preserving virtual try-on edit of the same person from image 1."
     preserve = (
-        "Preserve the person's identity, face, skin tone, hair, body proportions, pose, hands, "
-        "and the original background and lighting."
+        "Treat the face in image 1 as the identity anchor and keep the exact face identity, face geometry, skin tone, hair, hairline, expression, and head shape as closely as possible. "
+        "Do not beautify, restyle, or replace the face. "
+        "Keep the exact body proportions, pose, hands, "
+        "lower-body stance, leg spacing, knee angle, foot placement, hips, ankles, and camera framing from image 1. "
+        "Preserve the original background and lighting from image 1 exactly. "
+        "If a phone or other held object is present, keep it in the same hand with the same grip, finger arrangement, wrist angle, size, and orientation, "
+        "and preserve the same face occlusion; do not move it onto a different part of the face or body."
     )
-    if board_mode == "collage":
-        scope = "Apply all garments from the collage reference as a complete outfit."
-    else:
-        scope = "Replace only the target garment with the reference garment."
+    scope = _build_scope_clause(target_types, board_mode)
 
     parts = [intro, preserve, scope]
-    if safe_user:
-        parts.append(f"User details: {safe_user}.")
+    if user_reference:
+        user_reference_clean = user_reference.rstrip(" .")
+        parts.append(f"Prepared user reference: {user_reference_clean}.")
     if garment_lines:
         if len(garment_lines) == 1:
-            parts.append(f"Garment details: {garment_lines[0]}")
+            parts.append(f"Garment reference: {garment_lines[0]}")
         else:
-            parts.append("Outfit pieces include: " + " ".join(garment_lines))
-    parts.append("Sharp focus, high detail, clean composition.")
+            parts.append("Garment references: " + " ".join(garment_lines))
+    parts.append(
+        "Photorealistic fabric drape, realistic occlusion at the garment boundary, accurate seams, crisp detail, and clean composition. "
+        "Keep the original person silhouette, especially the lower body, unchanged. "
+        "Do not alter torso angle, hip angle, knee angle, or foot placement."
+    )
     return " ".join(part.strip() for part in parts if part).strip()
 
 

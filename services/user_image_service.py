@@ -75,23 +75,30 @@ class UserImageService:
         crop, bbox = main_mod._user_prep_crop_main_person(image, candidates)
         focus_score = main_mod._focus_score(crop)
 
-        # Background removal disabled for now (use raw crop)
+        # Keep the original image for try-on so the downstream model preserves
+        # the subject framing, pose, and background. Use the crop only for analysis.
         buf = io.BytesIO()
-        crop.convert("RGB").save(buf, format="PNG")
+        image.convert("RGB").save(buf, format="PNG")
         prepared_bytes = buf.getvalue()
         bg_meta = {"enabled": False, "backend": "none"}
         url = main_mod._upload_or_raise(prepared_bytes)
 
-        # Use MiniCPM for user description when available
+        # Use the full frame for description so the prompt can retain face,
+        # lower-body, and held-object cues that a tight crop may omit.
         description_raw = ""
         minicpm_runner = getattr(self.engine, "minicpm", None)
         if minicpm_runner is not None:
             try:
-                description_raw = str(minicpm_runner.describe_person_and_outfit(crop)).strip()
+                description_raw = str(minicpm_runner.describe_person_and_outfit(image)).strip()
             except Exception:
                 description_raw = ""
         if not description_raw:
-            description_raw = main_mod._describe_user_image_for_prepare(crop, description_backend=None)
+            try:
+                description_raw = str(minicpm_runner.describe_person_and_outfit(crop)).strip() if minicpm_runner is not None else ""
+            except Exception:
+                description_raw = ""
+        if not description_raw:
+            description_raw = main_mod._describe_user_image_for_prepare(image, description_backend=None)
         prompt_description = main_mod._normalize_user_prepare_api_prompt_description(description_raw)
 
         return {
@@ -100,6 +107,9 @@ class UserImageService:
             "focusScore": float(focus_score),
             "meta": {
                 "person_bbox": bbox,
+                "analysis_crop_size": {"width": int(crop.width), "height": int(crop.height)},
+                "prepared_image_size": {"width": int(image.width), "height": int(image.height)},
+                "prepared_image_mode": "original_full_frame",
                 "detect": detect_meta,
                 "background": bg_meta,
             },

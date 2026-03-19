@@ -49,6 +49,9 @@ class TestMiniCPMConfigDefaults(unittest.TestCase):
             self.assertEqual(config.garment_min_words, 10)
             self.assertIn("Describe only the product garment", config.garment_prompt)
             self.assertIn("Describe only the human subject", config.person_prompt)
+            self.assertIn("face=<facial expression", config.person_prompt)
+            self.assertIn("lower_body_pose=<lower-body stance", config.person_prompt)
+            self.assertIn("held_object=<objects held or used in hand", config.person_prompt)
             
             # Image sizing
             self.assertEqual(config.product_caption_max_side, 1024)

@@ -81,6 +81,7 @@ class TestAnalyzeConfigDefaults:
         assert config.primary_type_with_florence is True
         assert config.preload_florence is True
         assert config.florence_dress_lock_min_score == 0.74
+        assert config.preload_minicpm is True
     
     def test_extraction_defaults(self):
         """Verify extraction defaults."""
@@ -171,6 +172,7 @@ class TestAnalyzeConfigFromEnv:
         monkeypatch.setenv("ANALYZE_MIN_ACCEPT_CONFIDENCE", "0.5")
         monkeypatch.setenv("ANALYZE_BLUR_CHECK_ENABLED", "1")
         monkeypatch.setenv("ANALYZE_BLUR_MIN_FOCUS_SCORE", "30.0")
+        monkeypatch.setenv("ANALYZE_PRELOAD_MINICPM", "0")
         
         config = AnalyzeConfig.from_env()
         
@@ -179,6 +181,7 @@ class TestAnalyzeConfigFromEnv:
         assert config.min_accept_confidence == 0.5
         assert config.blur_check_enabled is True
         assert config.blur_min_focus_score == 30.0
+        assert config.preload_minicpm is False
     
     def test_from_env_with_invalid_values(self, monkeypatch):
         """Test from_env() handles invalid values gracefully."""

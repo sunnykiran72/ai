@@ -334,6 +334,32 @@ class Flux2CVTONRunner:
             int(os.getenv("FLUX2_NEGATIVE_PROMPT_FALLBACK_MAX_CHARS", "900")),
         )
 
+    def _resolve_tryon_dimensions(self, person_image: Image.Image) -> Tuple[int, int]:
+        """
+        Resolve try-on output dimensions from the source person image.
+
+        The try-on path should preserve the original aspect ratio instead of
+        forcing a hard-coded 2:3 canvas.
+        """
+        if not isinstance(person_image, Image.Image):
+            return self.width, self.height
+
+        src_w, src_h = [int(v) for v in person_image.size]
+        if src_w <= 0 or src_h <= 0:
+            return self.width, self.height
+
+        tryon_max_edge_raw = str(os.getenv("FLUX2_TRYON_MAX_EDGE", "")).strip()
+        try:
+            tryon_max_edge = int(tryon_max_edge_raw) if tryon_max_edge_raw else max(self.width, self.height)
+        except Exception:
+            tryon_max_edge = max(self.width, self.height)
+        tryon_max_edge = max(256, int(tryon_max_edge))
+
+        scale = min(1.0, float(tryon_max_edge) / float(max(src_w, src_h)))
+        out_w = max(64, int(round((src_w * scale) / 8.0)) * 8)
+        out_h = max(64, int(round((src_h * scale) / 8.0)) * 8)
+        return out_w, out_h
+
     @staticmethod
     def _find_local_lora_files(path: Path) -> List[Path]:
         if not path.exists():
@@ -782,6 +808,7 @@ class Flux2CVTONRunner:
         
         # Determine the CFG scale to use for this run
         effective_true_cfg_scale = float(true_cfg_scale if true_cfg_scale is not None else self.true_cfg_scale)
+        output_width, output_height = self._resolve_tryon_dimensions(person)
         
         supports_negative_prompt = self._pipeline_accepts_negative_prompt()
         supports_true_cfg_scale = self._pipeline_accepts_true_cfg_scale()
@@ -807,8 +834,8 @@ class Flux2CVTONRunner:
                 "prompt": effective_prompt,
                 "num_inference_steps": steps,
                 "guidance_scale": self.guidance_scale,
-                "width": self.width,
-                "height": self.height,
+                "width": output_width,
+                "height": output_height,
                 "generator": generator,
             }
             if resolved_negative_prompt:
@@ -849,7 +876,8 @@ class Flux2CVTONRunner:
             "metadata": {
                 "steps": steps,
                 "seed": gen_seed,
-                "resolution": (self.width, self.height),
+                "resolution": (output_width, output_height),
+                "input_resolution": (int(person.width), int(person.height)),
                 "warmup_seconds": warmup_seconds,
                 "request_total_seconds": time.time() - run_t0,
                 "negative_prompt_used": bool(

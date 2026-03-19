@@ -140,15 +140,23 @@ class AIEngine:
     
     def ensure_analyze_ready(self):
         """Preload models required for garment analysis."""
+        def _safe_preload(label: str, fn) -> None:
+            try:
+                fn()
+            except Exception as exc:
+                logger.warning("Analyze preload failed for %s: %s", label, exc)
+
         self.yolo_runner.ensure_ready()
         if self.parser_runner:
             self.parser_runner.ensure_ready()
         if self.config.analyze.preload_florence:
-            self.florence._ensure_loaded()
+            _safe_preload("florence", self.florence._ensure_loaded)
+        if getattr(self.config.analyze, "preload_minicpm", False):
+            _safe_preload("minicpm", self.minicpm.ensure_ready)
         if self.config.analyze.preload_flux_runner:
-            self.get_flux2_for_analyze().ensure_ready()
+            _safe_preload("flux2", self.get_flux2_for_analyze().ensure_ready)
         if self.config.analyze.fashion_basecolour_trial_enabled:
-            self.fashion_basecolour.ensure_ready()
+            _safe_preload("fashion_basecolour", self.fashion_basecolour.ensure_ready)
     
     def model_status(self) -> Dict[str, object]:
         """Get current status of all AI models."""

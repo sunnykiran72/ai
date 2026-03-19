@@ -154,12 +154,19 @@ async def startup_event():
     # Preload models if configured
     if config.app.startup_background_preload:
         logger.info("Starting background model preloading...")
-        # Preload analyze models
-        if hasattr(engine, 'ensure_analyze_ready'):
-            engine.ensure_analyze_ready()
-        # Preload VTO models  
-        if hasattr(engine, 'ensure_vto_ready'):
-            engine.ensure_vto_ready()
+        async def _background_preload() -> None:
+            try:
+                if hasattr(engine, "ensure_analyze_ready"):
+                    await asyncio.to_thread(engine.ensure_analyze_ready)
+            except Exception as exc:
+                logger.warning("Analyze background preload failed: %s", exc)
+            try:
+                if hasattr(engine, "ensure_vto_ready"):
+                    await asyncio.to_thread(engine.ensure_vto_ready)
+            except Exception as exc:
+                logger.warning("VTO background preload failed: %s", exc)
+
+        asyncio.create_task(_background_preload())
 
     global gpu_semaphore
     if gpu_semaphore is None:
@@ -385,7 +392,15 @@ def _upload_or_raise(image_bytes: bytes, *, container: Optional[str] = None, fil
 def _describe_user_image_for_prepare(image: Image.Image, description_backend: Optional[str] = None) -> str:
     if not isinstance(image, Image.Image):
         return ""
-    return "identity: person. pose: standing."
+    return (
+        "identity: face-preservation reference for a person with unknown facial details, hairline, and age band. "
+        "face: neutral expression with unchanged facial geometry and head shape. "
+        "body pose: standing with upper-body orientation, arm placement, and shoulder angle preserved. "
+        "lower body pose: legs, knees, feet, and stance remain in the same position. "
+        "framing/lighting: centered full-body crop with even lighting. "
+        "occlusion: any phone or held object remains in the same hand, same angle, and same overlap. "
+        "preserve: face identity, facial geometry, body proportions, pose, hand placement, object placement, leg position, framing, lighting, and background unchanged."
+    )
 
 
 _descriptor_word_count = _with_runtime_sync(_runtime_compat._descriptor_word_count)

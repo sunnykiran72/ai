@@ -46,14 +46,17 @@ preserve=<state that garment structure and details must remain unchanged>.
 Use 'unknown' only when truly not visible. Prefer a concrete value if it can be inferred from visible pixels.
 Do not mention colors, person, mannequin, background, camera, or recommendations."""
 
-MINICPM_PERSON_OUTFIT_DESCRIPTION_PROMPT = """Describe only the human subject for virtual try-on identity preservation. 
+MINICPM_PERSON_OUTFIT_DESCRIPTION_PROMPT = """Describe only the human subject for identity-preserving virtual try-on. 
 Return exactly one single line with this schema: 
-identity=<face shape/features, skin tone, hair style/color, age band>; 
-body_pose=<pose, camera angle, visible limbs>; 
-framing_lighting=<framing, crop, light direction/intensity>; 
-occlusion=<hair/hands/accessories/objects overlapping body regions>; 
-preserve=<face identity, skin tone, hair, body proportions, pose, framing, and lighting should remain unchanged>. 
-Do not describe background or current clothing unless it creates an occlusion. 
+identity=<face-preservation reference, face shape/features, skin tone, hair style/color, age band>; 
+face=<facial expression, gaze direction, visible facial hair or makeup, head shape>; 
+body_pose=<pose, camera angle, visible limbs, hand placement, upper-body orientation>; 
+lower_body_pose=<lower-body stance, leg spacing, knee angle, foot placement>; 
+framing_lighting=<framing, crop, light direction/intensity, background condition>; 
+occlusion=<hair/hands/accessories/objects overlapping the face or garment region>; 
+held_object=<objects held or used in hand, especially phone, bag, or prop>; 
+preserve=<face identity, facial geometry, skin tone, hair, body proportions, pose, hand placement, object placement, leg position, framing, lighting, and background unchanged>. 
+Do not describe the background or current clothing unless it overlaps the garment region. 
 Be factual from visible pixels only; use 'unknown' for hidden details."""
 
 # ═══════════════════════════════════════════════════════════════════════════════

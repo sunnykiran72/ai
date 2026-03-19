@@ -84,6 +84,14 @@ class Flux2RuntimeLoraToggleTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             runner._set_runtime_lora_state(False)
 
+    def test_resolve_tryon_dimensions_preserves_source_aspect(self):
+        runner = self._make_runner()
+        image = Image.new("RGB", (640, 480), color="white")
+
+        width, height = runner._resolve_tryon_dimensions(image)
+
+        self.assertEqual((width, height), (640, 480))
+
 
 if __name__ == "__main__":
     unittest.main()

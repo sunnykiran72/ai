@@ -126,17 +126,29 @@ def run_selected_item_extraction_or_response(
 
     negative_prompt = str(selected_item.get("extractionAvoidClause") or "").strip()
     minicpm_description = str(selected_item.get("minicpm_description") or "").strip()
-    # Rebuild base prompt here to ensure latest analyze prompt clauses are applied.
-    static_prompt = get_analyze_flux2_positive_prompt(selected_type)
-    natural_prompt = build_garment_prompt_natural(
-        minicpm_description,
-        garment_type_hint=selected_type,
-        ignore_layering=True,
-    )
-    if descriptor_is_weak(natural_prompt) and selected_prompt_hint:
-        natural_prompt = selected_prompt_hint
-    base_prompt = f"{static_prompt} {natural_prompt}".strip() if natural_prompt else static_prompt
-    prompt_desc = natural_prompt or selected_prompt_hint
+    # Prefer the prompting-stage bundle when it exists.
+    # That bundle already cleaned and normalized the MiniCPM output, so
+    # the extraction stage should not rebuild from the raw descriptor unless
+    # the prompt bundle is missing or empty.
+    prompt_bundle_base = " ".join(str(selected_item.get("baseGarmentPrompt") or "").split()).strip()
+    prompt_bundle_desc = " ".join(str(selected_item.get("promptDescription") or "").split()).strip()
+
+    if prompt_bundle_base:
+        base_prompt = prompt_bundle_base
+        prompt_desc = prompt_bundle_desc or selected_prompt_hint or prompt_bundle_base
+    else:
+        # Rebuild as a fallback only when the prompting stage did not supply
+        # a usable prompt bundle.
+        static_prompt = get_analyze_flux2_positive_prompt(selected_type)
+        natural_prompt = build_garment_prompt_natural(
+            minicpm_description,
+            garment_type_hint=selected_type,
+            ignore_layering=True,
+        )
+        if descriptor_is_weak(natural_prompt) and selected_prompt_hint:
+            natural_prompt = selected_prompt_hint
+        base_prompt = f"{static_prompt} {natural_prompt}".strip() if natural_prompt else static_prompt
+        prompt_desc = natural_prompt or selected_prompt_hint
 
     extracted_url = ""
     extraction_meta = {}

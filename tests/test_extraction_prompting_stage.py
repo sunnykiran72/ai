@@ -454,6 +454,86 @@ class PromptingStageTests(unittest.TestCase):
         self.assertEqual(captured["descriptor_source_image_size"], (49, 78))
         self.assertEqual(updated_item["url"], "https://example.com/out.png")
 
+    def test_generation_prefers_prompt_bundle_over_raw_minicpm_description(self):
+        captured = {}
+
+        def run_flux2_cloth_only_extract(**kwargs):
+            captured["base_prompt"] = kwargs["base_prompt"]
+            captured["prompt_description"] = kwargs["prompt_description"]
+            captured["minicpm_description"] = kwargs["minicpm_description"]
+            return {
+                "url": "https://example.com/out.png",
+                "_processed_image_bytes": b"png",
+                "meta": {
+                    "prompt_description": kwargs["prompt_description"],
+                    "base_garment_prompt": kwargs["base_prompt"],
+                    "extraction_avoid_clause": "",
+                    "prompt_sections_raw": "",
+                },
+            }
+
+        class _Florence:
+            def describe_garment(self, *_args, **_kwargs):
+                raise AssertionError("Florence fallback should not run when prompt bundle exists")
+
+            def describe_garment_short(self, *_args, **_kwargs):
+                raise AssertionError("Florence fallback should not run when prompt bundle exists")
+
+        engine = types.SimpleNamespace(florence=_Florence())
+        image = Image.new("RGB", (100, 120), "white")
+        selected_item = {
+            "type": "dress",
+            "bbox": [1, 2, 50, 80],
+            "_image_obj": Image.new("RGB", (49, 78), "white"),
+            "_mask_obj": np.ones((120, 100), dtype=bool),
+            "promptDescription": "A clean maxi dress with a smooth bodice and ankle hem.",
+            "baseGarmentPrompt": "A single dress displayed alone with a smooth bodice and ankle hem.",
+            "minicpm_description": "category=dress; waistline=high; length_hem=ankle; layering=tiered layers; colors=red.",
+            "description": "",
+        }
+
+        updated_item, response = run_selected_item_extraction_or_response(
+            selected_item=selected_item,
+            requested_type=None,
+            direct_requested_type_mode=False,
+            full_image=image,
+            all_items_count=1,
+            stage_timings={},
+            engine=engine,
+            logger=types.SimpleNamespace(error=lambda *args, **kwargs: None, warning=lambda *args, **kwargs: None),
+            analyze_extract_cloth=True,
+            analyze_prompt_from_extracted=True,
+            analyze_require_extracted_prompt=False,
+            analyze_caption_mode="short",
+            flux2_single_garment_extract_default_steps=12,
+            flux2_single_garment_extract_default_seed=7,
+            normalize_garment_type=lambda raw: raw,
+            prepare_extract_source_image=lambda **kwargs: _Plan(kwargs["full_image"]),
+            build_error_payload=lambda **kwargs: kwargs,
+            multipart_form_response=lambda payload: payload,
+            run_flux2_cloth_only_extract=run_flux2_cloth_only_extract,
+            descriptor_is_weak=lambda text: not bool(text.strip()),
+            caption_non_garment_signal=lambda _text: False,
+            download_image=lambda _url: image,
+            flatten_rgba_on_white=lambda img: img,
+            sanitize_garment_description=lambda text: text,
+            infer_style_from_text=lambda *_args, **_kwargs: "evening",
+            wardrobe_category_from_garment_type=lambda *_args, **_kwargs: {
+                "style": "evening",
+                "primary_category_key": "dresses",
+                "category_key": "maxi_dress",
+            },
+        )
+
+        self.assertIsNone(response)
+        self.assertEqual(captured["base_prompt"], "A single dress displayed alone with a smooth bodice and ankle hem.")
+        self.assertEqual(captured["prompt_description"], "A clean maxi dress with a smooth bodice and ankle hem.")
+        self.assertEqual(
+            captured["minicpm_description"],
+            "category=dress; waistline=high; length_hem=ankle; layering=tiered layers; colors=red.",
+        )
+        self.assertEqual(updated_item["url"], "https://example.com/out.png")
+
     def test_local_minicpm_uses_structured_prompt_override_for_garment_description(self):
         captured = {}
 
@@ -700,6 +780,7 @@ class PromptingStageTests(unittest.TestCase):
     def test_normalize_user_prepare_prompt_description_keeps_identity_pose_only(self):
         raw = (
             "identity=oval face, fair skin, straight black hair; "
+            "face=calm neutral expression looking forward; "
             "body_pose=front-facing standing pose with arms relaxed; "
             "current_outfit=pink satin bra top and matching skirt; "
             "framing_lighting=mid-length crop with soft studio lighting; "
@@ -710,6 +791,7 @@ class PromptingStageTests(unittest.TestCase):
         cleaned = main_mod._normalize_user_prepare_prompt_description(raw)
 
         self.assertIn("identity: oval face, fair skin, straight black hair", cleaned)
+        self.assertIn("face: calm neutral expression looking forward", cleaned)
         self.assertIn("pose: front-facing standing pose with arms relaxed", cleaned)
         self.assertIn("framing/lighting: mid-length crop with soft studio lighting", cleaned)
         self.assertIn("occlusion: large tinted visor covering the eyes", cleaned)
@@ -720,6 +802,7 @@ class PromptingStageTests(unittest.TestCase):
     def test_normalize_user_prepare_api_prompt_description_keeps_outfit_but_strips_background(self):
         raw = (
             "identity=oval face, fair skin, straight black hair; "
+            "face=calm neutral expression looking forward; "
             "body_pose=front-facing standing pose with arms relaxed; "
             "current_outfit=black maxi dress with long sleeves; "
             "framing_lighting=full-body crop with soft indoor lighting; "
@@ -730,6 +813,7 @@ class PromptingStageTests(unittest.TestCase):
         cleaned = main_mod._normalize_user_prepare_api_prompt_description(raw)
 
         self.assertIn("identity: oval face, fair skin, straight black hair", cleaned)
+        self.assertIn("face: calm neutral expression looking forward", cleaned)
         self.assertIn("pose: front-facing standing pose with arms relaxed", cleaned)
         self.assertIn("current outfit: black maxi dress with long sleeves", cleaned)
         self.assertIn("framing/lighting: full-body crop with soft indoor lighting", cleaned)
@@ -739,6 +823,7 @@ class PromptingStageTests(unittest.TestCase):
     def test_normalize_user_prepare_api_prompt_description_strips_trailing_markup(self):
         raw = (
             "identity=light skin, blonde hair; "
+            "face=soft smile; "
             "body_pose=standing with one hand on hip; "
             "current_outfit=white crop top and pants; "
             "preserve=face identity, pose, outfit coverage>"
@@ -747,6 +832,7 @@ class PromptingStageTests(unittest.TestCase):
         cleaned = main_mod._normalize_user_prepare_api_prompt_description(raw)
 
         self.assertTrue(cleaned.endswith("outfit coverage"))
+        self.assertIn("face: soft smile", cleaned)
         self.assertNotIn(">", cleaned)
 
     def test_user_prep_rejects_multiple_prominent_people(self):

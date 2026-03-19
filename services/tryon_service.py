@@ -16,13 +16,13 @@ from typing import Dict, List, Optional, Tuple
 import io
 import time
 import logging
-from PIL import Image
+from PIL import Image, ImageOps
 
 from config import Flux2Config
 from services.ai_engine import AIEngine
 from shared.image_ops import download_image
 from shared.azure_storage import storage
-from utils import build_tryon_prompt_v2
+from utils import build_tryon_prompt_v2, infer_flux2_target_type, normalize_garment_type
 from modules.vto.board_builder import BoardBuilder
 
 logger = logging.getLogger("glamify-ai")
@@ -100,6 +100,7 @@ class TryonService:
         image = flux_result.get("image")
         if not isinstance(image, Image.Image):
             raise RuntimeError("Flux2 did not return a valid image.")
+        image = self._match_canvas(image, person.size)
 
         out_buf = io.BytesIO()
         image.save(out_buf, format="PNG")
@@ -114,6 +115,8 @@ class TryonService:
                 "garment_count": len(garments),
                 "target_types": garment_types,
                 "prompt": prompt_text,
+                "output_size": [int(image.width), int(image.height)],
+                "source_size": [int(person.width), int(person.height)],
             }
         )
 
@@ -225,6 +228,20 @@ class TryonService:
         board = builder.build_board(garments)
         return board, "collage"
 
+    @staticmethod
+    def _match_canvas(image: Image.Image, target_size: Tuple[int, int]) -> Image.Image:
+        if not isinstance(image, Image.Image):
+            return image
+        tw, th = [int(v) for v in target_size]
+        if tw <= 0 or th <= 0 or image.size == (tw, th):
+            return image
+        fitted = ImageOps.contain(image.convert("RGBA"), (tw, th), Image.Resampling.LANCZOS)
+        canvas = Image.new("RGBA", (tw, th), (255, 255, 255, 255))
+        ox = max(0, (tw - fitted.width) // 2)
+        oy = max(0, (th - fitted.height) // 2)
+        canvas.paste(fitted, (ox, oy), fitted.getchannel("A"))
+        return canvas.convert("RGB")
+
     def _resolve_products(
         self,
         *,
@@ -244,10 +261,35 @@ class TryonService:
                     return obj.get(key)
                 return getattr(obj, key, None)
 
+            def _nested_get(obj, *path):
+                current = obj
+                for key in path:
+                    current = _safe_get(current, key)
+                    if current is None:
+                        return None
+                return current
+
+            def _infer_target_type(product, prompt_desc: str) -> str:
+                candidates = [
+                    _safe_get(product, "targetType"),
+                    _nested_get(product, "garmentMetadata", "classification", "target_type"),
+                    _nested_get(product, "garmentMetadata", "classification", "backend_target_type"),
+                    _nested_get(product, "garmentMetadata", "details", "category"),
+                    _nested_get(product, "garmentMetadata", "details", "type"),
+                    _nested_get(product, "garmentMetadata", "prompt", "prompt_description"),
+                    _nested_get(product, "garmentMetadata", "prompt", "base_garment_prompt"),
+                ]
+                for value in candidates:
+                    kind = normalize_garment_type(str(value or ""))
+                    if kind:
+                        return kind
+                inferred = infer_flux2_target_type(prompt_desc)
+                return normalize_garment_type(inferred) or ""
+
             for idx, product in enumerate(products):
                 image_url = _safe_get(product, "image")
                 prompt_desc = _safe_get(product, "promptDescription")
-                target_type = _safe_get(product, "targetType") or ""
+                target_type = _infer_target_type(product, str(prompt_desc or ""))
                 if not image_url:
                     raise ValueError(f"products[{idx}].image is required")
                 if not prompt_desc or not str(prompt_desc).strip():

@@ -3705,6 +3705,45 @@ _USER_PREP_APPAREL_TERMS = (
 )
 
 
+def _format_user_prepare_reference(fields: Dict[str, str], *, include_outfit: bool) -> str:
+    def _clean(value: object) -> str:
+        return " ".join(str(value or "").split()).strip(" ,.;:/-")
+
+    identity = _clean(fields.get("identity", ""))
+    face = _clean(fields.get("face", ""))
+    pose = _clean(fields.get("body_pose", "") or fields.get("by_pose", ""))
+    lower_body_pose = _clean(fields.get("lower_body_pose", ""))
+    outfit = ""
+    if include_outfit:
+        outfit = _clean(fields.get("current_outfit", "") or fields.get("outfit", "") or fields.get("clothing", ""))
+    framing = _clean(fields.get("framing_lighting", ""))
+    occlusion = _clean(fields.get("occlusion", ""))
+    held_object = _clean(fields.get("held_object", ""))
+    preserve = _clean(fields.get("preserve", ""))
+
+    parts: List[str] = []
+    if identity:
+        parts.append(f"identity: {identity}")
+    if face:
+        parts.append(f"face: {face}")
+    if pose:
+        parts.append(f"pose: {pose}")
+    if lower_body_pose:
+        parts.append(f"lower body pose: {lower_body_pose}")
+    if outfit:
+        parts.append(f"current outfit: {outfit}")
+    if framing:
+        parts.append(f"framing/lighting: {framing}")
+    if occlusion and occlusion.lower() not in {"none", "no", "n/a"}:
+        parts.append(f"occlusion: {occlusion}")
+    if held_object:
+        parts.append(f"held object: {held_object}")
+    if preserve:
+        parts.append(f"preserve: {preserve}")
+    cleaned = ". ".join(parts).strip(" .>;,:")
+    return cleaned
+
+
 def _normalize_user_prepare_api_prompt_description(raw_text: str) -> str:
     text = re.sub(r"[<>]+", " ", " ".join(str(raw_text or "").split())).strip()
     if not text:
@@ -3712,26 +3751,7 @@ def _normalize_user_prepare_api_prompt_description(raw_text: str) -> str:
 
     fields = _parse_structured_descriptor(text)
     if fields:
-        identity = fields.get("identity", "")
-        pose = fields.get("body_pose", "") or fields.get("by_pose", "")
-        outfit = fields.get("current_outfit", "") or fields.get("outfit", "") or fields.get("clothing", "")
-        framing = fields.get("framing_lighting", "")
-        occlusion = fields.get("occlusion", "")
-        preserve = fields.get("preserve", "")
-        parts: List[str] = []
-        if identity:
-            parts.append(f"identity: {identity}")
-        if pose:
-            parts.append(f"pose: {pose}")
-        if outfit:
-            parts.append(f"current outfit: {outfit}")
-        if framing:
-            parts.append(f"framing/lighting: {framing}")
-        if occlusion and occlusion.lower() not in {"none", "no", "n/a"}:
-            parts.append(f"occlusion: {occlusion}")
-        if preserve:
-            parts.append(f"preserve: {preserve}")
-        cleaned = ". ".join(parts).strip(" .>;,:")
+        cleaned = _format_user_prepare_reference(fields, include_outfit=True)
         if cleaned:
             return cleaned
 
@@ -3752,23 +3772,7 @@ def _normalize_user_prepare_prompt_description(raw_text: str) -> str:
 
     fields = _parse_structured_descriptor(text)
     if fields:
-        identity = fields.get("identity", "")
-        pose = fields.get("body_pose", "") or fields.get("by_pose", "")
-        framing = fields.get("framing_lighting", "")
-        occlusion = fields.get("occlusion", "")
-        preserve = fields.get("preserve", "")
-        parts: List[str] = []
-        if identity:
-            parts.append(f"identity: {identity}")
-        if pose:
-            parts.append(f"pose: {pose}")
-        if framing:
-            parts.append(f"framing/lighting: {framing}")
-        if occlusion and occlusion.lower() not in {"none", "no", "n/a"}:
-            parts.append(f"occlusion: {occlusion}")
-        if preserve:
-            parts.append(f"preserve: {preserve}")
-        cleaned = ". ".join(parts).strip(" .")
+        cleaned = _format_user_prepare_reference(fields, include_outfit=False)
         if cleaned:
             return cleaned
 

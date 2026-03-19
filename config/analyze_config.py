@@ -98,6 +98,7 @@ class AnalyzeConfig(BaseModel):
     primary_type_with_florence: bool = Field(default=True, description="Use Florence for primary type detection")
     preload_florence: bool = Field(default=True, description="Preload Florence model at startup")
     florence_dress_lock_min_score: float = Field(default=0.74, description="Minimum score to lock dress type")
+    preload_minicpm: bool = Field(default=True, description="Preload MiniCPM model at startup for analyze")
     
     # Extraction
     extract_cloth: bool = Field(default=True, description="Extract cloth from detected garments")
@@ -301,6 +302,7 @@ class AnalyzeConfig(BaseModel):
             primary_type_with_florence=env_bool("ANALYZE_PRIMARY_TYPE_WITH_FLORENCE", "1"),
             preload_florence=env_bool("ANALYZE_PRELOAD_FLORENCE", "1"),
             florence_dress_lock_min_score=env_float("ANALYZE_FLORENCE_DRESS_LOCK_MIN_SCORE", 0.74),
+            preload_minicpm=env_bool("ANALYZE_PRELOAD_MINICPM", "1"),
             
             # Extraction
             extract_cloth=env_bool("ANALYZE_EXTRACT_CLOTH", "1"),
