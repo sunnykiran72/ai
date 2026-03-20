@@ -49,9 +49,11 @@ class TestMiniCPMConfigDefaults(unittest.TestCase):
             # Prompts
             self.assertEqual(config.garment_min_words, 200)
             self.assertEqual(config.garment_prompt, get_minicpm_garment_prompt())
-            self.assertIn("requested garment type", config.garment_prompt)
-            self.assertIn("rich garment paragraph", config.garment_prompt)
-            self.assertIn("visible garment facts", config.garment_prompt)
+            garment_prompt = config.garment_prompt.lower()
+            self.assertIn("requested garment type", garment_prompt)
+            self.assertIn("never infer hidden length", garment_prompt)
+            self.assertIn("not fully visible", garment_prompt)
+            self.assertIn("structured, feature-rich way", garment_prompt)
             self.assertIn("Describe only the human subject", config.person_prompt)
             self.assertIn("face=<facial expression", config.person_prompt)
             self.assertIn("lower_body_pose=<lower-body stance", config.person_prompt)
@@ -171,18 +173,22 @@ class TestMiniCPMConfigEnvironmentVariables(unittest.TestCase):
         self.assertIn("top-only guidance", top_prompt)
         self.assertIn("shoulder layout", top_prompt)
         self.assertIn("lower-body features", top_prompt)
+        self.assertIn("not fully visible", top_prompt)
 
         self.assertIn("bottom-only guidance", bottom_prompt)
         self.assertIn("waistband", bottom_prompt)
         self.assertIn("upper-body features", bottom_prompt)
+        self.assertIn("not fully visible", bottom_prompt)
 
         self.assertIn("dress-only guidance", dress_prompt)
         self.assertIn("bodice", dress_prompt)
         self.assertIn("two pieces", dress_prompt)
+        self.assertIn("not fully visible", dress_prompt)
 
         self.assertIn("outerwear-only guidance", outer_prompt)
         self.assertIn("collar", outer_prompt)
         self.assertIn("inner garments", outer_prompt)
+        self.assertIn("not fully visible", outer_prompt)
     
     def test_image_sizing_from_env(self):
         """Test image sizing configuration from environment."""

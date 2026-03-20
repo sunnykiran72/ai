@@ -604,8 +604,9 @@ class TestGarmentPromptNatural:
         prompt = get_minicpm_garment_prompt().lower()
 
         assert "requested garment type" in prompt
-        assert "rich garment paragraph" in prompt
-        assert "visible garment facts" in prompt
+        assert "never infer hidden length" in prompt
+        assert "not fully visible" in prompt
+        assert "feature-rich way" in prompt
         assert "do not mention colors" in prompt
 
     def test_minicpm_top_prompt_includes_top_only_structure_fields(self):
@@ -615,6 +616,7 @@ class TestGarmentPromptNatural:
         assert "shoulder layout" in prompt
         assert "torso panel continuity" in prompt
         assert "lower-body features" in prompt
+        assert "not fully visible" in prompt
 
     def test_minicpm_outer_prompt_excludes_inner_layers(self):
         prompt = get_minicpm_garment_prompt("outer").lower()
@@ -622,6 +624,7 @@ class TestGarmentPromptNatural:
         assert "outerwear-only guidance" in prompt
         assert "inner garments" in prompt
         assert "collar" in prompt
+        assert "not fully visible" in prompt
 
     def test_top_subtype_router_identifies_bust_band_top(self):
         subtype = infer_top_prompt_subtype(

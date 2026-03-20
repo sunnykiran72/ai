@@ -41,6 +41,7 @@ class TestMiniCPMVRunnerRetry(unittest.TestCase):
 
         self.assertTrue(runner.calls)
         self.assertIn("outerwear-only guidance", runner.calls[0].lower())
+        self.assertIn("not fully visible", runner.calls[0].lower())
 
 
 if __name__ == "__main__":
