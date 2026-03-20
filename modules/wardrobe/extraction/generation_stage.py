@@ -7,8 +7,8 @@ from typing import Callable, Dict, Optional, Tuple
 import numpy as np
 from PIL import Image
 
-from config.prompts import get_analyze_flux2_positive_prompt
-from utils.prompt_generation import build_garment_prompt_natural
+from config.prompts import get_analyze_flux2_positive_prompt, get_analyze_top_subtype_clause
+from utils.prompt_generation import build_garment_prompt_natural, infer_top_prompt_subtype
 
 
 def run_selected_item_extraction_or_response(
@@ -140,6 +140,10 @@ def run_selected_item_extraction_or_response(
         # Rebuild as a fallback only when the prompting stage did not supply
         # a usable prompt bundle.
         static_prompt = get_analyze_flux2_positive_prompt(selected_type)
+        if selected_type == "top":
+            subtype_clause = get_analyze_top_subtype_clause(infer_top_prompt_subtype(minicpm_description))
+            if subtype_clause:
+                static_prompt = f"{static_prompt} {subtype_clause}".strip()
         natural_prompt = build_garment_prompt_natural(
             minicpm_description,
             garment_type_hint=selected_type,

@@ -20,12 +20,21 @@ Return exactly one single line with this schema:
 category=<dress|top|bottom|outerwear|set|unknown>; 
 type=<specific garment type>; 
 neckline=<neckline style>; 
+upper_edge_shape=<straight|scoop|sweetheart|v|square|asymmetric|curved|unknown>; 
 collar=<collar style>; 
 lapel=<lapel style>; 
 shoulder_style=<shoulder/strap style>; 
 asymmetry=<symmetric|asymmetric|one-shoulder|off-shoulder|single-sleeve|unknown>; 
 sleeves=<sleeve style or length>; 
 cuffs=<cuff style>; 
+upper_edge_depth=<high|mid|low|very low|unknown>; 
+upper_chest_exposed=<yes|no|unknown>; 
+shoulder_panel_present=<yes|no|unknown>; 
+underbust_visible=<yes|no|unknown>; 
+abdomen_visible=<yes|no|unknown>; 
+torso_panel_continuity=<band_only|short_panel|full_panel|unknown>; 
+lower_front_coverage=<band_only|narrow_underbust_band|short_panel|full_panel|unknown>; 
+sleeve_attachment_mode=<shoulder_seam|side_bust|underarm_band|off_shoulder|unknown>; 
 bodice_cut=<bodice or torso shaping>; 
 waistline=<waist placement or shaping>; 
 silhouette=<fit and overall shape>; 
@@ -44,6 +53,16 @@ layering=<layers or overlays if present>;
 special_details=<unique construction or design details>; 
 preserve=<state that garment structure and details must remain unchanged>. 
 Use 'unknown' only when truly not visible. Prefer a concrete value if it can be inferred from visible pixels.
+For tops, length_hem must describe where the garment actually ends, for example underbust, cropped, midriff, waist, hip, or tunic length.
+If the top stops below the bust or exposes the abdomen, say that in length_hem; do not use waistline=high as a substitute for hem position.
+For tops, neckline must describe the actual visible upper edge of the garment. If the neckline sits low, wide, or exposes the upper chest, describe that visible opening directly.
+For tops, upper_edge_shape must describe the visible upper edge shape, for example straight, scoop, sweetheart, v, square, or asymmetric.
+Do not use bishop unless the neckline is visibly gathered or high at the neck opening.
+For tops, shoulder_panel_present must say whether there is actual fabric spanning the shoulder or clavicle area above the bust opening.
+For tops, sleeve_attachment_mode must describe where the sleeves visually connect, for example shoulder seam, side bust, underarm band, or off shoulder.
+For tops, torso_panel_continuity must describe whether the front is only a bust band, a short cropped torso panel, or a full torso panel.
+For tops, lower_front_coverage must describe the actual lower front fabric coverage, for example band_only, narrow_underbust_band, short_panel, or full_panel.
+For tops, fill upper_edge_depth, upper_chest_exposed, shoulder_panel_present, underbust_visible, abdomen_visible, torso_panel_continuity, lower_front_coverage, and sleeve_attachment_mode from visible pixels. These fields are critical and should not be left unknown when the image clearly shows them.
 Do not mention colors, person, mannequin, background, camera, or recommendations."""
 
 MINICPM_PERSON_OUTFIT_DESCRIPTION_PROMPT = """Describe only the human subject for identity-preserving virtual try-on. 
@@ -65,7 +84,8 @@ Be factual from visible pixels only; use 'unknown' for hidden details."""
 
 COLOR_PRESERVATION_CLAUSE = (
     "Preserve the garment's original colors, print placement, and material appearance exactly as in the reference. "
-    "Match the reference colors and print placement precisely."
+    "Match the reference colors and print placement precisely. "
+    "Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading."
 )
 
 FLUX2_POSITIVE_PROMPTS = {
@@ -134,8 +154,33 @@ ANALYZE_TOP_ONLY_CLAUSE = (
     "No added panels, yokes, underlayers, or secondary garment sections above the neckline or below the hem. "
     "Do not change the shoulder layout, sleeve count, strap count, or neckline asymmetry from the reference. "
     "Do not invent a second shoulder, mirrored strap, mirrored sleeve, seam bridge, or new asymmetrical cut. "
+    "Preserve the exact upper edge of the garment; if the source neckline is low, wide, or exposes the upper chest, keep that same neckline depth and opening. Do not raise it into a higher-coverage chest panel or a more modest scoop top. "
+    "If the source top ends below the bust or has a cropped hem, preserve that exact short hem position and do not extend the garment into the abdomen, waist, or full torso length. "
+    "Preserve the exact garment color tone and shading from the reference crop; do not warm it, cool it, bleach it, brighten it, darken it, or make it more saturated. "
     "Do not add padding, cups, or extra bust volume; keep bust shaping, seams, and underbust placement exactly as the reference."
 )
+
+ANALYZE_TOP_SUBTYPE_ONLY_CLAUSES = {
+    "bust_band_top": (
+        "Bust-band top only: keep the exposed upper chest and exposed lower torso exactly as in the source. "
+        "Do not add a continuous chest panel above the visible bust band. "
+        "Do not add a shoulder yoke, clavicle panel, or fabric bridge across the upper chest. "
+        "Keep long sleeves attached from the side-bust or underarm structure when that is how they appear in the source. "
+        "Do not extend the garment into a longer torso panel below the underbust or cropped hem."
+    ),
+    "cropped_panel_top": (
+        "Cropped-panel top only: keep the short front torso panel exactly as in the reference. "
+        "Do not shorten it into a narrow bra band and do not extend it into full torso length."
+    ),
+    "asymmetric_top": (
+        "Asymmetric top only: preserve the exact open side, shoulder exposure, and unmatched sleeve or strap arrangement. "
+        "Do not mirror the missing side and do not regularize the top into a symmetric chest panel."
+    ),
+    "standard_top": (
+        "Standard top only: keep the garment as a continuous symmetric top with the original neckline, torso panel, and hem coverage. "
+        "Do not convert it into a bra band, bandeau, or asymmetrical cut."
+    ),
+}
 
 ANALYZE_BOTTOM_ONLY_CLAUSE = (
     "Bottom-only: no shirt, no blouse, no top, no torso section, and no upper-body garment visible above the waistband. "
@@ -263,6 +308,11 @@ def get_analyze_flux2_positive_prompt(garment_type: str) -> str:
     base = get_flux2_positive_prompt(garment_type)
     extra = ANALYZE_TYPE_ONLY_CLAUSES.get(garment_type, "")
     return f"{base} {ANALYZE_GARMENT_ONLY_CLAUSE} {extra}".strip()
+
+
+def get_analyze_top_subtype_clause(top_subtype: str) -> str:
+    """Return an additional analyze guard for a routed top subtype."""
+    return ANALYZE_TOP_SUBTYPE_ONLY_CLAUSES.get(str(top_subtype or "").strip().lower(), "")
 
 
 def get_flux2_negative_prompt(garment_type: str) -> str:

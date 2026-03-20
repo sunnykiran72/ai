@@ -3,8 +3,8 @@ from __future__ import annotations
 import re
 from typing import Callable, Dict, Optional, Tuple
 
-from utils import build_garment_prompt_natural
-from config.prompts import get_analyze_flux2_positive_prompt
+from config.prompts import get_analyze_flux2_positive_prompt, get_analyze_top_subtype_clause
+from utils.prompt_generation import build_garment_prompt_natural, infer_top_prompt_subtype
 
 
 _COLOR_TERMS = {
@@ -169,6 +169,10 @@ def _build_flux2_prompt(
     strip_descriptor_color_clause: Callable[[str], str],
 ) -> tuple[str, str]:
     static_prompt = get_analyze_flux2_positive_prompt(selected_type)
+    if selected_type == "top":
+        subtype_clause = get_analyze_top_subtype_clause(infer_top_prompt_subtype(minicpm_desc))
+        if subtype_clause:
+            static_prompt = f"{static_prompt} {subtype_clause}".strip()
     natural = build_garment_prompt_natural(
         minicpm_desc,
         garment_type_hint=selected_type,

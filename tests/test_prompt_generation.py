@@ -20,8 +20,9 @@ from utils.prompt_generation import (
     join_avoid_terms,
     build_garment_prompt_natural,
     build_tryon_prompt_v2,
+    infer_top_prompt_subtype,
 )
-from config.prompts import get_analyze_flux2_positive_prompt
+from config.prompts import get_analyze_flux2_positive_prompt, get_analyze_top_subtype_clause
 
 
 class TestStructuredDescriptorParsing:
@@ -532,11 +533,131 @@ class TestGarmentPromptNatural:
         assert "high waist" not in lowered
         assert "long sleeves" in lowered or "long sleeve" in lowered
 
+    def test_top_prompt_rewrites_bishop_neckline_when_other_fields_indicate_low_open_bust_top(self):
+        prompt = build_garment_prompt_natural(
+            "category=top; type=crop top; neckline=bishop; shoulder_style=strapless; sleeves=long sleeves; "
+            "bodice_cut=ruched bust; waistline=high; silhouette=figure-hugging; length_hem=midriff; "
+            "fabric_texture=smooth; special_details=ruched bust detail",
+            garment_type_hint="top",
+        )
+
+        lowered = prompt.lower()
+        assert "low scoop neckline" in lowered
+        assert "bishop neckline" not in lowered
+
+    def test_top_prompt_uses_targeted_upper_edge_fields_to_override_high_coverage_neckline(self):
+        prompt = build_garment_prompt_natural(
+            "category=top; type=crop top; neckline=crew; shoulder_style=strapless; sleeves=long sleeves; "
+            "upper_edge_shape=straight; torso_panel_continuity=short_panel; "
+            "upper_edge_depth=low; upper_chest_exposed=yes; underbust_visible=yes; abdomen_visible=yes; "
+            "bodice_cut=ruched bust; silhouette=figure-hugging; fabric_texture=smooth; special_details=ruched bodice",
+            garment_type_hint="top",
+        )
+
+        lowered = prompt.lower()
+        assert "low scoop neckline" in lowered
+        assert "crew neckline" not in lowered
+        assert "cropped hem" in lowered or "underbust hem" in lowered
+        assert "short front panel" in lowered or "narrow underbust band" in lowered
+
+    def test_top_prompt_preserves_bralette_context_from_structured_descriptor(self):
+        prompt = build_garment_prompt_natural(
+            "category=top; type=push-up bralette; neckline=low scoop; shoulder_style=strapless; asymmetry=unknown; "
+            "sleeves=long sleeves; torso_panel_continuity=band_only; upper_chest_exposed=yes; "
+            "sleeves=long sleeves; bodice_cut=push-up; waistline=high; silhouette=figure-hugging; "
+            "fabric_texture=smooth; embellishments=ruching; special_details=ruched bodice",
+            garment_type_hint="top",
+        )
+
+        lowered = prompt.lower()
+        assert "push-up bralette" in lowered
+        assert "strapless shoulder" in lowered
+        assert "push-up bodice" in lowered
+        assert "asymmetric shoulder structure" not in lowered
+        assert "high waist" not in lowered
+        assert "underbust hem" in lowered or "cropped hem" in lowered
+        assert "band-only front" in lowered or "narrow underbust band" in lowered
+        assert "open upper chest" in lowered
+
+    def test_unknown_structured_asymmetry_does_not_infer_asymmetric_from_key_name(self):
+        prompt = build_garment_prompt_natural(
+            "category=top; type=brassiere; neckline=v-neck; shoulder_style=thin_straps; asymmetry=unknown; "
+            "sleeves=unknown; silhouette=close_fit; fabric_texture=satin; special_details=bow_center_front",
+            garment_type_hint="top",
+        )
+
+        lowered = prompt.lower()
+        assert "asymmetric shoulder structure" not in lowered
+        assert "brassiere" in lowered
+        assert "cropped hem" in lowered
+
     def test_analyze_top_prompt_contains_flat_front_guard(self):
         prompt = get_analyze_flux2_positive_prompt("top").lower()
 
         assert "flat and cloth-like" in prompt
         assert "torso volume" in prompt
+        assert "do not extend the garment into the abdomen" in prompt
+        assert "do not warm it, cool it, bleach it, brighten it, darken it" in prompt
+        assert "do not raise it into a higher-coverage chest panel" in prompt
+
+    def test_top_subtype_router_identifies_bust_band_top(self):
+        subtype = infer_top_prompt_subtype(
+            "category=top; type=push-up bralette; upper_edge_shape=straight; upper_edge_depth=low; "
+            "upper_chest_exposed=yes; shoulder_panel_present=no; underbust_visible=yes; abdomen_visible=no; "
+            "torso_panel_continuity=band_only; lower_front_coverage=narrow_underbust_band; "
+            "sleeve_attachment_mode=side_bust; sleeves=long sleeves; shoulder_style=strapless; bodice_cut=ruched bust"
+        )
+
+        assert subtype == "bust_band_top"
+
+    def test_top_subtype_router_identifies_cropped_panel_top(self):
+        subtype = infer_top_prompt_subtype(
+            "category=top; type=crop top; upper_edge_shape=scoop; upper_edge_depth=low; "
+            "upper_chest_exposed=yes; shoulder_panel_present=yes; underbust_visible=no; abdomen_visible=yes; "
+            "torso_panel_continuity=short_panel; lower_front_coverage=short_panel; "
+            "sleeve_attachment_mode=shoulder_seam; sleeves=long sleeves; shoulder_style=strapless; bodice_cut=ruched bust"
+        )
+
+        assert subtype == "cropped_panel_top"
+
+    def test_top_subtype_router_identifies_asymmetric_top(self):
+        subtype = infer_top_prompt_subtype(
+            "category=top; type=top; neckline=asymmetric; upper_edge_shape=asymmetric; "
+            "asymmetry=one-shoulder; sleeves=single long sleeve"
+        )
+
+        assert subtype == "asymmetric_top"
+
+    def test_bust_band_top_clause_blocks_extra_panels(self):
+        clause = get_analyze_top_subtype_clause("bust_band_top").lower()
+
+        assert "do not add a continuous chest panel above the visible bust band" in clause
+        assert "do not add a shoulder yoke" in clause
+        assert "do not extend the garment into a longer torso panel" in clause
+
+    def test_march12_style_top_routes_to_bust_band_and_keeps_underbust_band_language(self):
+        prompt = build_garment_prompt_natural(
+            "category=top; type=crop top; neckline=sweetheart; upper_edge_shape=sweetheart; "
+            "shoulder_style=strapless; sleeves=long sleeves; upper_edge_depth=low; upper_chest_exposed=yes; "
+            "shoulder_panel_present=no; underbust_visible=no; abdomen_visible=yes; torso_panel_continuity=short_panel; "
+            "lower_front_coverage=narrow_underbust_band; sleeve_attachment_mode=side_bust; "
+            "bodice_cut=shaping; silhouette=cropped; length_hem=midriff; fabric_texture=smooth; "
+            "embellishments=ribbed texture; special_details=ribbed bust band",
+            garment_type_hint="top",
+        )
+
+        lowered = prompt.lower()
+        assert infer_top_prompt_subtype(
+            "category=top; type=crop top; neckline=sweetheart; upper_edge_shape=sweetheart; "
+            "shoulder_style=strapless; sleeves=long sleeves; upper_edge_depth=low; upper_chest_exposed=yes; "
+            "shoulder_panel_present=no; underbust_visible=no; abdomen_visible=yes; torso_panel_continuity=short_panel; "
+            "lower_front_coverage=narrow_underbust_band; sleeve_attachment_mode=side_bust; "
+            "bodice_cut=shaping; silhouette=cropped; length_hem=midriff"
+        ) == "bust_band_top"
+        assert "strapless shoulder" in lowered
+        assert "underbust hem" in lowered
+        assert "narrow underbust band" in lowered
+        assert "short front panel" not in lowered
 
     def test_analyze_bottom_prompt_contains_single_piece_guard(self):
         prompt = get_analyze_flux2_positive_prompt("bottom").lower()

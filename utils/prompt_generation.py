@@ -384,7 +384,7 @@ _COLOR_TERMS = {
 
 
 def _clean_descriptor_value(value: str) -> str:
-    cleaned = " ".join(str(value or "").split()).strip()
+    cleaned = " ".join(str(value or "").replace("_", " ").split()).strip()
     if not cleaned:
         return ""
     low = cleaned.lower()
@@ -560,6 +560,15 @@ def _extract_structured_fields(desc: str) -> Dict[str, str]:
         "special_details": "special_details",
         "sleeves": "sleeves",
         "neckline": "neckline",
+        "upper_edge_shape": "upper_edge_shape",
+        "upper_edge_depth": "upper_edge_depth",
+        "upper_chest_exposed": "upper_chest_exposed",
+        "shoulder_panel_present": "shoulder_panel_present",
+        "underbust_visible": "underbust_visible",
+        "abdomen_visible": "abdomen_visible",
+        "torso_panel_continuity": "torso_panel_continuity",
+        "lower_front_coverage": "lower_front_coverage",
+        "sleeve_attachment_mode": "sleeve_attachment_mode",
         "bodice_cut": "bodice_cut",
         "silhouette": "silhouette",
         "fabric_texture": "fabric_texture",
@@ -583,18 +592,215 @@ def _extract_structured_fields(desc: str) -> Dict[str, str]:
         alias = aliases.get(key, key)
         if alias not in aliases.values():
             continue
-        cleaned = _clean_descriptor_value(value)
+        if alias in {"upper_chest_exposed", "shoulder_panel_present", "underbust_visible", "abdomen_visible"}:
+            cleaned = " ".join(str(value or "").split()).strip().lower()
+            if cleaned not in {"yes", "no", "unknown", "true", "false"}:
+                cleaned = ""
+        else:
+            cleaned = _clean_descriptor_value(value)
         if cleaned:
             normalized[alias] = cleaned
-    if "asymmetry" not in normalized:
+    if "asymmetry" not in normalized and "asymmetry" not in raw:
         inferred_asymmetry = _infer_asymmetry_from_text(desc)
         if inferred_asymmetry:
             normalized["asymmetry"] = inferred_asymmetry
-    if "sleeves" not in normalized:
+    if "sleeves" not in normalized and "sleeves" not in raw:
         inferred_sleeves = _infer_sleeves_from_text(desc)
         if inferred_sleeves:
             normalized["sleeves"] = inferred_sleeves
     return normalized
+
+
+def _descriptor_flag_is_yes(value: str) -> bool:
+    return str(value or "").strip().lower() in {"yes", "true"}
+
+
+def _descriptor_flag_is_no(value: str) -> bool:
+    return str(value or "").strip().lower() in {"no", "false"}
+
+
+def _normalize_top_shape_label(value: str) -> str:
+    low = " ".join(str(value or "").split()).strip().lower()
+    if not low or low in {"unknown", "none", "n/a"}:
+        return ""
+    if low in {"low scoop", "scoop"}:
+        return "scoop"
+    if low in {"sweetheart neckline", "sweetheart"}:
+        return "sweetheart"
+    if low in {"v-neck", "v neck", "v"}:
+        return "v"
+    if low in {"square neckline", "square"}:
+        return "square"
+    if low in {"straight", "straight across"}:
+        return "straight"
+    if low in {"asymmetric", "one-shoulder", "one shoulder"}:
+        return "asymmetric"
+    if low in {"curved", "rounded"}:
+        return "curved"
+    return low
+
+
+def _normalize_top_panel_label(value: str) -> str:
+    low = " ".join(str(value or "").replace("_", " ").split()).strip().lower()
+    if not low or low in {"unknown", "none", "n/a"}:
+        return ""
+    if low in {"band only", "band-only", "bra band"}:
+        return "band_only"
+    if low in {"short panel", "short torso panel", "cropped panel"}:
+        return "short_panel"
+    if low in {"full panel", "full torso panel", "continuous panel"}:
+        return "full_panel"
+    return low.replace(" ", "_")
+
+
+def _normalize_lower_front_coverage(value: str) -> str:
+    low = " ".join(str(value or "").replace("_", " ").split()).strip().lower()
+    if not low or low in {"unknown", "none", "n/a"}:
+        return ""
+    if low in {"band only", "band-only"}:
+        return "band_only"
+    if low in {"narrow underbust band", "underbust band", "narrow band"}:
+        return "narrow_underbust_band"
+    if low in {"short panel", "cropped panel", "short torso panel"}:
+        return "short_panel"
+    if low in {"full panel", "full torso panel"}:
+        return "full_panel"
+    return low.replace(" ", "_")
+
+
+def _normalize_sleeve_attachment_mode(value: str) -> str:
+    low = " ".join(str(value or "").replace("_", " ").split()).strip().lower()
+    if not low or low in {"unknown", "none", "n/a"}:
+        return ""
+    if low in {"shoulder seam", "shoulder attachment"}:
+        return "shoulder_seam"
+    if low in {"side bust", "side-bust", "bust side"}:
+        return "side_bust"
+    if low in {"underarm band", "underarm", "under bust band"}:
+        return "underarm_band"
+    if low in {"off shoulder", "off-shoulder"}:
+        return "off_shoulder"
+    return low.replace(" ", "_")
+
+
+def infer_top_prompt_profile(desc: str) -> Dict[str, str]:
+    text = " ".join(str(desc or "").split()).strip()
+    fields = _extract_structured_fields(text)
+    type_lower = str(fields.get("type") or "").strip().lower()
+    asymmetry_low = str(fields.get("asymmetry") or "").strip().lower()
+    shoulder_low = str(fields.get("shoulder_style") or "").strip().lower()
+    sleeves_low = str(fields.get("sleeves") or "").strip().lower()
+    neckline_low = str(fields.get("neckline") or "").strip().lower()
+    hem_low = str(fields.get("length_hem") or "").strip().lower()
+    edge_depth = str(fields.get("upper_edge_depth") or "").strip().lower()
+    upper_edge_shape = _normalize_top_shape_label(fields.get("upper_edge_shape") or fields.get("neckline") or "")
+    upper_chest_exposed = _descriptor_flag_is_yes(fields.get("upper_chest_exposed"))
+    shoulder_panel_present = fields.get("shoulder_panel_present")
+    underbust_visible = _descriptor_flag_is_yes(fields.get("underbust_visible"))
+    abdomen_visible = _descriptor_flag_is_yes(fields.get("abdomen_visible"))
+    torso_panel = _normalize_top_panel_label(fields.get("torso_panel_continuity") or "")
+    lower_front_coverage = _normalize_lower_front_coverage(fields.get("lower_front_coverage") or "")
+    sleeve_attachment_mode = _normalize_sleeve_attachment_mode(fields.get("sleeve_attachment_mode") or "")
+    bodice_low = str(fields.get("bodice_cut") or "").strip().lower()
+    details_low = " ".join(
+        str(fields.get(key) or "").strip().lower()
+        for key in ("special_details", "embellishments", "construction")
+    )
+
+    is_short_bust_top = any(
+        key in type_lower for key in ("bra", "bralette", "brassiere", "bandeau", "bustier")
+    )
+    is_asymmetric_top = asymmetry_low in {"asymmetric", "one-shoulder", "single-sleeve"} or any(
+        marker in shoulder_low for marker in ("one-shoulder", "one shoulder", "single-sleeve", "single sleeve")
+    )
+
+    if not torso_panel:
+        if hem_low == "underbust":
+            torso_panel = "band_only"
+        elif abdomen_visible or hem_low in {"crop", "cropped", "midriff", "upper midriff"}:
+            torso_panel = "short_panel"
+        elif underbust_visible and not abdomen_visible:
+            torso_panel = "band_only"
+        elif is_short_bust_top and upper_chest_exposed and "long sleeve" not in sleeves_low:
+            torso_panel = "band_only"
+        else:
+            torso_panel = "full_panel"
+
+    if not lower_front_coverage:
+        if torso_panel == "band_only" or hem_low == "underbust":
+            lower_front_coverage = "narrow_underbust_band"
+        elif torso_panel == "short_panel":
+            lower_front_coverage = "short_panel"
+        elif torso_panel == "full_panel":
+            lower_front_coverage = "full_panel"
+
+    if not sleeve_attachment_mode and shoulder_low in {"strapless", "bare", "bare shoulder"} and "long sleeve" in sleeves_low:
+        if upper_chest_exposed:
+            sleeve_attachment_mode = "side_bust"
+        else:
+            sleeve_attachment_mode = "off_shoulder"
+
+    shoulder_panel_missing = _descriptor_flag_is_no(shoulder_panel_present)
+    if not shoulder_panel_present and shoulder_low in {"strapless", "bare", "bare shoulder"} and upper_chest_exposed:
+        shoulder_panel_present = "no"
+        shoulder_panel_missing = True
+
+    bust_focus = (
+        "ruched" in bodice_low
+        or "push-up" in bodice_low
+        or "bust" in bodice_low
+        or "shaping" in bodice_low
+        or "ruched" in details_low
+        or "bust" in details_low
+    )
+    long_sleeve_open_bust_geometry = (
+        "long sleeve" in sleeves_low
+        and shoulder_low in {"strapless", "bare", "bare shoulder"}
+        and upper_chest_exposed
+        and upper_edge_shape in {"sweetheart", "straight", "scoop", "curved", "v"}
+        and sleeve_attachment_mode in {"side_bust", "underarm_band", "off_shoulder"}
+        and shoulder_panel_missing
+    )
+    if long_sleeve_open_bust_geometry and (
+        lower_front_coverage in {"band_only", "narrow_underbust_band"}
+        or (torso_panel in {"band_only", "short_panel"} and bust_focus)
+    ):
+        torso_panel = "band_only"
+        lower_front_coverage = "narrow_underbust_band"
+
+    if is_asymmetric_top:
+        subtype = "asymmetric_top"
+    elif lower_front_coverage in {"band_only", "narrow_underbust_band"} or torso_panel == "band_only":
+        subtype = "bust_band_top"
+    elif torso_panel == "short_panel":
+        subtype = "cropped_panel_top"
+    else:
+        subtype = "standard_top"
+
+    if not upper_edge_shape:
+        if neckline_low in {"crew", "boat", "jewel", "bishop"}:
+            upper_edge_shape = neckline_low
+        elif shoulder_low == "strapless" and edge_depth in {"low", "very low"}:
+            upper_edge_shape = "straight"
+
+    return {
+        "subtype": subtype,
+        "upper_edge_shape": upper_edge_shape,
+        "upper_edge_depth": edge_depth,
+        "upper_chest_exposed": "yes" if upper_chest_exposed else "no",
+        "shoulder_panel_present": str(shoulder_panel_present or "").strip().lower() or "unknown",
+        "underbust_visible": "yes" if underbust_visible else "no",
+        "abdomen_visible": "yes" if abdomen_visible else "no",
+        "torso_panel_continuity": torso_panel,
+        "lower_front_coverage": lower_front_coverage,
+        "sleeve_attachment_mode": sleeve_attachment_mode,
+        "hem": hem_low,
+        "neckline": neckline_low,
+    }
+
+
+def infer_top_prompt_subtype(desc: str) -> str:
+    return infer_top_prompt_profile(desc).get("subtype", "standard_top")
 
 
 def build_garment_prompt_natural(
@@ -622,6 +828,74 @@ def build_garment_prompt_natural(
     is_bust_garment = any(
         key in type_lower for key in ("bra", "bralette", "bustier", "corset", "bandeau")
     )
+    is_short_bust_top = any(
+        key in type_lower for key in ("bra", "bralette", "brassiere", "bandeau")
+    )
+    top_profile: Dict[str, str] = {}
+
+    if is_top:
+        top_profile = infer_top_prompt_profile(text)
+        neckline_low = str(fields.get("neckline") or "").strip().lower()
+        shoulder_low = str(fields.get("shoulder_style") or "").strip().lower()
+        sleeves_low = str(fields.get("sleeves") or "").strip().lower()
+        bodice_low = str(fields.get("bodice_cut") or "").strip().lower()
+        hem_low = str(fields.get("length_hem") or "").strip().lower()
+        upper_edge_depth = str(fields.get("upper_edge_depth") or "").strip().lower()
+        upper_chest_exposed = str(fields.get("upper_chest_exposed") or "").strip().lower()
+        underbust_visible = str(fields.get("underbust_visible") or "").strip().lower()
+        abdomen_visible = str(fields.get("abdomen_visible") or "").strip().lower()
+        details_low = " ".join(
+            str(fields.get(key) or "").strip().lower()
+            for key in ("special_details", "embellishments", "construction")
+        )
+        upper_edge_is_low_open = (
+            upper_edge_depth in {"low", "very low"}
+            or upper_chest_exposed in {"yes", "true"}
+        )
+        looks_like_low_open_bust_top = (
+            (
+                is_short_bust_top
+                or hem_low in {"crop", "cropped", "midriff", "upper midriff", "underbust"}
+                or abdomen_visible in {"yes", "true"}
+                or underbust_visible in {"yes", "true"}
+            )
+            and "long sleeve" in sleeves_low
+            and shoulder_low in {"strapless", "bare", "bare shoulder"}
+            and (
+                "ruched" in bodice_low
+                or "push-up" in bodice_low
+                or "bust" in bodice_low
+                or "ruched" in details_low
+                or "bust" in details_low
+            )
+        )
+        if upper_edge_is_low_open and neckline_low in {"bishop", "crew", "boat", "jewel"}:
+            fields["neckline"] = "low scoop"
+        elif neckline_low == "bishop" and looks_like_low_open_bust_top:
+            fields["neckline"] = "low scoop"
+        shape_label = str(top_profile.get("upper_edge_shape") or "").strip().lower()
+        if shape_label and fields.get("neckline"):
+            current_neckline = str(fields.get("neckline") or "").strip().lower()
+            weak_necklines = {"unknown", "crew", "boat", "jewel", "bishop"}
+            if shape_label in {"straight", "sweetheart", "square", "v", "scoop"} and (
+                current_neckline in weak_necklines or not current_neckline
+            ):
+                fields["neckline"] = shape_label
+        elif shape_label and not fields.get("neckline"):
+            fields["neckline"] = shape_label
+        if (
+            not fields.get("length_hem")
+            and (abdomen_visible in {"yes", "true"} or underbust_visible in {"yes", "true"})
+        ):
+            fields["length_hem"] = "cropped"
+        torso_panel = _normalize_top_panel_label(top_profile.get("torso_panel_continuity") or "")
+        lower_front_coverage = _normalize_lower_front_coverage(top_profile.get("lower_front_coverage") or "")
+        if top_profile.get("subtype") == "bust_band_top" and lower_front_coverage in {"band_only", "narrow_underbust_band"}:
+            fields["length_hem"] = "underbust"
+        elif torso_panel == "band_only":
+            fields.setdefault("length_hem", "underbust")
+        elif torso_panel == "short_panel" and not fields.get("length_hem"):
+            fields["length_hem"] = "cropped"
 
     def _append_unique(parts: List[str], phrase: str) -> None:
         cleaned = " ".join(str(phrase or "").split()).strip(" ,.;:/-")
@@ -670,13 +944,22 @@ def build_garment_prompt_natural(
         shoulder_text = " ".join(str(shoulder).split()).strip()
         shoulder_low = shoulder_text.lower()
         asymmetry_low = str(fields.get("asymmetry") or "").strip().lower()
-        if is_top and not is_bust_garment and sleeves and shoulder_low in {"strapless", "bare", "bare shoulder"}:
+        top_subtype = str(top_profile.get("subtype") or "").strip().lower()
+        if (
+            is_top
+            and not is_bust_garment
+            and top_subtype not in {"bust_band_top"}
+            and sleeves
+            and shoulder_low in {"strapless", "bare", "bare shoulder"}
+        ):
             shoulder_text = ""
         if shoulder_text and asymmetry_low and shoulder_low == asymmetry_low:
             shoulder_text = ""
         if shoulder_text:
             _append_unique(construction_bits, _maybe_suffix(shoulder_text, "shoulder", "shoulder"))
-    asymmetry = fields.get("asymmetry") or _infer_asymmetry_from_text(text)
+    asymmetry = fields.get("asymmetry")
+    if not asymmetry and "asymmetry" not in explicit_fields:
+        asymmetry = _infer_asymmetry_from_text(text)
     if asymmetry and asymmetry.lower() not in {"symmetric", "unknown", "none", "n/a"}:
         _append_unique(construction_bits, f"{asymmetry} shoulder structure")
     if sleeves:
@@ -684,8 +967,6 @@ def build_garment_prompt_natural(
         _append_unique(construction_bits, _maybe_suffix(sleeves, "sleeves", "sleeve"))
     bodice = fields.get("bodice_cut")
     if bodice:
-        if is_top and not is_bust_garment:
-            bodice = _strip_bust_terms(bodice)
         bodice = _cleanup_value_for_type(bodice)
         if bodice:
             _append_unique(construction_bits, _maybe_suffix(bodice, "bodice", "bodice"))
@@ -696,6 +977,10 @@ def build_garment_prompt_natural(
         if is_top and not is_bust_garment:
             hem_low = str(fields.get("length_hem") or "").strip().lower()
             if hem_low in {"crop", "cropped", "midriff", "upper midriff"}:
+                waistline = ""
+        elif is_top and is_bust_garment:
+            # "high waist" on bralette-like tops tends to hallucinate a longer torso panel.
+            if waist_low in {"high", "high waist", "high-waisted", "high waisted"}:
                 waistline = ""
         if waistline:
             _append_unique(construction_bits, _maybe_suffix(waistline, "waist", "waist"))
@@ -709,6 +994,8 @@ def build_garment_prompt_natural(
         lowered = length_hem.lower()
         if "hem" in lowered:
             hem_phrase = length_hem
+        elif lowered == "underbust":
+            hem_phrase = "underbust hem"
         elif lowered in {"crop", "cropped"}:
             hem_phrase = "cropped hem"
         elif lowered in {"midriff", "upper midriff"}:
@@ -722,6 +1009,19 @@ def build_garment_prompt_natural(
         else:
             hem_phrase = f"{length_hem} hem"
         _append_unique(construction_bits, hem_phrase)
+    elif is_top and is_short_bust_top:
+        # Bra/bralette-like tops should stay short even when MiniCPM misses the hem label.
+        _append_unique(construction_bits, "cropped hem")
+    if is_top:
+        top_subtype = str(top_profile.get("subtype") or "").strip().lower()
+        torso_panel = _normalize_top_panel_label(top_profile.get("torso_panel_continuity") or "")
+        if top_subtype == "bust_band_top":
+            _append_unique(construction_bits, "open upper chest")
+            lower_front_coverage = _normalize_lower_front_coverage(top_profile.get("lower_front_coverage") or "")
+            if lower_front_coverage in {"band_only", "narrow_underbust_band"} or torso_panel == "band_only":
+                _append_unique(construction_bits, "narrow underbust band")
+        elif top_subtype == "cropped_panel_top" and torso_panel == "short_panel":
+            _append_unique(construction_bits, "short front panel")
     length_value = fields.get("length")
     if length_value:
         length_value = _cleanup_value_for_type(length_value)
@@ -768,8 +1068,6 @@ def build_garment_prompt_natural(
         if ignore_layering and key == "layering":
             continue
         value = fields.get(key)
-        if value and is_top and not is_bust_garment:
-            value = _strip_bust_terms(value)
         value = _cleanup_value_for_type(value)
         if value:
             _append_unique(details_bits, value)
@@ -799,8 +1097,6 @@ def build_garment_prompt_natural(
     fallback = _clean_descriptor_value(fallback)
     if ignore_layering:
         fallback = _remove_layering_terms(fallback)
-    if is_top and not is_bust_garment:
-        fallback = _strip_bust_terms(fallback)
     fallback = _cleanup_value_for_type(fallback)
     fallback = re.sub(r"\s+", " ", fallback).strip(" ,.;:/-")
     if fallback:
