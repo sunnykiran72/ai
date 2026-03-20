@@ -4,7 +4,7 @@ import re
 from typing import Callable, Dict, Optional, Tuple
 
 from config.prompts import get_analyze_flux2_positive_prompt, get_analyze_top_subtype_clause
-from utils.prompt_generation import build_garment_prompt_natural, infer_top_prompt_subtype
+from utils.prompt_generation import infer_top_prompt_subtype
 
 
 _COLOR_TERMS = {
@@ -19,6 +19,13 @@ _BODY_TERMS = {
     "person", "people", "model", "mannequin", "woman", "man", "girl", "boy",
     "body", "torso", "chest", "waist", "hip", "hips", "leg", "legs", "arm", "arms",
     "hand", "hands", "finger", "fingers", "face", "neck", "shoulder", "shoulders",
+}
+_SCENE_TERMS = {
+    "background", "room", "camera", "phone", "selfie", "mirror", "prop", "props",
+    "accessory", "accessories", "watermark", "text", "logo", "caption", "screen",
+    "screenshot", "scene", "person", "people", "model", "mannequin", "body",
+    "face", "skin", "hair", "hands", "hand", "legs", "leg", "arms", "arm", "wearing",
+    "worn", "wears", "pose",
 }
 
 
@@ -163,6 +170,34 @@ def _build_attribute_clause(minicpm_desc: str) -> str:
     return "Garment attributes: " + "; ".join(parts) + "."
 
 
+def _build_direct_minicpm_prompt(
+    minicpm_desc: str,
+    *,
+    strip_descriptor_color_clause: Callable[[str], str],
+) -> str:
+    text = " ".join(str(minicpm_desc or "").split()).strip()
+    if not text:
+        return ""
+
+    text = strip_descriptor_color_clause(text)
+    for term in _SCENE_TERMS:
+        text = re.sub(rf"\b{re.escape(term)}\b", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip(" ,.;:/-")
+    return text
+
+
+def _is_direct_prompt_weak(text: str) -> bool:
+    clean = " ".join(str(text or "").split()).strip()
+    if not clean:
+        return True
+    if len(clean.split()) < 4:
+        return True
+    generic = clean.lower()
+    if generic in {"garment", "top", "bottom", "dress", "outerwear", "clothing", "apparel", "item"}:
+        return True
+    return False
+
+
 def _build_flux2_prompt(
     selected_type: str,
     minicpm_desc: str,
@@ -170,17 +205,17 @@ def _build_flux2_prompt(
 ) -> tuple[str, str]:
     static_prompt = get_analyze_flux2_positive_prompt(selected_type)
     if selected_type == "top":
-        subtype_clause = get_analyze_top_subtype_clause(infer_top_prompt_subtype(minicpm_desc))
-        if subtype_clause:
+        subtype = infer_top_prompt_subtype(minicpm_desc)
+        subtype_clause = get_analyze_top_subtype_clause(subtype)
+        if subtype and subtype != "standard_top" and subtype_clause:
             static_prompt = f"{static_prompt} {subtype_clause}".strip()
-    natural = build_garment_prompt_natural(
+    direct_prompt = _build_direct_minicpm_prompt(
         minicpm_desc,
-        garment_type_hint=selected_type,
-        ignore_layering=True,
+        strip_descriptor_color_clause=strip_descriptor_color_clause,
     )
-    natural = strip_descriptor_color_clause(natural)
-    flux_prompt = f"{static_prompt} {natural}".strip() if natural else static_prompt
-    return flux_prompt, natural
+    prompt_source = "minicpm_direct_prompt"
+    flux_prompt = f"{static_prompt} {direct_prompt}".strip() if direct_prompt else static_prompt
+    return flux_prompt, direct_prompt, prompt_source
 
 
 def apply_selected_item_prompting(
@@ -219,12 +254,11 @@ def apply_selected_item_prompting(
     )
 
     # Build natural garment prompt from MiniCPM attributes
-    positive_prompt, natural_prompt = _build_flux2_prompt(
+    positive_prompt, prompt_desc, prompt_source = _build_flux2_prompt(
         selected_type,
         str(minicpm_desc or ""),
         strip_descriptor_color_clause,
     )
-    prompt_desc = natural_prompt
     avoid_prompt = ""
     
     # Set the prompts on the item
@@ -232,6 +266,7 @@ def apply_selected_item_prompting(
     selected_item["promptDescription"] = prompt_desc
     selected_item["description"] = prompt_desc
     selected_item["extractionAvoidClause"] = avoid_prompt
+    selected_item["promptDescriptionSource"] = prompt_source
     selected_item["type"] = selected_type
     
     selected_item["primary_category_key"] = sync_category["primary_category_key"]
@@ -244,7 +279,7 @@ def apply_selected_item_prompting(
         prompt_sections_raw="",
         descriptor_raw_text=minicpm_desc,
         prompt_description=prompt_desc,
-        prompt_source="type_based_semantic_minicpm_only",
+        prompt_source=prompt_source,
         target_type=selected_type,
         backend_target_type=selected_type,
         style=sync_category["style"],
@@ -267,6 +302,6 @@ def apply_selected_item_prompting(
         "avoid_prompt": avoid_prompt,
         "sync_category": sync_category,
         "garment_metadata": garment_metadata,
-        "prompt_source": "type_based_semantic_minicpm_only",
+        "prompt_source": prompt_source,
         "minicpm_description": minicpm_desc,  # Pass through for extraction stage
     }

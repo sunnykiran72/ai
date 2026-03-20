@@ -12,11 +12,12 @@ Responsibilities:
 """
 
 from typing import Dict, Optional, Tuple
-import io
+
 from PIL import Image
 
 from config import Config
 from services.ai_engine import AIEngine
+from utils.user_preparation import _opencv_face_detector, prepare_user_image_pipeline
 
 
 class UserImageService:
@@ -42,78 +43,53 @@ class UserImageService:
         """
         Prepare user image.
 
-        Placeholder implementation while the user-prep pipeline is refactored.
+        Prepare user image via the modular validation pipeline.
         """
-        if upload is None or not hasattr(upload, "read"):
-            return {
-                "status": "not_implemented",
-                "message": "UserImageService expects an uploaded file.",
-            }
-
         try:
             from ai import main as main_mod
         except ModuleNotFoundError:
             import main as main_mod
 
-        payload = await upload.read()
-        image = Image.open(io.BytesIO(payload)).convert("RGB")
-
-        candidates, detect_meta = main_mod._user_prep_detect_person_candidates(image)
-        if not candidates:
-            return {
-                "error": "no_person",
-                "message": "No person detected in the image.",
-                "meta": detect_meta,
-            }
-        if main_mod._user_prep_has_multiple_prominent_people(candidates):
-            return {
-                "error": "multiple_people",
-                "message": "Multiple prominent people detected.",
-                "meta": detect_meta,
-            }
-
-        crop, bbox = main_mod._user_prep_crop_main_person(image, candidates)
-        focus_score = main_mod._focus_score(crop)
-
-        # Keep the original image for try-on so the downstream model preserves
-        # the subject framing, pose, and background. Use the crop only for analysis.
-        buf = io.BytesIO()
-        image.convert("RGB").save(buf, format="PNG")
-        prepared_bytes = buf.getvalue()
-        bg_meta = {"enabled": False, "backend": "none"}
-        url = main_mod._upload_or_raise(prepared_bytes)
-
-        # Use the full frame for description so the prompt can retain face,
-        # lower-body, and held-object cues that a tight crop may omit.
-        description_raw = ""
         minicpm_runner = getattr(self.engine, "minicpm", None)
-        if minicpm_runner is not None:
-            try:
-                description_raw = str(minicpm_runner.describe_person_and_outfit(image)).strip()
-            except Exception:
-                description_raw = ""
-        if not description_raw:
-            try:
-                description_raw = str(minicpm_runner.describe_person_and_outfit(crop)).strip() if minicpm_runner is not None else ""
-            except Exception:
-                description_raw = ""
-        if not description_raw:
-            description_raw = main_mod._describe_user_image_for_prepare(image, description_backend=None)
-        prompt_description = main_mod._normalize_user_prepare_api_prompt_description(description_raw)
+        person_detector = getattr(self.engine, "person_detector", None)
 
-        return {
-            "url": url,
-            "promptDescription": prompt_description,
-            "focusScore": float(focus_score),
-            "meta": {
-                "person_bbox": bbox,
-                "analysis_crop_size": {"width": int(crop.width), "height": int(crop.height)},
-                "prepared_image_size": {"width": int(image.width), "height": int(image.height)},
-                "prepared_image_mode": "original_full_frame",
-                "detect": detect_meta,
-                "background": bg_meta,
-            },
-        }
+        def _person_detector_fn(image, conf=0.25, iou=0.45):
+            if person_detector is None:
+                return None
+            return person_detector.predict(image, conf=conf, iou=iou)
+
+        def _face_detector_fn(image):
+            return _opencv_face_detector(image)
+
+        def _description_fn(image):
+            if minicpm_runner is None:
+                return ""
+            try:
+                return str(minicpm_runner.describe_person_and_outfit(image)).strip()
+            except Exception:
+                return ""
+
+        def _verification_fn(image, prompt):
+            if minicpm_runner is None:
+                return ""
+            try:
+                return str(minicpm_runner.describe_person_and_outfit(image, prompt_override=prompt)).strip()
+            except Exception:
+                return ""
+
+        return await prepare_user_image_pipeline(
+            upload,
+            person_detector_fn=_person_detector_fn,
+            face_detector_fn=_face_detector_fn,
+            verifier_fn=_verification_fn,
+            description_fn=_description_fn,
+            fallback_description_fn=lambda image: main_mod._describe_user_image_for_prepare(image, description_backend=None),
+            upload_fn=main_mod._upload_or_raise,
+            blur_check_enabled=bool(self.config.analyze.blur_check_enabled),
+            blur_min_focus_score=float(self.config.analyze.blur_min_focus_score),
+            blur_focus_max_edge=int(self.config.analyze.blur_focus_max_edge),
+            verification_required=True,
+        )
     
     async def _validate_image_quality(self, image: Image.Image) -> Dict[str, object]:
         """Validate image quality (blur, resolution, etc.)."""

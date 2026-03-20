@@ -36,11 +36,12 @@ class MiniCPMVRunner:
         else:
             self.torch_dtype = torch.bfloat16
 
-        self.max_new_tokens = max(64, int(os.getenv("MINICPM_MAX_NEW_TOKENS", "256")))
+        self.max_new_tokens = max(64, int(os.getenv("MINICPM_MAX_NEW_TOKENS", "384")))
         self.garment_max_new_tokens = max(
             48,
-            int(os.getenv("MINICPM_GARMENT_MAX_NEW_TOKENS", str(self.max_new_tokens))),
+            int(os.getenv("MINICPM_GARMENT_MAX_NEW_TOKENS", "640")),
         )
+        self.garment_min_words = max(4, int(os.getenv("MINICPM_GARMENT_MIN_WORDS", "200")))
         self.user_max_new_tokens = max(
             64,
             int(os.getenv("MINICPM_USER_MAX_NEW_TOKENS", str(self.max_new_tokens))),
@@ -114,6 +115,10 @@ class MiniCPMVRunner:
     def _normalize_text(text: Any) -> str:
         return " ".join(str(text or "").split()).strip()
 
+    @staticmethod
+    def _word_count(text: str) -> int:
+        return len([part for part in str(text or "").split() if part.strip()])
+
     def _chat(self, rgb: Image.Image, instruction: str, max_new_tokens: int) -> str:
         msgs = [{"role": "user", "content": [rgb, instruction]}]
 
@@ -161,18 +166,41 @@ class MiniCPMVRunner:
                 max_new_tokens=int(max_new_tokens),
             )
 
-    def describe_garment(self, image: Image.Image, prompt_override: Optional[str] = None) -> str:
+    def describe_garment(
+        self,
+        image: Image.Image,
+        garment_type: Optional[str] = None,
+        prompt_override: Optional[str] = None,
+    ) -> str:
         from config.prompts import get_minicpm_garment_prompt
-        
-        return self._run_prompt(
+
+        instruction = (
+            str(prompt_override).strip()
+            if str(prompt_override or "").strip()
+            else get_minicpm_garment_prompt(garment_type)
+        )
+        response = self._run_prompt(
             image=image,
-            instruction=(
-                str(prompt_override).strip()
-                if str(prompt_override or "").strip()
-                else get_minicpm_garment_prompt()
-            ),
+            instruction=instruction,
             max_new_tokens=self.garment_max_new_tokens,
         )
+        if self._word_count(response) >= self.garment_min_words:
+            return response
+
+        retry_instruction = (
+            f"{instruction} "
+            f"Your previous answer was too short. Rewrite it as one detailed garment paragraph of at least {self.garment_min_words} words and 8-10 complete sentences. "
+            "Keep only visible garment facts. Expand the garment structure, seams, panel shapes, neckline, shoulder layout, sleeve or strap geometry, hem, closures, trims, and construction details until the description is sufficiently long."
+        ).strip()
+        retry_response = self._run_prompt(
+            image=image,
+            instruction=retry_instruction,
+            max_new_tokens=self.garment_max_new_tokens,
+        )
+        if self._word_count(retry_response) > self._word_count(response):
+            return retry_response
+
+        return response
 
     def describe_person_and_outfit(self, image: Image.Image, prompt_override: Optional[str] = None) -> str:
         from config.prompts import get_minicpm_person_outfit_prompt

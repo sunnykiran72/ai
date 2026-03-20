@@ -74,6 +74,15 @@ async def prepare_user_image_endpoint(
         if isinstance(result, Response):
             return result
 
+        if isinstance(result, dict) and result.get("error"):
+            status_code = int(result.get("status_code") or 422)
+            detail = {
+                "error": result.get("error"),
+                "message": result.get("message") or result.get("error"),
+                "meta": result.get("meta") or {},
+            }
+            raise HTTPException(status_code=status_code, detail=detail)
+
         # Legacy user-prep payloads return a top-level status code and should bypass Pydantic wrapping
         if isinstance(result, dict) and isinstance(result.get("status"), int):
             return json_response(result)

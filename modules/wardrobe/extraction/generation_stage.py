@@ -8,7 +8,7 @@ import numpy as np
 from PIL import Image
 
 from config.prompts import get_analyze_flux2_positive_prompt, get_analyze_top_subtype_clause
-from utils.prompt_generation import build_garment_prompt_natural, infer_top_prompt_subtype
+from utils.prompt_generation import infer_top_prompt_subtype
 
 
 def run_selected_item_extraction_or_response(
@@ -138,21 +138,21 @@ def run_selected_item_extraction_or_response(
         prompt_desc = prompt_bundle_desc or selected_prompt_hint or prompt_bundle_base
     else:
         # Rebuild as a fallback only when the prompting stage did not supply
-        # a usable prompt bundle.
+        # a usable prompt bundle. Use the raw MiniCPM description directly.
         static_prompt = get_analyze_flux2_positive_prompt(selected_type)
         if selected_type == "top":
-            subtype_clause = get_analyze_top_subtype_clause(infer_top_prompt_subtype(minicpm_description))
-            if subtype_clause:
+            subtype = infer_top_prompt_subtype(minicpm_description)
+            subtype_clause = get_analyze_top_subtype_clause(subtype)
+            if subtype and subtype != "standard_top" and subtype_clause:
                 static_prompt = f"{static_prompt} {subtype_clause}".strip()
-        natural_prompt = build_garment_prompt_natural(
-            minicpm_description,
-            garment_type_hint=selected_type,
-            ignore_layering=True,
-        )
-        if descriptor_is_weak(natural_prompt) and selected_prompt_hint:
-            natural_prompt = selected_prompt_hint
-        base_prompt = f"{static_prompt} {natural_prompt}".strip() if natural_prompt else static_prompt
-        prompt_desc = natural_prompt or selected_prompt_hint
+        direct_prompt = " ".join(minicpm_description.split()).strip()
+        if direct_prompt:
+            direct_prompt = strip_descriptor_color_clause(direct_prompt)
+            base_prompt = f"{static_prompt} {direct_prompt}".strip()
+            prompt_desc = direct_prompt
+        else:
+            base_prompt = static_prompt
+            prompt_desc = selected_prompt_hint
 
     extracted_url = ""
     extraction_meta = {}
@@ -257,12 +257,13 @@ def run_selected_item_extraction_or_response(
 
     if analyze_prompt_from_extracted:
         prompt_desc = ""
+        prompt_source = str(selected_item.get("promptDescriptionSource") or "").strip()
         if prompt_bundle_desc:
             prompt_desc = prompt_bundle_desc
-            selected_item["promptDescriptionSource"] = "prompt_generation_natural"
+            selected_item["promptDescriptionSource"] = prompt_source or "minicpm_direct_prompt"
         elif extracted_prompt_desc:
             prompt_desc = extracted_prompt_desc
-            selected_item["promptDescriptionSource"] = "flux2_extract_descriptor"
+            selected_item["promptDescriptionSource"] = prompt_source or "flux2_extract_descriptor"
         elif analyze_require_extracted_prompt:
             payload = build_error_payload(
                 title="Extraction Failed",

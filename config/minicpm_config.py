@@ -13,6 +13,7 @@ This module defines configuration for the MiniCPM vision-language model service 
 import os
 from pydantic import BaseModel, Field
 from .base import env_int, env_float, env_bool
+from .prompts import get_minicpm_garment_prompt
 
 
 class MiniCPMConfig(BaseModel):
@@ -47,7 +48,7 @@ class MiniCPMConfig(BaseModel):
     
     # Token limits
     garment_max_new_tokens: int = Field(
-        default=256,
+        default=640,
         ge=64,
         description="Maximum new tokens for garment descriptions"
     )
@@ -86,34 +87,13 @@ class MiniCPMConfig(BaseModel):
     
     # Prompts
     garment_min_words: int = Field(
-        default=10,
+        default=200,
         ge=4,
         description="Minimum word count for garment descriptions"
     )
     garment_prompt: str = Field(
         default=(
-            "Describe only the product garment for high-fidelity virtual try-on. "
-            "Describe exactly one garment only and never describe any person, skin, hair, hands, legs, pose, room, props, or background objects. "
-            "Ignore studio/background pixels, alpha-matte edges, and lighting shadows outside the garment fabric. "
-            "Return one detailed line with schema: "
-            "category=<dress|top|bottom|outerwear|set|unknown>; "
-            "type=<specific garment type>; "
-            "pattern=<solid|striped|floral|graphic|etc>; "
-            "material=<fabric/material>; "
-            "texture=<smooth|ribbed|knit|velvet|denim|etc>; "
-            "fit=<slim|regular|relaxed|oversized|bodycon>; "
-            "silhouette=<fit and shape>; "
-            "length=<crop|hip|waist|midi|maxi|full>; "
-            "asymmetry=<symmetric|asymmetric|one-shoulder|off-shoulder|single-sleeve|unknown>; "
-            "construction=<neckline, collar, lapel, sleeve style/length, waist shaping, hem, rise, leg shape>; "
-            "details=<buttons, zipper, pleats, ruffles, lace, embroidery, pockets, slit, straps, logo, hardware>; "
-            "opening=<front/back/side closure if visible>; "
-            "lining=<lined/unlined if visible>; "
-            "sheer=<sheer/opaque if visible>; "
-            "coverage=<body area to replace>; "
-            "preserve=<garment structure and details must remain unchanged>. "
-            "If the requested garment type is known, keep category/type locked to that garment only and ignore any other clothing visible in the crop. "
-            "Use unknown when not visible."
+            get_minicpm_garment_prompt()
         ),
         description="Prompt template for garment descriptions"
     )
@@ -185,7 +165,7 @@ class MiniCPMConfig(BaseModel):
         # Token limits - affected by low latency mode
         garment_max_new_tokens = max(64, env_int(
             "MINICPM_SERVICE_GARMENT_MAX_NEW_TOKENS",
-            256 if low_latency_mode else 256
+            512 if low_latency_mode else 640
         ))
         person_max_new_tokens = max(32, env_int(
             "MINICPM_SERVICE_PERSON_MAX_NEW_TOKENS",
@@ -201,30 +181,7 @@ class MiniCPMConfig(BaseModel):
         # Prompts
         garment_prompt = os.getenv(
             "MINICPM_SERVICE_GARMENT_PROMPT",
-            (
-                "Describe only the product garment for high-fidelity virtual try-on. "
-                "Describe exactly one garment only and never describe any person, skin, hair, hands, legs, pose, room, props, or background objects. "
-                "Ignore studio/background pixels, alpha-matte edges, and lighting shadows outside the garment fabric. "
-                "Return one detailed line with schema: "
-                "category=<dress|top|bottom|outerwear|set|unknown>; "
-                "type=<specific garment type>; "
-                "pattern=<solid|striped|floral|graphic|etc>; "
-                "material=<fabric/material>; "
-                "texture=<smooth|ribbed|knit|velvet|denim|etc>; "
-                "fit=<slim|regular|relaxed|oversized|bodycon>; "
-                "silhouette=<fit and shape>; "
-                "length=<crop|hip|waist|midi|maxi|full>; "
-                "asymmetry=<symmetric|asymmetric|one-shoulder|off-shoulder|single-sleeve|unknown>; "
-                "construction=<neckline, collar, lapel, sleeve style/length, waist shaping, hem, rise, leg shape>; "
-                "details=<buttons, zipper, pleats, ruffles, lace, embroidery, pockets, slit, straps, logo, hardware>; "
-                "opening=<front/back/side closure if visible>; "
-                "lining=<lined/unlined if visible>; "
-                "sheer=<sheer/opaque if visible>; "
-                "coverage=<body area to replace>; "
-                "preserve=<garment structure and details must remain unchanged>. "
-                "If the requested garment type is known, keep category/type locked to that garment only and ignore any other clothing visible in the crop. "
-                "Use unknown when not visible."
-            )
+            get_minicpm_garment_prompt()
         ).strip()
         
         person_prompt = os.getenv(
@@ -267,7 +224,7 @@ class MiniCPMConfig(BaseModel):
             local_file_first=env_bool("MINICPM_SERVICE_LOCAL_FILE_FIRST", "1"),
             
             # Prompts
-            garment_min_words=max(4, env_int("MINICPM_SERVICE_GARMENT_MIN_WORDS", 10)),
+            garment_min_words=max(4, env_int("MINICPM_SERVICE_GARMENT_MIN_WORDS", 200)),
             garment_prompt=garment_prompt,
             person_prompt=person_prompt,
             

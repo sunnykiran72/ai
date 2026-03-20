@@ -495,6 +495,7 @@ class AnalyzeService:
                 desc_image = image
 
             # Run MiniCPM for garment description
+            minicpm_garment_type = requested_type or normalize_garment_type(str(selected_item.get("type") or "")) or None
             async def run_minicpm():
                 if not minicpm_runner:
                     return ""
@@ -504,7 +505,8 @@ class AnalyzeService:
                         None,
                         lambda: minicpm_runner.describe_garment(
                             image=desc_image,
-                            prompt_override=None
+                            garment_type=minicpm_garment_type,
+                            prompt_override=None,
                         )
                     )
                     return description

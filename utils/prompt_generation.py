@@ -619,6 +619,10 @@ def _descriptor_flag_is_no(value: str) -> bool:
     return str(value or "").strip().lower() in {"no", "false"}
 
 
+def _descriptor_value_is_absent(value: str) -> bool:
+    return " ".join(str(value or "").split()).strip().lower() in {"none", "no", "not present", "absent"}
+
+
 def _normalize_top_shape_label(value: str) -> str:
     low = " ".join(str(value or "").split()).strip().lower()
     if not low or low in {"unknown", "none", "n/a"}:
@@ -685,6 +689,7 @@ def _normalize_sleeve_attachment_mode(value: str) -> str:
 
 def infer_top_prompt_profile(desc: str) -> Dict[str, str]:
     text = " ".join(str(desc or "").split()).strip()
+    raw_fields = parse_structured_descriptor(text)
     fields = _extract_structured_fields(text)
     type_lower = str(fields.get("type") or "").strip().lower()
     asymmetry_low = str(fields.get("asymmetry") or "").strip().lower()
@@ -706,6 +711,8 @@ def infer_top_prompt_profile(desc: str) -> Dict[str, str]:
         str(fields.get(key) or "").strip().lower()
         for key in ("special_details", "embellishments", "construction")
     )
+    sleeves_absent = _descriptor_value_is_absent(raw_fields.get("sleeves"))
+    straps_absent = _descriptor_value_is_absent(raw_fields.get("straps"))
 
     is_short_bust_top = any(
         key in type_lower for key in ("bra", "bralette", "brassiere", "bandeau", "bustier")
@@ -768,8 +775,23 @@ def infer_top_prompt_profile(desc: str) -> Dict[str, str]:
         torso_panel = "band_only"
         lower_front_coverage = "narrow_underbust_band"
 
+    corset_geometry = (
+        shoulder_low in {"strapless", "bare", "bare shoulder"}
+        and sleeves_absent
+        and shoulder_panel_missing
+        and upper_edge_shape in {"sweetheart", "straight", "curved", "square"}
+        and (
+            "structured" in bodice_low
+            or "boning" in details_low
+            or "corset" in type_lower
+        )
+        and torso_panel == "full_panel"
+    )
+
     if is_asymmetric_top:
         subtype = "asymmetric_top"
+    elif corset_geometry:
+        subtype = "structured_corset_top"
     elif lower_front_coverage in {"band_only", "narrow_underbust_band"} or torso_panel == "band_only":
         subtype = "bust_band_top"
     elif torso_panel == "short_panel":
@@ -794,6 +816,8 @@ def infer_top_prompt_profile(desc: str) -> Dict[str, str]:
         "torso_panel_continuity": torso_panel,
         "lower_front_coverage": lower_front_coverage,
         "sleeve_attachment_mode": sleeve_attachment_mode,
+        "sleeves_absent": "yes" if sleeves_absent else "no",
+        "straps_absent": "yes" if straps_absent else "no",
         "hem": hem_low,
         "neckline": neckline_low,
     }
@@ -892,6 +916,9 @@ def build_garment_prompt_natural(
         lower_front_coverage = _normalize_lower_front_coverage(top_profile.get("lower_front_coverage") or "")
         if top_profile.get("subtype") == "bust_band_top" and lower_front_coverage in {"band_only", "narrow_underbust_band"}:
             fields["length_hem"] = "underbust"
+        elif top_profile.get("subtype") == "structured_corset_top" and torso_panel == "full_panel":
+            if str(fields.get("length_hem") or "").strip().lower() in {"underbust", "midriff", "cropped"}:
+                fields["length_hem"] = ""
         elif torso_panel == "band_only":
             fields.setdefault("length_hem", "underbust")
         elif torso_panel == "short_panel" and not fields.get("length_hem"):
@@ -957,12 +984,16 @@ def build_garment_prompt_natural(
             shoulder_text = ""
         if shoulder_text:
             _append_unique(construction_bits, _maybe_suffix(shoulder_text, "shoulder", "shoulder"))
+    if is_top and str(top_profile.get("shoulder_panel_present") or "").strip().lower() == "no":
+        _append_unique(construction_bits, "no shoulder panel")
     asymmetry = fields.get("asymmetry")
     if not asymmetry and "asymmetry" not in explicit_fields:
         asymmetry = _infer_asymmetry_from_text(text)
     if asymmetry and asymmetry.lower() not in {"symmetric", "unknown", "none", "n/a"}:
         _append_unique(construction_bits, f"{asymmetry} shoulder structure")
-    if sleeves:
+    if is_top and str(top_profile.get("sleeves_absent") or "").strip().lower() == "yes":
+        _append_unique(construction_bits, "sleeveless")
+    elif sleeves:
         sleeves = _cleanup_value_for_type(sleeves)
         _append_unique(construction_bits, _maybe_suffix(sleeves, "sleeves", "sleeve"))
     bodice = fields.get("bodice_cut")
@@ -1020,6 +1051,8 @@ def build_garment_prompt_natural(
             lower_front_coverage = _normalize_lower_front_coverage(top_profile.get("lower_front_coverage") or "")
             if lower_front_coverage in {"band_only", "narrow_underbust_band"} or torso_panel == "band_only":
                 _append_unique(construction_bits, "narrow underbust band")
+        elif top_subtype == "structured_corset_top":
+            _append_unique(construction_bits, "extended structured torso panel")
         elif top_subtype == "cropped_panel_top" and torso_panel == "short_panel":
             _append_unique(construction_bits, "short front panel")
     length_value = fields.get("length")

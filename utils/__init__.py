@@ -199,7 +199,7 @@ from .scoring import (
     calculate_bbox_iou,
 )
 
-# Note: The following modules are placeholders and will be implemented in future tasks
+# Note: The following modules are implemented separately and kept importable via direct module paths
 # - user_preparation: User image validation and preparation utilities
 # - parser_operations: Human parser integration and mask operations
 # - descriptor_processing: Descriptor normalization and processing utilities

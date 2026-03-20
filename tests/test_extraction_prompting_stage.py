@@ -283,13 +283,13 @@ class PromptingStageTests(unittest.TestCase):
         self.assertEqual(selected_item["garmentMetadata"]["color"]["color_hints"], ["sage green"])
         self.assertEqual(context["selected_type"], "dress")
 
-    def test_apply_prompting_keeps_natural_prompt_as_canonical_prompt_description(self):
+    def test_apply_prompting_keeps_direct_minicpm_prompt_as_canonical_prompt_description(self):
         selected_item, context = apply_selected_item_prompting(
             selected_item={
                 "type": "top",
                 "minicpm_description": (
-                    "category=top; type=brassiere; neckline=v-neck; sleeves=long sleeves; "
-                    "length_hem=cropped; fabric_texture=smooth; special_details=ruched center front."
+                    "A corset top with sweetheart neckline, strapless shoulder, structured bodice, "
+                    "close-fitting silhouette, and underbust hem. Smooth texture. Details include structured boning."
                 ),
             },
             requested_type="top",
@@ -308,13 +308,38 @@ class PromptingStageTests(unittest.TestCase):
 
         self.assertTrue(selected_item["baseGarmentPrompt"].startswith("A single top garment displayed alone"))
         self.assertEqual(selected_item["promptDescription"], context["prompt_description"])
-        self.assertNotIn("category=top", selected_item["promptDescription"])
-        self.assertIn("long sleeves", selected_item["promptDescription"].lower())
-        self.assertIn("ruched center front", selected_item["promptDescription"].lower())
+        self.assertIn("corset top", selected_item["promptDescription"].lower())
+        self.assertIn("sweetheart neckline", selected_item["promptDescription"].lower())
+        self.assertNotIn("standard top only", selected_item["baseGarmentPrompt"].lower())
+        self.assertEqual(selected_item["promptDescriptionSource"], "minicpm_direct_prompt")
         self.assertEqual(
             selected_item["garmentMetadata"]["prompt"]["descriptor_raw_text"],
             selected_item["minicpm_description"],
         )
+
+    def test_apply_prompting_keeps_direct_minicpm_prompt_even_when_short(self):
+        selected_item, context = apply_selected_item_prompting(
+            selected_item={
+                "type": "top",
+                "minicpm_description": "top",
+            },
+            requested_type="top",
+            analyze_prompt_from_extracted=True,
+            normalize_garment_type=lambda raw: raw,
+            infer_style_from_text=lambda *_args, **_kwargs: "fitted",
+            wardrobe_category_from_garment_type=lambda *_args, **_kwargs: {
+                "style": "fitted",
+                "primary_category_key": "tops",
+                "category_key": "tops",
+            },
+            product_prompt_description=lambda text, **_kwargs: text,
+            build_garment_metadata=lambda **kwargs: {"prompt": kwargs},
+            strip_descriptor_color_clause=lambda text: text,
+        )
+
+        self.assertEqual(selected_item["promptDescription"], "top")
+        self.assertEqual(selected_item["promptDescriptionSource"], "minicpm_direct_prompt")
+        self.assertEqual(context["prompt_source"], "minicpm_direct_prompt")
 
     def test_generation_uses_selected_type_for_color_mask_without_forced_request(self):
         captured = {}
@@ -631,7 +656,7 @@ class PromptingStageTests(unittest.TestCase):
             updated_item["promptDescription"],
             "A cropped top with long sleeves and a ruched center front.",
         )
-        self.assertEqual(updated_item["promptDescriptionSource"], "prompt_generation_natural")
+        self.assertEqual(updated_item["promptDescriptionSource"], "minicpm_direct_prompt")
 
     def test_local_minicpm_uses_structured_prompt_override_for_garment_description(self):
         captured = {}
@@ -1066,58 +1091,31 @@ class PromptingStageTests(unittest.TestCase):
         self.assertEqual(prompt, "extra hand")
         self.assertEqual(source, "request")
 
-    def test_user_prepare_route_does_not_gate_on_face_detection(self):
+    def test_user_prepare_route_rejects_when_face_is_hidden(self):
         client = TestClient(main_mod.app)
         src = Image.new("RGB", (320, 480), "white")
-        crop = Image.new("RGB", (256, 384), "white")
         buf = io.BytesIO()
         src.save(buf, format="PNG")
         payload = buf.getvalue()
 
-        with mock.patch.object(
-            main_mod,
-            "_user_prep_detect_person_candidates",
-            return_value=([{"bbox": [20, 10, 260, 430], "confidence": 0.96, "area_ratio": 0.42}], {"count": 1}),
-        ), mock.patch.object(
-            main_mod,
-            "_user_prep_has_multiple_prominent_people",
-            return_value=False,
-        ), mock.patch.object(
-            main_mod,
-            "_user_prep_crop_main_person",
-            return_value=(crop, [20, 10, 260, 430]),
-        ), mock.patch.object(
-            main_mod,
-            "_focus_score",
-            return_value=99.0,
-        ), mock.patch.object(
-            main_mod,
-            "_user_prep_validate_face",
-            return_value=(False, {"reason": "face_not_detected"}),
-        ) as face_patch, mock.patch.object(
-            main_mod,
-            "_remove_user_background_strict",
-            return_value=(b"fake-png-bytes", {"backend": "birefnet"}),
-        ), mock.patch.object(
-            main_mod,
-            "_upload_or_raise",
-            return_value="https://example.com/prepared.png",
-        ), mock.patch.object(
-            main_mod,
-            "_describe_user_image_for_prepare",
-            return_value="identity: test subject. pose: standing. current outfit: white dress. preserve: pose",
-        ):
+        fake_service = mock.Mock()
+        fake_service.prepare_user_image = mock.AsyncMock(return_value={
+            "status_code": 422,
+            "error": "face_hidden",
+            "message": "Face not clearly visible.",
+            "meta": {"verification": {"parsed": {"face_visible": False}}},
+        })
+
+        with mock.patch.object(main_mod, "get_user_prep_service", return_value=fake_service):
             response = client.post(
                 "/v1/user-image/prepare",
                 files={"file": ("user.png", payload, "image/png")},
-                data={"description_backend": "minicpm_service"},
             )
 
-        self.assertEqual(response.status_code, 200)
-        data = response.json()["data"]
-        self.assertEqual(data["url"], "https://example.com/prepared.png")
-        self.assertIn("test subject", data["promptDescription"])
-        face_patch.assert_not_called()
+        self.assertEqual(response.status_code, 422)
+        body = response.json()
+        self.assertEqual(body["detail"]["error"], "face_hidden")
+        self.assertIn("Face not clearly visible", body["detail"]["message"])
 
     def test_build_flux2_targeted_prompt_adds_saree_limb_guard(self):
         prompt = main_mod._build_flux2_targeted_prompt(

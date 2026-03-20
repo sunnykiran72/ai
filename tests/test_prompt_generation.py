@@ -22,7 +22,7 @@ from utils.prompt_generation import (
     build_tryon_prompt_v2,
     infer_top_prompt_subtype,
 )
-from config.prompts import get_analyze_flux2_positive_prompt, get_analyze_top_subtype_clause
+from config.prompts import get_analyze_flux2_positive_prompt, get_analyze_top_subtype_clause, get_minicpm_garment_prompt
 
 
 class TestStructuredDescriptorParsing:
@@ -600,6 +600,29 @@ class TestGarmentPromptNatural:
         assert "do not warm it, cool it, bleach it, brighten it, darken it" in prompt
         assert "do not raise it into a higher-coverage chest panel" in prompt
 
+    def test_minicpm_garment_prompt_requests_detailed_garment_paragraph(self):
+        prompt = get_minicpm_garment_prompt().lower()
+
+        assert "requested garment type" in prompt
+        assert "rich garment paragraph" in prompt
+        assert "visible garment facts" in prompt
+        assert "do not mention colors" in prompt
+
+    def test_minicpm_top_prompt_includes_top_only_structure_fields(self):
+        prompt = get_minicpm_garment_prompt("top").lower()
+
+        assert "top-only guidance" in prompt
+        assert "shoulder layout" in prompt
+        assert "torso panel continuity" in prompt
+        assert "lower-body features" in prompt
+
+    def test_minicpm_outer_prompt_excludes_inner_layers(self):
+        prompt = get_minicpm_garment_prompt("outer").lower()
+
+        assert "outerwear-only guidance" in prompt
+        assert "inner garments" in prompt
+        assert "collar" in prompt
+
     def test_top_subtype_router_identifies_bust_band_top(self):
         subtype = infer_top_prompt_subtype(
             "category=top; type=push-up bralette; upper_edge_shape=straight; upper_edge_depth=low; "
@@ -635,6 +658,13 @@ class TestGarmentPromptNatural:
         assert "do not add a shoulder yoke" in clause
         assert "do not extend the garment into a longer torso panel" in clause
 
+    def test_structured_corset_top_clause_blocks_sleeves_and_shoulder_coverage(self):
+        clause = get_analyze_top_subtype_clause("structured_corset_top").lower()
+
+        assert "do not add sleeves" in clause
+        assert "do not add" in clause and "shoulder coverage" in clause
+        assert "structured boning" in clause
+
     def test_march12_style_top_routes_to_bust_band_and_keeps_underbust_band_language(self):
         prompt = build_garment_prompt_natural(
             "category=top; type=crop top; neckline=sweetheart; upper_edge_shape=sweetheart; "
@@ -658,6 +688,24 @@ class TestGarmentPromptNatural:
         assert "underbust hem" in lowered
         assert "narrow underbust band" in lowered
         assert "short front panel" not in lowered
+
+    def test_corset_top_preserves_none_as_absence_and_routes_to_structured_corset_top(self):
+        desc = (
+            "category=top; type=corset top; neckline=sweetheart; upper_edge_shape=sweetheart; "
+            "shoulder_style=strapless; asymmetry=symmetric; sleeves=none; upper_edge_depth=very low; "
+            "upper_chest_exposed=yes; shoulder_panel_present=no; underbust_visible=no; abdomen_visible=no; "
+            "torso_panel_continuity=full panel; lower_front_coverage=full panel; bodice_cut=structured; "
+            "silhouette=close-fitting; length_hem=underbust; fabric_texture=smooth; special_details=structured boning"
+        )
+        prompt = build_garment_prompt_natural(desc, garment_type_hint="top")
+        lowered = prompt.lower()
+
+        assert infer_top_prompt_subtype(desc) == "structured_corset_top"
+        assert "strapless shoulder" in lowered
+        assert "no shoulder panel" in lowered
+        assert "sleeveless" in lowered
+        assert "extended structured torso panel" in lowered
+        assert "underbust hem" not in lowered
 
     def test_analyze_bottom_prompt_contains_single_piece_guard(self):
         prompt = get_analyze_flux2_positive_prompt("bottom").lower()

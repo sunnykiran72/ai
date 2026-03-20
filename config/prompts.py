@@ -11,59 +11,25 @@ This module contains all prompts used in the analyze and tryon pipelines:
 All prompts are in one location for easy debugging and modification.
 """
 
+from typing import Optional
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # MINICPM PROMPTS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-MINICPM_GARMENT_DESCRIPTION_PROMPT = """Describe only the product garment for high-fidelity virtual try-on. 
-Return exactly one single line with this schema: 
-category=<dress|top|bottom|outerwear|set|unknown>; 
-type=<specific garment type>; 
-neckline=<neckline style>; 
-upper_edge_shape=<straight|scoop|sweetheart|v|square|asymmetric|curved|unknown>; 
-collar=<collar style>; 
-lapel=<lapel style>; 
-shoulder_style=<shoulder/strap style>; 
-asymmetry=<symmetric|asymmetric|one-shoulder|off-shoulder|single-sleeve|unknown>; 
-sleeves=<sleeve style or length>; 
-cuffs=<cuff style>; 
-upper_edge_depth=<high|mid|low|very low|unknown>; 
-upper_chest_exposed=<yes|no|unknown>; 
-shoulder_panel_present=<yes|no|unknown>; 
-underbust_visible=<yes|no|unknown>; 
-abdomen_visible=<yes|no|unknown>; 
-torso_panel_continuity=<band_only|short_panel|full_panel|unknown>; 
-lower_front_coverage=<band_only|narrow_underbust_band|short_panel|full_panel|unknown>; 
-sleeve_attachment_mode=<shoulder_seam|side_bust|underarm_band|off_shoulder|unknown>; 
-bodice_cut=<bodice or torso shaping>; 
-waistline=<waist placement or shaping>; 
-silhouette=<fit and overall shape>; 
-length_hem=<hem length>; 
-rise=<rise or waistband height for bottoms>; 
-leg_shape=<leg opening shape if applicable>; 
-skirt_style=<skirt shape if applicable>; 
-fabric_texture=<fabric/material texture>; 
-pattern=<print or pattern type>; 
-embellishments=<buttons, zipper, pleats, ruffles, lace, embroidery, pockets, slit, logo>; 
-closure=<closure type/placement>; 
-pockets=<pocket type/placement>; 
-slits=<slit type/placement>; 
-straps=<strap details if applicable>; 
-layering=<layers or overlays if present>; 
-special_details=<unique construction or design details>; 
-preserve=<state that garment structure and details must remain unchanged>. 
-Use 'unknown' only when truly not visible. Prefer a concrete value if it can be inferred from visible pixels.
-For tops, length_hem must describe where the garment actually ends, for example underbust, cropped, midriff, waist, hip, or tunic length.
-If the top stops below the bust or exposes the abdomen, say that in length_hem; do not use waistline=high as a substitute for hem position.
-For tops, neckline must describe the actual visible upper edge of the garment. If the neckline sits low, wide, or exposes the upper chest, describe that visible opening directly.
-For tops, upper_edge_shape must describe the visible upper edge shape, for example straight, scoop, sweetheart, v, square, or asymmetric.
-Do not use bishop unless the neckline is visibly gathered or high at the neck opening.
-For tops, shoulder_panel_present must say whether there is actual fabric spanning the shoulder or clavicle area above the bust opening.
-For tops, sleeve_attachment_mode must describe where the sleeves visually connect, for example shoulder seam, side bust, underarm band, or off shoulder.
-For tops, torso_panel_continuity must describe whether the front is only a bust band, a short cropped torso panel, or a full torso panel.
-For tops, lower_front_coverage must describe the actual lower front fabric coverage, for example band_only, narrow_underbust_band, short_panel, or full_panel.
-For tops, fill upper_edge_depth, upper_chest_exposed, shoulder_panel_present, underbust_visible, abdomen_visible, torso_panel_continuity, lower_front_coverage, and sleeve_attachment_mode from visible pixels. These fields are critical and should not be left unknown when the image clearly shows them.
-Do not mention colors, person, mannequin, background, camera, or recommendations."""
+MINICPM_GARMENT_DESCRIPTION_COMMON = """Describe only the requested garment type in the image and ignore every other garment. If multiple garments are visible, focus only on the requested type.
+Return one single rich garment paragraph, not JSON, not a schema, not a label list, and not a caption. Mention only visible garment facts. Do not mention colors, person, mannequin, body, skin, hair, hands, pose, background, camera, room, props, or recommendations.
+Describe the garment as it actually appears in the image. If a detail is not visible, omit it or describe it as absent, none, no, or unknown only when that helps preserve the structure.
+Cover the garment in a structured, feature-rich way so the output can be used directly for reconstruction."""
+
+MINICPM_GARMENT_DESCRIPTION_BY_TYPE = {
+    "top": """Top-only guidance: describe the upper edge or neckline, collar or lapel if visible, shoulder layout, sleeve or strap geometry, shoulder coverage, open chest areas, torso panel continuity, seam placement, panel shapes, bodice and waist structure, bust shaping, hem endpoint, fit, silhouette, closures, trims, ruching, pleats, boning, padding, lining, drape, stretch, stitching, and any other visible construction details. Do not describe lower-body features, skirts, pants, legs, or full-outfit structure.""",
+    "bottom": """Bottom-only guidance: describe the waistband, rise, hip shaping, leg shape, skirt shape if present, inseam or split details, hem endpoint, closures, pockets, seams, panel structure, fit, silhouette, drape, stretch, and any other visible construction details. Do not describe upper-body features, sleeves, collars, shoulders, or neckline details.""",
+    "dress": """Dress-only guidance: describe the bodice, neckline or upper edge, shoulder layout, sleeve or strap geometry, waist transition, skirt construction, continuous body flow, hem endpoint, fit, silhouette, closures, ruching, pleats, boning, lining, drape, stretch, and any other visible construction details. Do not split the dress into separate top and bottom garments or describe it as two pieces.""",
+    "outer": """Outerwear-only guidance: describe the collar, lapel, opening, shoulder structure, sleeve length, cuff shape, layering behavior, front overlap, waistline, hem endpoint, fit, silhouette, closures, pockets, epaulets, lining, drape, structure, and any other visible construction details. Do not describe inner garments as part of the outerwear.""",
+}
+
+MINICPM_GARMENT_DESCRIPTION_PROMPT = MINICPM_GARMENT_DESCRIPTION_COMMON
 
 MINICPM_PERSON_OUTFIT_DESCRIPTION_PROMPT = """Describe only the human subject for identity-preserving virtual try-on. 
 Return exactly one single line with this schema: 
@@ -172,6 +138,11 @@ ANALYZE_TOP_SUBTYPE_ONLY_CLAUSES = {
         "Cropped-panel top only: keep the short front torso panel exactly as in the reference. "
         "Do not shorten it into a narrow bra band and do not extend it into full torso length."
     ),
+    "structured_corset_top": (
+        "Structured corset top only: keep the strapless sleeveless upper edge exactly as in the source. "
+        "Do not add sleeves, straps, shoulder coverage, or a shoulder yoke when they are not present. "
+        "Keep the structured boning and extended torso panel intact; do not collapse it into an underbust band or a standard tee-like top."
+    ),
     "asymmetric_top": (
         "Asymmetric top only: preserve the exact open side, shoulder exposure, and unmatched sleeve or strap arrangement. "
         "Do not mirror the missing side and do not regularize the top into a symmetric chest panel."
@@ -274,9 +245,26 @@ JOYCAPTION_NEGATIVE_PROMPT = (
 # HELPER FUNCTIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def get_minicpm_garment_prompt() -> str:
+def _normalize_minicpm_garment_type(garment_type: Optional[str]) -> str:
+    raw = " ".join(str(garment_type or "").split()).strip().lower()
+    if raw in {"outer", "outerwear", "coat", "jacket", "blazer", "trench", "trench coat"}:
+        return "outer"
+    if raw in {"bottom", "pants", "trousers", "jeans", "skirt", "shorts", "lower"}:
+        return "bottom"
+    if raw in {"dress", "gown", "one-piece"}:
+        return "dress"
+    if raw in {"top", "shirt", "blouse", "tee", "t-shirt", "tshirt", "bra", "bralette", "corset", "corset top"}:
+        return "top"
+    return ""
+
+
+def get_minicpm_garment_prompt(garment_type: Optional[str] = None) -> str:
     """Get the MiniCPM garment description prompt."""
-    return MINICPM_GARMENT_DESCRIPTION_PROMPT
+    prompt_type = _normalize_minicpm_garment_type(garment_type)
+    type_clause = MINICPM_GARMENT_DESCRIPTION_BY_TYPE.get(prompt_type, "")
+    if type_clause:
+        return f"{MINICPM_GARMENT_DESCRIPTION_COMMON} {type_clause}".strip()
+    return MINICPM_GARMENT_DESCRIPTION_COMMON
 
 
 def get_minicpm_person_outfit_prompt() -> str:
@@ -368,7 +356,7 @@ def get_all_prompts_for_type(garment_type: str) -> dict:
         }
     """
     return {
-        "minicpm_garment": get_minicpm_garment_prompt(),
+        "minicpm_garment": get_minicpm_garment_prompt(garment_type),
         "minicpm_person": get_minicpm_person_outfit_prompt(),
         "flux2_positive": get_flux2_positive_prompt(garment_type),
         "flux2_negative": get_flux2_negative_prompt(garment_type),
