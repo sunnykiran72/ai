@@ -58,6 +58,18 @@ class UserImageService:
                 return None
             return person_detector.predict(image, conf=conf, iou=iou)
 
+        def _fallback_person_detector_fn(image, conf=0.25, iou=0.45):
+            if image is None or not hasattr(image, "width") or not hasattr(image, "height"):
+                return None
+            return [
+                {
+                    "bbox": [0, 0, int(image.width), int(image.height)],
+                    "confidence": 1.0,
+                    "area_ratio": 1.0,
+                    "source": "fallback_full_frame",
+                }
+            ]
+
         def _face_detector_fn(image):
             return _opencv_face_detector(image)
 
@@ -80,6 +92,7 @@ class UserImageService:
         return await prepare_user_image_pipeline(
             upload,
             person_detector_fn=_person_detector_fn,
+            fallback_detector_fn=_fallback_person_detector_fn,
             face_detector_fn=_face_detector_fn,
             verifier_fn=_verification_fn,
             description_fn=_description_fn,

@@ -167,6 +167,41 @@ class TestUserPreparationPipeline(unittest.TestCase):
         self.assertEqual(result["error"], "face_hidden")
         self.assertIn("face hidden", result["message"].lower())
 
+    def test_falls_back_to_full_frame_when_detector_errors(self):
+        image = Image.new("RGB", (320, 480), "white")
+
+        def detector_fn(_image, conf=0.25, iou=0.45):
+            raise RuntimeError("expected mat1 and mat2 to have the same dtype, but got: float != c10::BFloat16")
+
+        def fallback_detector_fn(image, conf=0.25, iou=0.45):
+            return [{"bbox": [0, 0, image.width, image.height], "confidence": 1.0, "area_ratio": 1.0}]
+
+        def verifier_fn(_image, prompt):
+            self.assertIn("dominant foreground person", prompt)
+            return {
+                "single_person": True,
+                "face_visible": True,
+                "full_body_visible": True,
+                "clear_human": True,
+                "reason": "ok",
+            }
+
+        result = prepare_user_image_core(
+            image,
+            person_detector_fn=detector_fn,
+            fallback_detector_fn=fallback_detector_fn,
+            verifier_fn=verifier_fn,
+            description_fn=lambda _image: "identity: fallback subject. face: clear. pose: standing.",
+            upload_fn=lambda _bytes: "https://example.com/prepared.png",
+            blur_check_enabled=False,
+            verification_required=True,
+        )
+
+        self.assertNotIn("error", result)
+        self.assertEqual(result["url"], "https://example.com/prepared.png")
+        self.assertTrue(result["meta"]["detect"].get("fallback_used"))
+        self.assertEqual(result["meta"]["detect"].get("reason"), "person_detector_fallback")
+
 
 if __name__ == "__main__":
     unittest.main()

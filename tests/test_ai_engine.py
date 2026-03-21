@@ -322,12 +322,13 @@ class TestAIEngineModelPreloading(unittest.TestCase):
     
     @patch('services.ai_engine.YoloRunner')
     @patch('services.ai_engine.HumanParserRunner')
+    @patch('services.ai_engine.FashionDetectionRunner')
     @patch('services.ai_engine.FlorenceRunner')
     @patch('services.ai_engine.Flux2CVTONRunner')
     @patch('services.ai_engine.FashionColorClassifierRunner')
     @patch('services.ai_engine.MiniCPMVRunner')
     def test_ensure_analyze_ready(self, mock_minicpm, mock_fashion_color, mock_flux2,
-                                 mock_florence, mock_human_parser, mock_yolo):
+                                 mock_florence, mock_fashion_detection, mock_human_parser, mock_yolo):
         """Test ensure_analyze_ready preloads required models."""
         self.mock_config.analyze.preload_florence = True
         self.mock_config.analyze.preload_flux_runner = True
@@ -343,6 +344,7 @@ class TestAIEngineModelPreloading(unittest.TestCase):
         
         # Verify required models are preloaded
         engine.yolo_runner.ensure_ready.assert_called_once()
+        engine.fashion_detection_runner.ensure_ready.assert_called_once()
         engine.parser_runner.ensure_ready.assert_called_once()
         engine.florence._ensure_loaded.assert_called_once()
         engine.minicpm.ensure_ready.assert_called_once()

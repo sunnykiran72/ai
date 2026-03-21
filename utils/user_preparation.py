@@ -659,6 +659,7 @@ def prepare_user_image_core(
     image: Image.Image,
     *,
     person_detector_fn: Optional[Callable[..., Any]] = None,
+    fallback_detector_fn: Optional[Callable[..., Any]] = None,
     face_detector_fn: Optional[Callable[..., Any]] = None,
     verifier_fn: Optional[Callable[..., Any]] = None,
     description_fn: Optional[Callable[..., Any]] = None,
@@ -674,6 +675,20 @@ def prepare_user_image_core(
 
     width, height = image.size
     candidates, detect_meta = detect_person_candidates(image, detector_fn=person_detector_fn)
+    if (
+        not candidates
+        and fallback_detector_fn is not None
+        and str(detect_meta.get("reason") or "") in {"person_detector_failed", "person_detector_unavailable"}
+    ):
+        fallback_candidates, fallback_meta = detect_person_candidates(image, detector_fn=fallback_detector_fn)
+        if fallback_candidates:
+            candidates = fallback_candidates
+            detect_meta = {
+                **detect_meta,
+                **fallback_meta,
+                "reason": "person_detector_fallback",
+                "fallback_used": True,
+            }
     if not candidates:
         return _error_payload(
             "no_person",
@@ -843,6 +858,7 @@ async def prepare_user_image_pipeline(
     upload: Any,
     *,
     person_detector_fn: Optional[Callable[..., Any]] = None,
+    fallback_detector_fn: Optional[Callable[..., Any]] = None,
     face_detector_fn: Optional[Callable[..., Any]] = None,
     verifier_fn: Optional[Callable[..., Any]] = None,
     description_fn: Optional[Callable[..., Any]] = None,
@@ -871,6 +887,7 @@ async def prepare_user_image_pipeline(
     return prepare_user_image_core(
         image,
         person_detector_fn=person_detector_fn,
+        fallback_detector_fn=fallback_detector_fn,
         face_detector_fn=face_detector_fn,
         verifier_fn=verifier_fn,
         description_fn=description_fn,

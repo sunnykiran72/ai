@@ -88,7 +88,7 @@ class TestAnalyzeConfigDefaults:
         config = AnalyzeConfig()
         assert config.extract_cloth is True
         assert config.flux_disable_lora is True
-        assert config.preload_flux_runner is False
+        assert config.preload_flux_runner is True
         assert config.use_parser_post_extract is False
         assert config.pass_detection_prompt_to_extract is True
         assert config.prompt_from_extracted is True
@@ -173,6 +173,7 @@ class TestAnalyzeConfigFromEnv:
         monkeypatch.setenv("ANALYZE_BLUR_CHECK_ENABLED", "1")
         monkeypatch.setenv("ANALYZE_BLUR_MIN_FOCUS_SCORE", "30.0")
         monkeypatch.setenv("ANALYZE_PRELOAD_MINICPM", "0")
+        monkeypatch.setenv("FLUX2_SINGLE_GARMENT_EXTRACT_DEFAULT_STEPS", "1")
         
         config = AnalyzeConfig.from_env()
         
@@ -182,6 +183,7 @@ class TestAnalyzeConfigFromEnv:
         assert config.blur_check_enabled is True
         assert config.blur_min_focus_score == 30.0
         assert config.preload_minicpm is False
+        assert config.flux2_single_garment_extract_default_steps == 1
     
     def test_from_env_with_invalid_values(self, monkeypatch):
         """Test from_env() handles invalid values gracefully."""
@@ -233,7 +235,7 @@ class TestAnalyzeConfigFromEnv:
         monkeypatch.setenv("ANALYZE_BG_REMOVAL_BACKEND", "birefnet")
         config = AnalyzeConfig.from_env()
         assert config.bg_removal_backend == "birefnet"
-    
+
     def test_from_env_min_max_constraints(self, monkeypatch):
         """Test from_env() applies min/max constraints."""
         # Test max_items minimum

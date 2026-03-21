@@ -154,12 +154,17 @@ async def startup_event():
     # Preload models if configured
     if config.app.startup_background_preload:
         logger.info("Starting background model preloading...")
+        # Analyze requests are sensitive to lazy model loading. Preload the
+        # full analyze stack synchronously so the first request does not pay
+        # model initialization latency.
+        try:
+            if hasattr(engine, "ensure_analyze_ready"):
+                await asyncio.to_thread(engine.ensure_analyze_ready)
+                logger.info("Analyze stack preloaded successfully.")
+        except Exception as exc:
+            logger.warning("Analyze preload failed: %s", exc)
+
         async def _background_preload() -> None:
-            try:
-                if hasattr(engine, "ensure_analyze_ready"):
-                    await asyncio.to_thread(engine.ensure_analyze_ready)
-            except Exception as exc:
-                logger.warning("Analyze background preload failed: %s", exc)
             try:
                 if hasattr(engine, "ensure_vto_ready"):
                     await asyncio.to_thread(engine.ensure_vto_ready)
