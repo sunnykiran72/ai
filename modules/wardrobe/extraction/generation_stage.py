@@ -116,6 +116,9 @@ def run_selected_item_extraction_or_response(
         )
         return None, multipart_form_response(payload)
 
+    if isinstance(extract_source_image, Image.Image):
+        selected_item["_extract_source_image"] = extract_source_image.copy()
+
     selected_prompt_hint = " ".join(str(selected_item.get("promptDescription") or "").split()).strip()
     if (
         not selected_prompt_hint

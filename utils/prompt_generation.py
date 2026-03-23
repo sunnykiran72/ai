@@ -1221,6 +1221,7 @@ def build_tryon_prompt_v2(
     garment_descriptions: List[str],
     target_types: List[str],
     board_mode: str,
+    lora_mode: str = "tryon",
 ) -> str:
     """
     Build a Flux2 try-on prompt following FLUX best practices:
@@ -1291,7 +1292,13 @@ def build_tryon_prompt_v2(
                 )
         return " ".join(clauses)
 
+    mode = str(lora_mode or "tryon").strip().lower()
+    if mode not in {"tryon", "bfs", "stacked"}:
+        mode = "tryon"
+
     intro = "Identity-preserving virtual try-on edit of the same person from image 1."
+    if mode in {"bfs", "stacked"}:
+        intro = "Face-consistent virtual try-on edit of the same person from image 1."
     preserve = (
         "Treat the face in image 1 as the identity anchor and keep the exact face identity, face geometry, skin tone, hair, hairline, expression, and head shape as closely as possible. "
         "Do not beautify, restyle, or replace the face. "
@@ -1301,6 +1308,11 @@ def build_tryon_prompt_v2(
         "If a phone or other held object is present, keep it in the same hand with the same grip, finger arrangement, wrist angle, size, and orientation, "
         "and preserve the same face occlusion; do not move it onto a different part of the face or body."
     )
+    if mode in {"bfs", "stacked"}:
+        preserve += (
+            " Prioritize exact facial consistency over pose rigidity when tradeoffs are unavoidable. "
+            "Allow only subtle pose drift if it materially improves face identity preservation."
+        )
     scope = _build_scope_clause(target_types, board_mode)
 
     parts = [intro, preserve, scope]

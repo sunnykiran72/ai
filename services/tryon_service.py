@@ -57,6 +57,9 @@ class TryonService:
         negative_prompt: Optional[str] = None,
         steps: Optional[int] = None,
         seed: Optional[int] = None,
+        lora_mode: Optional[str] = None,
+        lora_scale: Optional[float] = None,
+        bfs_lora_scale: Optional[float] = None,
         **_kwargs,
     ):
         """
@@ -81,6 +84,7 @@ class TryonService:
             garment_descriptions=garment_descriptions,
             target_types=garment_types,
             board_mode=board_mode,
+            lora_mode=str(lora_mode or getattr(self.config, "lora_mode", "tryon")),
         )
 
         flux_runner = getattr(self.engine, "flux2", None)
@@ -94,6 +98,9 @@ class TryonService:
             steps=steps,
             seed=seed,
             use_lora=True,
+            lora_mode=str(lora_mode or getattr(self.config, "lora_mode", "tryon")),
+            lora_scale=lora_scale,
+            bfs_lora_scale=bfs_lora_scale,
         )
         latency = float(flux_result.get("latency") or 0.0)
 

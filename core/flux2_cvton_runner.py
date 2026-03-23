@@ -4,6 +4,7 @@ import logging
 import os
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -14,6 +15,18 @@ logger = logging.getLogger("glamify-ai")
 
 
 HF_TOKEN_ENV_KEYS: Tuple[str, ...] = ("HUGGING_FACE_KEY", "HF_TOKEN", "HUGGINGFACE_HUB_TOKEN")
+
+
+@dataclass(frozen=True)
+class LoraSpec:
+    label: str
+    source: str
+    weight_name: str
+    adapter_name: str
+    scale: float
+    fallback_repo: str
+    local_cache_dir: str
+    auto_download: bool
 
 
 def _flatten_rgba_to_white_rgb(image: Image.Image) -> Image.Image:
@@ -100,6 +113,36 @@ def _apply_hybridcache_shim() -> None:
         setattr(cache_utils, "HybridCache", HybridCache)
 
 
+def _patch_flux2_pipeline_py39_compat() -> bool:
+    """
+    Patch the installed diffusers Flux2 pipeline for Python 3.9 compatibility.
+
+    Some diffusers builds ship a Python 3.10 style union annotation in
+    pipeline_flux2.py that raises on Python 3.9 during import. Rewriting that
+    single annotation to typing.Union keeps the runtime importable without
+    changing model behavior.
+    """
+    try:
+        import diffusers
+    except Exception:
+        return False
+
+    pipeline_path = Path(diffusers.__file__).resolve().parent / "pipelines" / "flux2" / "pipeline_flux2.py"
+    if not pipeline_path.exists():
+        return False
+
+    source = pipeline_path.read_text(encoding="utf-8")
+    old_line = "    images: List[List[PIL.Image.Image]] | List[PIL.Image.Image],"
+    new_line = "    images: Union[List[List[PIL.Image.Image]], List[PIL.Image.Image]],"
+    if old_line not in source or new_line in source:
+        return False
+
+    pipeline_path.write_text(source.replace(old_line, new_line, 1), encoding="utf-8")
+    importlib.invalidate_caches()
+    logger.info("[compat] Patched diffusers Flux2 pipeline annotations for Python 3.9")
+    return True
+
+
 def _patch_attention_dispatch_for_torch_compat() -> bool:
     if _torch_version_at_least("2.6.0"):
         return False
@@ -180,6 +223,7 @@ def _patch_attention_dispatch_for_torch_compat() -> bool:
 def _import_flux2_klein_pipeline() -> Any:
     try:
         patched = _patch_attention_dispatch_for_torch_compat()
+        patched = _patch_flux2_pipeline_py39_compat() or patched
         if patched:
             logger.info("[compat] Patched diffusers attention_dispatch for torch compatibility")
     except Exception as err:
@@ -249,7 +293,32 @@ class Flux2CVTONRunner:
         )
         self.lora_weight_name = cfg.get("lora_weight_name") or os.getenv("FLUX2_LORA_WEIGHT_NAME", "flux-klein-tryon.safetensors")
         self.adapter_name = cfg.get("adapter_name") or os.getenv("FLUX2_ADAPTER_NAME", "fal_tryon")
+        self.bfs_lora_path = _resolve_existing_path(
+            cfg.get("bfs_lora_path") or os.getenv("FLUX2_BFS_LORA_PATH", "Alissonerdx/BFS-Best-Face-Swap"),
+            (
+                "/workspace/models/flux2-lora/bfs-best-face-swap",
+                "/workspace/hybrid_vto_v1_latest_v1/models/flux2-lora/bfs-best-face-swap",
+            ),
+        )
+        self.bfs_lora_weight_name = cfg.get("bfs_lora_weight_name") or os.getenv(
+            "FLUX2_BFS_LORA_WEIGHT_NAME",
+            "bfs_head_v1_flux-klein_9b_step3500_rank128.safetensors",
+        )
+        self.bfs_adapter_name = cfg.get("bfs_adapter_name") or os.getenv("FLUX2_BFS_ADAPTER_NAME", "bfs_face")
+        self.bfs_lora_scale = float(
+            cfg["bfs_lora_scale"] if ("bfs_lora_scale" in cfg and cfg.get("bfs_lora_scale") is not None) else os.getenv("FLUX2_BFS_LORA_SCALE", "0.65")
+        )
+        self.bfs_lora_fallback_repo = str(
+            cfg.get("bfs_lora_fallback_repo") or os.getenv("FLUX2_BFS_LORA_FALLBACK_REPO", "Alissonerdx/BFS-Best-Face-Swap")
+        ).strip()
+        self.bfs_lora_local_cache_dir = str(
+            cfg.get("bfs_lora_local_cache_dir") or os.getenv("FLUX2_BFS_LORA_LOCAL_CACHE_DIR", "/tmp/flux2-lora/bfs-best-face-swap")
+        ).strip()
+        self.lora_mode = str(cfg.get("lora_mode") or os.getenv("FLUX2_LORA_MODE", "tryon")).strip().lower()
+        if self.lora_mode not in {"tryon", "bfs", "stacked"}:
+            self.lora_mode = "tryon"
         self._adapter_name_effective = str(self.adapter_name or "")
+        self._active_lora_specs: List[LoraSpec] = []
         self.device = cfg.get("device") or os.getenv("FLUX2_DEVICE", "cuda")
         self.dtype = self._resolve_dtype(cfg.get("dtype") or os.getenv("FLUX2_DTYPE", "fp16"))
 
@@ -401,6 +470,91 @@ class Flux2CVTONRunner:
             dedup.append(key)
         return dedup
 
+    def _configured_lora_specs(self) -> List[LoraSpec]:
+        primary = LoraSpec(
+            label="tryon",
+            source=str(self.lora_path or "").strip(),
+            weight_name=str(self.lora_weight_name or "").strip(),
+            adapter_name=str(self.adapter_name or "").strip() or "fal_tryon",
+            scale=float(self.lora_scale),
+            fallback_repo=str(self.lora_fallback_repo or "").strip(),
+            local_cache_dir=str(self.lora_local_cache_dir or "").strip(),
+            auto_download=bool(self.lora_auto_download),
+        )
+        bfs = LoraSpec(
+            label="bfs",
+            source=str(self.bfs_lora_path or "").strip(),
+            weight_name=str(self.bfs_lora_weight_name or "").strip(),
+            adapter_name=str(self.bfs_adapter_name or "").strip() or "bfs_face",
+            scale=float(self.bfs_lora_scale),
+            fallback_repo=str(self.bfs_lora_fallback_repo or "").strip(),
+            local_cache_dir=str(self.bfs_lora_local_cache_dir or "").strip(),
+            auto_download=bool(self.lora_auto_download),
+        )
+
+        if self.lora_mode == "bfs":
+            return [bfs]
+        if self.lora_mode == "stacked":
+            specs: List[LoraSpec] = [primary]
+            if bfs.source and bfs.source != primary.source:
+                specs.append(bfs)
+            return specs
+        return [primary]
+
+    def _load_configured_loras_into_pipeline(self, pipe: Any) -> Dict[str, Any]:
+        """
+        Load the configured LoRA adapters into an already-initialized pipeline.
+
+        This is used both during startup and for request-time lazy loading when the
+        pod boots with FLUX2_ENABLE_LORA=0 but the request still asks for LoRA.
+        """
+        lora_sources: List[str] = []
+        lora_weights_loaded: List[str] = []
+        lora_adapters_loaded: List[str] = []
+        lora_scales_loaded: List[float] = []
+        loaded_specs: List[LoraSpec] = []
+        lora_downloaded = False
+        spec_errors: List[str] = []
+
+        for spec in self._configured_lora_specs():
+            if not spec.source:
+                continue
+            try:
+                load_meta = self._load_lora_with_fallback(pipe, spec)
+            except Exception as spec_err:
+                spec_errors.append(f"{spec.label}: {spec_err}")
+                continue
+            lora_sources.append(str(load_meta.get("source") or ""))
+            lora_weights_loaded.append(str(load_meta.get("weight_name") or ""))
+            lora_adapters_loaded.append(str(load_meta.get("adapter_name") or spec.adapter_name))
+            lora_scales_loaded.append(float(load_meta.get("scale") or spec.scale))
+            lora_downloaded = lora_downloaded or bool(load_meta.get("downloaded"))
+            loaded_specs.append(spec)
+
+        self._active_lora_specs = loaded_specs
+        self._adapter_name_effective = str(self._active_lora_specs[0].adapter_name if self._active_lora_specs else "")
+        self._lora_loaded = bool(self._active_lora_specs)
+        self._lora_runtime_enabled = bool(self._active_lora_specs)
+        self._apply_loaded_lora_activation(pipe, enabled=True)
+        if self.fuse_lora and hasattr(pipe, "fuse_lora"):
+            pipe.fuse_lora()
+            self._lora_fused = True
+
+        if spec_errors:
+            message = "; ".join(spec_errors)
+            if self.require_lora and not self._lora_loaded:
+                raise RuntimeError(f"Failed to load mandatory LoRA(s): {message}")
+            logger.warning("Some LoRA specs failed to load; continuing with the successful ones: %s", message)
+
+        return {
+            "lora_loaded": bool(self._lora_loaded),
+            "lora_downloaded": bool(lora_downloaded),
+            "lora_sources": lora_sources,
+            "lora_weights_loaded": lora_weights_loaded,
+            "lora_adapters_loaded": lora_adapters_loaded,
+            "lora_scales_loaded": lora_scales_loaded,
+        }
+
     @staticmethod
     def _list_loaded_adapters(pipe: Any) -> List[str]:
         adapters: List[str] = []
@@ -445,8 +599,14 @@ class Flux2CVTONRunner:
             allow_patterns=["*.safetensors", "*.json", "README.md", "*.txt"],
         )
 
-    def _resolve_lora_source(self) -> Dict[str, Any]:
-        raw = str(self.lora_path or "").strip()
+    def _resolve_lora_source(
+        self,
+        raw: str,
+        auto_download: bool,
+        fallback_repo: str,
+        local_cache_dir: str,
+    ) -> Dict[str, Any]:
+        raw = str(raw or "").strip()
         if not raw:
             return {"resolved_source": "", "is_local": False, "downloaded": False}
 
@@ -455,9 +615,9 @@ class Flux2CVTONRunner:
             files = self._find_local_lora_files(local_path)
             if files:
                 return {"resolved_source": str(local_path), "is_local": True, "downloaded": False}
-            if not self.lora_auto_download:
+            if not auto_download:
                 raise RuntimeError(f"Configured FLUX2_LORA_PATH exists but has no .safetensors files: {local_path}")
-            repo_to_download = self.lora_fallback_repo or ""
+            repo_to_download = fallback_repo or ""
             if not repo_to_download:
                 raise RuntimeError(
                     f"Configured FLUX2_LORA_PATH has no .safetensors files and FLUX2_LORA_FALLBACK_REPO is empty: {local_path}"
@@ -466,36 +626,62 @@ class Flux2CVTONRunner:
             return {"resolved_source": str(local_path), "is_local": True, "downloaded": True}
 
         if _looks_like_hf_repo_id(raw):
-            if not self.lora_auto_download:
+            if not auto_download:
                 return {"resolved_source": raw, "is_local": False, "downloaded": False}
-            cache_dir = Path(self.lora_local_cache_dir).expanduser()
+            cache_dir = Path(local_cache_dir).expanduser()
             if not self._find_local_lora_files(cache_dir):
                 self._download_lora_snapshot(raw, cache_dir)
                 return {"resolved_source": str(cache_dir), "is_local": True, "downloaded": True}
             return {"resolved_source": str(cache_dir), "is_local": True, "downloaded": False}
 
-        if not self.lora_auto_download:
+        if not auto_download:
             raise RuntimeError(
                 f"Configured FLUX2_LORA_PATH not found: {raw}. "
                 "Enable FLUX2_LORA_AUTO_DOWNLOAD=1 or provide a valid local path/repo id."
             )
 
-        repo_to_download = self.lora_fallback_repo or ""
+        repo_to_download = fallback_repo or ""
         if not repo_to_download:
             raise RuntimeError(
                 f"Configured FLUX2_LORA_PATH not found: {raw}, and FLUX2_LORA_FALLBACK_REPO is empty."
             )
-        cache_dir = Path(self.lora_local_cache_dir).expanduser()
+        cache_dir = Path(local_cache_dir).expanduser()
         self._download_lora_snapshot(repo_to_download, cache_dir)
         return {"resolved_source": str(cache_dir), "is_local": True, "downloaded": True}
 
-    def _load_lora_with_fallback(self, pipe: Any) -> Dict[str, Any]:
-        source_info = self._resolve_lora_source()
+    def _load_lora_with_fallback(self, pipe: Any, spec: Optional[LoraSpec] = None) -> Dict[str, Any]:
+        spec = spec or LoraSpec(
+            label="tryon",
+            source=str(self.lora_path or "").strip(),
+            weight_name=str(self.lora_weight_name or "").strip(),
+            adapter_name=str(self.adapter_name or "").strip() or "fal_tryon",
+            scale=float(self.lora_scale),
+            fallback_repo=str(self.lora_fallback_repo or "").strip(),
+            local_cache_dir=str(self.lora_local_cache_dir or "").strip(),
+            auto_download=bool(self.lora_auto_download),
+        )
+        source_info = self._resolve_lora_source(
+            spec.source,
+            spec.auto_download,
+            spec.fallback_repo,
+            spec.local_cache_dir,
+        )
         resolved_source = str(source_info.get("resolved_source") or "").strip()
         if not resolved_source:
             raise RuntimeError("LoRA source is empty after resolution.")
 
-        weight_candidates = self._candidate_lora_weight_names()
+        weight_candidates = [str(spec.weight_name or "").strip()] if str(spec.weight_name or "").strip() else []
+        if spec.label == "bfs":
+            weight_candidates.extend(
+                [
+                    "bfs_head_v1_flux-klein_9b_step3500_rank128.safetensors",
+                    "bfs_head_v1_flux-klein_9b_step3750_rank64.safetensors",
+                    "pytorch_lora_weights.safetensors",
+                ]
+            )
+        else:
+            weight_candidates.extend(self._candidate_lora_weight_names())
+        weight_candidates = [w for i, w in enumerate(weight_candidates) if w and w not in weight_candidates[:i]]
         attempt_weights = list(weight_candidates)
 
         if bool(source_info.get("is_local")):
@@ -516,11 +702,13 @@ class Flux2CVTONRunner:
                 pipe.load_lora_weights(
                     resolved_source,
                     weight_name=weight_name,
-                    adapter_name=self.adapter_name,
+                    adapter_name=spec.adapter_name,
                 )
                 return {
                     "source": resolved_source,
                     "weight_name": weight_name,
+                    "adapter_name": spec.adapter_name,
+                    "scale": float(spec.scale),
                     "downloaded": bool(source_info.get("downloaded")),
                 }
             except Exception as err:
@@ -528,10 +716,12 @@ class Flux2CVTONRunner:
 
         # Final fallback: let diffusers resolve weight file automatically.
         try:
-            pipe.load_lora_weights(resolved_source, adapter_name=self.adapter_name)
+            pipe.load_lora_weights(resolved_source, adapter_name=spec.adapter_name)
             return {
                 "source": resolved_source,
                 "weight_name": "",
+                "adapter_name": spec.adapter_name,
+                "scale": float(spec.scale),
                 "downloaded": bool(source_info.get("downloaded")),
             }
         except Exception as err:
@@ -585,50 +775,40 @@ class Flux2CVTONRunner:
         Flux2PipelineClass = _import_flux2_klein_pipeline()
         logger.info(f"Loading Flux2 CVTON from {self.model_path}...")
         model_load_t0 = time.time()
-        pipe = Flux2PipelineClass.from_pretrained(self.model_path, torch_dtype=self.dtype)
+        from_pretrained_kwargs: Dict[str, Any] = {"torch_dtype": self.dtype}
+        hf_token = self._resolve_hf_token()
+        if hf_token:
+            from_pretrained_kwargs["token"] = hf_token
+        pipe = Flux2PipelineClass.from_pretrained(self.model_path, **from_pretrained_kwargs)
         pipe.to(self.device)
         model_load_seconds = time.time() - model_load_t0
 
         lora_load_seconds = 0.0
         lora_loaded = False
-        lora_source = ""
-        lora_weight_loaded = ""
+        lora_sources: List[str] = []
+        lora_weights_loaded: List[str] = []
+        lora_adapters_loaded: List[str] = []
+        lora_scales_loaded: List[float] = []
         lora_downloaded = False
         if not self.enable_lora:
             if self.require_lora:
                 raise RuntimeError("LoRA is mandatory but FLUX2_ENABLE_LORA is disabled.")
             logger.info("Skipping LoRA load for Flux2 CVTON (FLUX2_ENABLE_LORA=0).")
         else:
-            logger.info(f"Loading LoRA (configured source={self.lora_path})...")
+            logger.info(
+                "Loading LoRA(s) for mode=%s (configured sources=%s)...",
+                self.lora_mode,
+                ", ".join([spec.source for spec in self._configured_lora_specs() if spec.source]),
+            )
             lora_t0 = time.time()
             try:
-                load_meta = self._load_lora_with_fallback(pipe)
-                lora_source = str(load_meta.get("source") or "")
-                lora_weight_loaded = str(load_meta.get("weight_name") or "")
-                lora_downloaded = bool(load_meta.get("downloaded"))
-                adapter_name = self.adapter_name
-                available_adapters = self._list_loaded_adapters(pipe)
-                try:
-                    if available_adapters:
-                        if adapter_name not in available_adapters:
-                            adapter_name = available_adapters[0]
-                        if hasattr(pipe, "set_adapters"):
-                            pipe.set_adapters([adapter_name], adapter_weights=[self.lora_scale])
-                        elif hasattr(pipe, "set_adapter"):
-                            pipe.set_adapter(adapter_name)
-                    else:
-                        logger.warning("LoRA adapters not reported; skipping adapter activation.")
-                        adapter_name = ""
-                except Exception as err:
-                    logger.warning(f"LoRA adapter activation failed; continuing without explicit activation: {err}")
-                    adapter_name = ""
-                self._adapter_name_effective = str(adapter_name or "")
-                if self.fuse_lora and hasattr(pipe, "fuse_lora"):
-                    pipe.fuse_lora()
-                    self._lora_fused = True
-                lora_loaded = True
-                self._lora_loaded = True
-                self._lora_runtime_enabled = True
+                load_meta = self._load_configured_loras_into_pipeline(pipe)
+                lora_sources = list(load_meta.get("lora_sources") or [])
+                lora_weights_loaded = list(load_meta.get("lora_weights_loaded") or [])
+                lora_adapters_loaded = list(load_meta.get("lora_adapters_loaded") or [])
+                lora_scales_loaded = list(load_meta.get("lora_scales_loaded") or [])
+                lora_downloaded = bool(load_meta.get("lora_downloaded"))
+                lora_loaded = bool(load_meta.get("lora_loaded"))
                 lora_load_seconds = time.time() - lora_t0
             except Exception as err:
                 if self.require_lora:
@@ -647,9 +827,15 @@ class Flux2CVTONRunner:
             "lora_enabled": bool(self.enable_lora),
             "lora_required": bool(self.require_lora),
             "lora_loaded": bool(lora_loaded),
+            "lora_mode": str(self.lora_mode),
             "lora_path": str(self.lora_path or ""),
-            "lora_source_resolved": lora_source,
-            "lora_weight_loaded": lora_weight_loaded,
+            "bfs_lora_path": str(self.bfs_lora_path or ""),
+            "lora_source_resolved": lora_sources[0] if lora_sources else "",
+            "lora_sources_resolved": lora_sources,
+            "lora_weight_loaded": lora_weights_loaded[0] if lora_weights_loaded else "",
+            "lora_weights_loaded": lora_weights_loaded,
+            "lora_adapters_loaded": lora_adapters_loaded,
+            "lora_scales_loaded": lora_scales_loaded,
             "lora_auto_download": bool(self.lora_auto_download),
             "lora_downloaded": bool(lora_downloaded),
             "pipeline_optimize_seconds": optimize_seconds,
@@ -667,35 +853,66 @@ class Flux2CVTONRunner:
         }
         return pipe
 
-    def _set_runtime_lora_state(self, enabled: bool) -> bool:
-        if self._pipeline is None:
-            raise RuntimeError("Pipeline is not loaded.")
-        if not self._lora_loaded:
-            if enabled and self.require_lora:
-                raise RuntimeError("LoRA is required for this request but is not loaded.")
-            self._lora_runtime_enabled = False
-            return False
-        if self._lora_fused:
-            if not enabled:
-                raise RuntimeError("Cannot disable LoRA at request-time because it was fused into the pipeline.")
-            self._lora_runtime_enabled = True
-            return True
+    def _resolve_runtime_lora_specs(
+        self,
+        mode_override: Optional[str] = None,
+    ) -> List[LoraSpec]:
+        active_specs = list(self._active_lora_specs or [])
+        if not active_specs:
+            return []
 
-        pipe = self._pipeline
+        mode = str(mode_override or self.lora_mode or "stacked").strip().lower()
+        def _spec_label(spec: Any) -> str:
+            label = str(getattr(spec, "label", "") or getattr(spec, "adapter_name", "")).strip().lower()
+            return label
+
+        if mode == "tryon":
+            selected = [spec for spec in active_specs if _spec_label(spec) in {"tryon", "fal_tryon"}]
+        elif mode == "bfs":
+            selected = [spec for spec in active_specs if _spec_label(spec) in {"bfs", "bfs_face"}]
+        else:
+            selected = list(active_specs)
+
+        return selected or list(active_specs)
+
+    def _apply_loaded_lora_activation(
+        self,
+        pipe: Any,
+        enabled: bool,
+        mode_override: Optional[str] = None,
+        scale_overrides: Optional[Dict[str, float]] = None,
+    ) -> bool:
+        active_specs = self._resolve_runtime_lora_specs(mode_override=mode_override)
+        if active_specs:
+            names = [str(spec.adapter_name) for spec in active_specs if str(spec.adapter_name).strip()]
+            weights = [
+                float(scale_overrides.get(getattr(spec, "label", "") or str(getattr(spec, "adapter_name", "")).strip(), getattr(spec, "scale", self.lora_scale)))
+                if scale_overrides
+                else float(getattr(spec, "scale", self.lora_scale))
+                for spec in active_specs
+                if str(spec.adapter_name).strip()
+            ]
+            if not names:
+                return False
+        else:
+            adapter_name = str(self._adapter_name_effective or "").strip()
+            names = [adapter_name] if adapter_name else []
+            weights = [float(self.lora_scale)] if adapter_name else []
+        if not names:
+            return False
+
         if enabled:
             if hasattr(pipe, "enable_lora"):
                 pipe.enable_lora()
             if hasattr(pipe, "enable_adapters"):
                 pipe.enable_adapters()
-            adapter_name = str(self._adapter_name_effective or "")
-            if adapter_name:
-                try:
-                    if hasattr(pipe, "set_adapters"):
-                        pipe.set_adapters([adapter_name], adapter_weights=[self.lora_scale])
-                    elif hasattr(pipe, "set_adapter"):
-                        pipe.set_adapter(adapter_name)
-                except Exception as err:
-                    logger.warning(f"Runtime LoRA adapter activation failed; continuing without explicit activation: {err}")
+            try:
+                if hasattr(pipe, "set_adapters"):
+                    pipe.set_adapters(names, adapter_weights=weights)
+                elif hasattr(pipe, "set_adapter") and len(names) == 1:
+                    pipe.set_adapter(names[0])
+            except Exception as err:
+                logger.warning(f"Runtime LoRA adapter activation failed; continuing without explicit activation: {err}")
             self._lora_runtime_enabled = True
             return True
 
@@ -704,16 +921,49 @@ class Flux2CVTONRunner:
         elif hasattr(pipe, "disable_adapters"):
             pipe.disable_adapters()
         elif hasattr(pipe, "set_adapters"):
-            adapter_name = str(self._adapter_name_effective or "")
-            if adapter_name:
-                try:
-                    pipe.set_adapters([adapter_name], adapter_weights=[0.0])
-                except Exception as err:
-                    logger.warning(f"Runtime LoRA disable failed; continuing without explicit deactivation: {err}")
+            try:
+                pipe.set_adapters(names, adapter_weights=[0.0 for _ in names])
+            except Exception as err:
+                logger.warning(f"Runtime LoRA disable failed; continuing without explicit deactivation: {err}")
         else:
             raise RuntimeError("Pipeline does not expose a runtime LoRA disable API.")
         self._lora_runtime_enabled = False
         return False
+
+    def _set_runtime_lora_state(
+        self,
+        enabled: bool,
+        mode_override: Optional[str] = None,
+        scale_overrides: Optional[Dict[str, float]] = None,
+    ) -> bool:
+        if self._pipeline is None:
+            raise RuntimeError("Pipeline is not loaded.")
+        if not self._lora_loaded:
+            if not enabled:
+                self._lora_runtime_enabled = False
+                return False
+
+            logger.info("LoRA not loaded at startup; attempting request-time lazy load.")
+            try:
+                self._load_configured_loras_into_pipeline(self._pipeline)
+            except Exception as err:
+                if self.require_lora:
+                    raise RuntimeError(f"LoRA is required for this request but could not be loaded: {err}") from err
+                raise RuntimeError(f"Failed to lazy-load LoRA for this request: {err}") from err
+
+            if not self._lora_loaded:
+                raise RuntimeError("Requested LoRA activation but no configured LoRA could be loaded.")
+        if self._lora_fused:
+            if not enabled:
+                raise RuntimeError("Cannot disable LoRA at request-time because it was fused into the pipeline.")
+            self._lora_runtime_enabled = True
+            return True
+        return self._apply_loaded_lora_activation(
+            self._pipeline,
+            enabled=enabled,
+            mode_override=mode_override,
+            scale_overrides=scale_overrides,
+        )
 
     def ensure_ready(self):
         if self._pipeline is not None:
@@ -793,6 +1043,9 @@ class Flux2CVTONRunner:
         negative_prompt: Optional[str] = None,
         use_lora: Optional[bool] = None,
         true_cfg_scale: Optional[float] = None,
+        lora_mode: Optional[str] = None,
+        lora_scale: Optional[float] = None,
+        bfs_lora_scale: Optional[float] = None,
     ) -> Dict[str, Any]:
         self.ensure_ready()
 
@@ -805,6 +1058,9 @@ class Flux2CVTONRunner:
         board = _flatten_rgba_to_white_rgb(board_image)
         resolved_negative_prompt = str(negative_prompt or "").strip()
         requested_lora = self.enable_lora if use_lora is None else bool(use_lora)
+        requested_lora_mode = str(lora_mode or self.lora_mode or "stacked").strip().lower()
+        if requested_lora_mode not in {"tryon", "bfs", "stacked"}:
+            requested_lora_mode = self.lora_mode if self.lora_mode in {"tryon", "bfs", "stacked"} else "stacked"
         
         # Determine the CFG scale to use for this run
         effective_true_cfg_scale = float(true_cfg_scale if true_cfg_scale is not None else self.true_cfg_scale)
@@ -827,6 +1083,12 @@ class Flux2CVTONRunner:
                     negative_prompt_mode = "ignored"
             else:
                 negative_prompt_mode = "ignored"
+
+        scale_overrides: Dict[str, float] = {}
+        if lora_scale is not None:
+            scale_overrides["tryon"] = float(lora_scale)
+        if bfs_lora_scale is not None:
+            scale_overrides["bfs"] = float(bfs_lora_scale)
 
         def _invoke_once() -> Any:
             call_kwargs: Dict[str, Any] = {
@@ -858,7 +1120,11 @@ class Flux2CVTONRunner:
             return self._pipeline(**call_kwargs).images[0]
 
         with self._infer_lock, torch.inference_mode():
-            effective_lora = self._set_runtime_lora_state(requested_lora)
+            effective_lora = self._set_runtime_lora_state(
+                requested_lora,
+                mode_override=requested_lora_mode,
+                scale_overrides=scale_overrides if scale_overrides else None,
+            )
             if (not self._did_warmup) and self.num_warmups > 0:
                 warm_t0 = time.time()
                 for _ in range(max(0, self.num_warmups)):
@@ -892,6 +1158,9 @@ class Flux2CVTONRunner:
                 "negative_prompt_true_cfg_scale": float(effective_true_cfg_scale),
                 "lora_requested": bool(requested_lora),
                 "lora_effective": bool(effective_lora),
+                "lora_requested_mode": requested_lora_mode,
+                "lora_scale_override": float(lora_scale) if lora_scale is not None else None,
+                "bfs_lora_scale_override": float(bfs_lora_scale) if bfs_lora_scale is not None else None,
                 "runtime_lora_toggle": bool(self.runtime_lora_toggle),
                 "startup_metrics": dict(self._startup_metrics),
             },

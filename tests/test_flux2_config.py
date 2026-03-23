@@ -69,6 +69,12 @@ class TestFlux2ConfigDefaults(unittest.TestCase):
             
             # Shared runner
             self.assertTrue(config.share_base_runner)
+            self.assertEqual(config.lora_mode, "tryon")
+            self.assertIn("BFS-Best-Face-Swap", config.bfs_lora_path)
+            self.assertIn("bfs_head_v1", config.bfs_lora_weight_name)
+            self.assertAlmostEqual(config.bfs_lora_scale, 0.65)
+            self.assertIn("BFS-Best-Face-Swap", config.bfs_lora_fallback_repo)
+            self.assertIn("bfs-best-face-swap", config.bfs_lora_local_cache_dir)
 
 
 class TestFlux2ConfigEnvironmentVariables(unittest.TestCase):
@@ -80,11 +86,17 @@ class TestFlux2ConfigEnvironmentVariables(unittest.TestCase):
             "FLUX2_DESCRIPTOR_BACKEND": "florence",
             "FLUX2_FIDELITY_BACKEND": "qwen2_5_vl",
             "FLUX2_ALLOW_QWEN_BACKEND": "1",
+            "FLUX2_LORA_MODE": "stacked",
+            "FLUX2_BFS_LORA_SCALE": "0.8",
+            "FLUX2_BFS_LORA_FALLBACK_REPO": "custom/bfs",
         }):
             config = Flux2Config.from_env()
             self.assertEqual(config.descriptor_backend, "florence")
             self.assertEqual(config.fidelity_backend, "qwen2_5_vl")
             self.assertTrue(config.allow_qwen_backend)
+            self.assertEqual(config.lora_mode, "stacked")
+            self.assertAlmostEqual(config.bfs_lora_scale, 0.8)
+            self.assertEqual(config.bfs_lora_fallback_repo, "custom/bfs")
     
     def test_low_latency_mode_affects_defaults(self):
         """Test that low latency mode affects other default values."""

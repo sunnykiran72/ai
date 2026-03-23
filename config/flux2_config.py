@@ -410,6 +410,32 @@ class Flux2Config(BaseModel):
         default=True,
         description="Share base Flux2 runner between endpoints"
     )
+    lora_mode: Literal["tryon", "bfs", "stacked"] = Field(
+        default="tryon",
+        description="LoRA operating mode for try-on"
+    )
+    bfs_lora_path: str = Field(
+        default="Alissonerdx/BFS-Best-Face-Swap",
+        description="BFS LoRA repo/path"
+    )
+    bfs_lora_weight_name: str = Field(
+        default="bfs_head_v1_flux-klein_9b_step3500_rank128.safetensors",
+        description="BFS LoRA weight file name"
+    )
+    bfs_lora_scale: float = Field(
+        default=0.65,
+        ge=0.0,
+        le=2.0,
+        description="BFS LoRA adapter scale"
+    )
+    bfs_lora_fallback_repo: str = Field(
+        default="Alissonerdx/BFS-Best-Face-Swap",
+        description="Fallback repo for BFS LoRA downloads"
+    )
+    bfs_lora_local_cache_dir: str = Field(
+        default="/tmp/flux2-lora/bfs-best-face-swap",
+        description="Local cache directory for BFS LoRA downloads"
+    )
     
     @classmethod
     def from_env(cls) -> "Flux2Config":
@@ -599,4 +625,23 @@ class Flux2Config(BaseModel):
             
             # Shared runner
             share_base_runner=env_bool("FLUX2_SHARE_BASE_RUNNER", "1"),
+            lora_mode=(
+                os.getenv("FLUX2_LORA_MODE", "tryon").strip().lower()
+                if os.getenv("FLUX2_LORA_MODE", "tryon").strip().lower() in {"tryon", "bfs", "stacked"}
+                else "tryon"
+            ),
+            bfs_lora_path=os.getenv("FLUX2_BFS_LORA_PATH", "Alissonerdx/BFS-Best-Face-Swap").strip(),
+            bfs_lora_weight_name=os.getenv(
+                "FLUX2_BFS_LORA_WEIGHT_NAME",
+                "bfs_head_v1_flux-klein_9b_step3500_rank128.safetensors",
+            ).strip(),
+            bfs_lora_scale=max(0.0, min(2.0, env_float("FLUX2_BFS_LORA_SCALE", 0.65))),
+            bfs_lora_fallback_repo=os.getenv(
+                "FLUX2_BFS_LORA_FALLBACK_REPO",
+                "Alissonerdx/BFS-Best-Face-Swap",
+            ).strip(),
+            bfs_lora_local_cache_dir=os.getenv(
+                "FLUX2_BFS_LORA_LOCAL_CACHE_DIR",
+                "/tmp/flux2-lora/bfs-best-face-swap",
+            ).strip(),
         )

@@ -128,6 +128,18 @@ class AnalyzeConfig(BaseModel):
     extract_body_strip_dilate: int = Field(default=3, description="Dilation for body strip removal")
     extract_body_strip_max_ratio: float = Field(default=0.28, description="Maximum body strip ratio")
     require_extracted_prompt: bool = Field(default=True, description="Require prompt from extracted garment")
+    debug_artifact_capture_enabled: bool = Field(
+        default=False,
+        description="Save analyze debug artifacts for selected garment types"
+    )
+    debug_artifact_capture_dir: str = Field(
+        default="asymmetric_dataset/debug_capture",
+        description="Directory for saved analyze debug artifacts"
+    )
+    debug_artifact_capture_types: str = Field(
+        default="top,dress",
+        description="Comma-separated garment types eligible for debug artifact capture"
+    )
     
     # Garment postprocessing
     garment_postprocess_enabled: bool = Field(default=True, description="Enable garment postprocessing")
@@ -332,7 +344,16 @@ class AnalyzeConfig(BaseModel):
             extract_body_strip_dilate=max(0, env_int("ANALYZE_EXTRACT_BODY_STRIP_DILATE", 3)),
             extract_body_strip_max_ratio=min(0.95, max(0.01, env_float("ANALYZE_EXTRACT_BODY_STRIP_MAX_RATIO", 0.28))),
             require_extracted_prompt=env_bool("ANALYZE_REQUIRE_EXTRACTED_PROMPT", "1"),
-            
+            debug_artifact_capture_enabled=env_bool("ANALYZE_DEBUG_ARTIFACT_CAPTURE_ENABLED", "0"),
+            debug_artifact_capture_dir=os.getenv(
+                "ANALYZE_DEBUG_ARTIFACT_CAPTURE_DIR",
+                "asymmetric_dataset/debug_capture",
+            ).strip() or "asymmetric_dataset/debug_capture",
+            debug_artifact_capture_types=os.getenv(
+                "ANALYZE_DEBUG_ARTIFACT_CAPTURE_TYPES",
+                "top,dress",
+            ).strip() or "top,dress",
+
             # Garment postprocessing
             garment_postprocess_enabled=env_bool("ANALYZE_GARMENT_POSTPROCESS_ENABLED", "1"),
             garment_target_aspect_w=max(1, env_int("ANALYZE_GARMENT_TARGET_ASPECT_W", 2)),

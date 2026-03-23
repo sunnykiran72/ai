@@ -139,6 +139,41 @@ class TestTryonIntegration:
         assert response.status == "success"
         assert response.message == "Flux2 try-on completed successfully"
         assert response.data == sample_service_response
+
+    @pytest.mark.asyncio
+    async def test_flux2_tryon_endpoint_forwards_lora_overrides(self, mock_tryon_service, sample_service_response):
+        """Test Flux2 try-on forwards LoRA override fields when provided."""
+        flux2_request = Flux2TryonRequest(
+            user_image={"tryonImage": "https://example.com/user.jpg", "promptDescription": "portrait, soft studio"},
+            products=[
+                {
+                    "image": "https://example.com/garment.jpg",
+                    "promptDescription": "elegant evening dress",
+                    "targetType": "dress",
+                }
+            ],
+            steps=12,
+            seed=99,
+            loraMode="stacked",
+            loraScale=0.9,
+            bfsLoraScale=0.55,
+        )
+
+        mock_tryon_service.try_on.return_value = sample_service_response
+
+        response = await flux2_tryon_endpoint(flux2_request, mock_tryon_service)
+
+        mock_tryon_service.try_on.assert_called_once_with(
+            user_image_url=flux2_request.user_image.tryonImage,
+            user_prompt_description=flux2_request.user_image.promptDescription,
+            products=flux2_request.products,
+            steps=flux2_request.steps,
+            seed=flux2_request.seed,
+            lora_mode="stacked",
+            lora_scale=0.9,
+            bfs_lora_scale=0.55,
+        )
+        assert response.status == "success"
     
     @pytest.mark.asyncio
     async def test_legacy_flux_tryon_endpoint_success(self, mock_tryon_service, sample_service_response):

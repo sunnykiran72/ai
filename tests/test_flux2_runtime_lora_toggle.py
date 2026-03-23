@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 
 from PIL import Image
 
@@ -14,10 +15,12 @@ class _FakePipe:
     def __init__(self):
         self.calls = []
         self.adapter_weights = []
+        self.adapter_names = []
         self.enabled = True
 
     def set_adapters(self, names, adapter_weights=None):
         self.calls.append(("set_adapters", list(names), list(adapter_weights or [])))
+        self.adapter_names.append(list(names))
         self.adapter_weights.append(list(adapter_weights or []))
 
     def enable_lora(self):
@@ -83,6 +86,19 @@ class Flux2RuntimeLoraToggleTests(unittest.TestCase):
 
         with self.assertRaises(RuntimeError):
             runner._set_runtime_lora_state(False)
+
+    def test_stacked_mode_sets_both_adapter_weights(self):
+        runner = self._make_runner()
+        runner._active_lora_specs = [
+            SimpleNamespace(adapter_name="tryon", scale=1.0),
+            SimpleNamespace(adapter_name="bfs_face", scale=0.65),
+        ]
+
+        enabled = runner._set_runtime_lora_state(True, mode_override="stacked")
+
+        self.assertTrue(enabled)
+        self.assertIn(["tryon", "bfs_face"], runner._pipeline.adapter_names)
+        self.assertIn([1.0, 0.65], runner._pipeline.adapter_weights)
 
     def test_resolve_tryon_dimensions_preserves_source_aspect(self):
         runner = self._make_runner()

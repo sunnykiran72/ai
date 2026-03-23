@@ -46,7 +46,7 @@ class _FakeLegacyDetector:
 
 
 class TestClothDetector(unittest.TestCase):
-    def test_legacy_fallback_used_for_weak_detector(self):
+    def test_weak_fashion_detection_still_returns_fashion_crop(self):
         image = Image.new("RGB", (100, 100), "white")
         detector = ClothDetector(
             fashion_detector=_FakeFashionDetector([
@@ -57,8 +57,8 @@ class TestClothDetector(unittest.TestCase):
 
         candidates = detector.detect_fashion_candidates(image)
         self.assertEqual(len(candidates), 1)
-        self.assertEqual(candidates[0]["type"], "top")
-        self.assertEqual(candidates[0]["source"], "legacy_yolo")
+        self.assertEqual(candidates[0]["type"], "dress")
+        self.assertEqual(candidates[0]["source"], "fashion_object_detection")
 
     def test_strong_fashion_detection_skips_legacy(self):
         image = Image.new("RGB", (100, 100), "white")

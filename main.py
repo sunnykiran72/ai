@@ -15,17 +15,25 @@ import os
 import re
 import time
 from dataclasses import replace
+from pathlib import Path
 from typing import Optional, List, Dict, Tuple
 
 import numpy as np
 from PIL import Image
 import requests
 
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 from fastapi import FastAPI
 
-# Load environment variables before importing modules
-load_dotenv()
+# Load environment variables before importing modules.
+# Resolve .env relative to this file so startup is stable regardless of cwd.
+_ENV_PATH = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=_ENV_PATH, override=False)
+_dotenv_hf_values = dotenv_values(_ENV_PATH)
+for _hf_key in ("HUGGING_FACE_KEY", "HF_TOKEN", "HUGGINGFACE_HUB_TOKEN"):
+    _hf_value = str(_dotenv_hf_values.get(_hf_key, "")).strip()
+    if _hf_value:
+        os.environ[_hf_key] = _hf_value
 
 # Configuration and Services
 from config import get_config

@@ -92,8 +92,9 @@ class ClothDetector:
     """
     Comparison-friendly detector wrapper.
 
-    It keeps the legacy YOLO path intact while exposing a fashion-specific
-    detector path that can be verified and tightened with parser semantics.
+    The analyze pipeline should use the fashion-specific detector as the
+    primary crop source. Legacy YOLO remains available only for explicit
+    comparison/debug paths.
     """
 
     def __init__(
@@ -448,11 +449,6 @@ class ClothDetector:
             source_name="fashion_object_detection",
         )
         candidates = self._tighten_pair_boundaries(candidates, image)
-        use_legacy_fallback = self._is_weak_or_ambiguous(raw, requested_type, image.height) or not candidates
-        if use_legacy_fallback:
-            legacy_candidates = self._build_legacy_candidates(image, requested_type=requested_type)
-            if legacy_candidates:
-                candidates = legacy_candidates
 
         # Collapse same-type detections - keep only highest confidence per type
         candidates = self._collapse_same_type_detections(candidates)

@@ -51,6 +51,7 @@ from modules.wardrobe.extraction.detection_stage import (
 from modules.wardrobe.extraction.generation_stage import run_selected_item_extraction_or_response
 from modules.wardrobe.extraction.prompting_stage import apply_selected_item_prompting
 from modules.wardrobe.extraction.postprocess_stage import sync_selected_item_progress
+from modules.wardrobe.extraction.debug_artifacts import maybe_save_debug_artifacts
 
 logger = logging.getLogger("glamify-ai")
 
@@ -649,6 +650,17 @@ class AnalyzeService:
                 sync_wardrobe_progress_dispatch=_sync_wardrobe_progress_dispatch,
                 prompting_context=prompting_context,
             )
+
+            capture_path = maybe_save_debug_artifacts(
+                enabled=bool(getattr(self.config, "debug_artifact_capture_enabled", False)),
+                capture_dir=str(getattr(self.config, "debug_artifact_capture_dir", "")),
+                allowed_types=str(getattr(self.config, "debug_artifact_capture_types", "top,dress")),
+                upload_name=getattr(image_input, "upload_name", ""),
+                selected_item=selected_item,
+                requested_type=requested_type,
+            )
+            if capture_path is not None and selected_item is not None:
+                selected_item["debugArtifactCapturePath"] = str(capture_path)
 
             # Build final response
             public_item = main_mod._to_public_item(selected_item) if selected_item else None

@@ -149,6 +149,23 @@ class Flux2TryonRequest(BaseModel):
     user_image: Flux2TryonUserImage
     steps: int = Field(default=20, ge=4, le=50, description="Number of generation steps")
     seed: int = Field(default=42, ge=0, le=2147483647, description="Random seed for generation")
+    loraMode: Optional[str] = Field(default=None, description="LoRA mode override: tryon, bfs, stacked")
+    loraScale: Optional[float] = Field(default=None, ge=0.0, le=2.0, description="Try-on LoRA scale override")
+    bfsLoraScale: Optional[float] = Field(default=None, ge=0.0, le=2.0, description="BFS LoRA scale override")
+
+    @field_validator("loraMode")
+    @classmethod
+    def _validate_lora_mode(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("loraMode must be a string")
+        cleaned = value.strip().lower()
+        if not cleaned:
+            return None
+        if cleaned not in {"tryon", "bfs", "stacked"}:
+            raise ValueError("loraMode must be one of: tryon, bfs, stacked")
+        return cleaned
 
 
 # ── Analyze Models ──
