@@ -79,13 +79,32 @@ class TryonService:
         )
         board, board_mode = self._build_board(garments)
 
+        resolved_lora_mode = str(lora_mode or getattr(self.config, "lora_mode", "tryon"))
+
         prompt_text = build_tryon_prompt_v2(
             user_description=str(user_prompt_description or ""),
             garment_descriptions=garment_descriptions,
             target_types=garment_types,
             board_mode=board_mode,
-            lora_mode=str(lora_mode or getattr(self.config, "lora_mode", "tryon")),
+            lora_mode=resolved_lora_mode,
         )
+        stacked_tryon_prompt: Optional[str] = None
+        stacked_bfs_prompt: Optional[str] = None
+        if resolved_lora_mode.strip().lower() == "stacked":
+            stacked_tryon_prompt = build_tryon_prompt_v2(
+                user_description=str(user_prompt_description or ""),
+                garment_descriptions=garment_descriptions,
+                target_types=garment_types,
+                board_mode=board_mode,
+                lora_mode="tryon",
+            )
+            stacked_bfs_prompt = build_tryon_prompt_v2(
+                user_description=str(user_prompt_description or ""),
+                garment_descriptions=garment_descriptions,
+                target_types=garment_types,
+                board_mode=board_mode,
+                lora_mode="bfs",
+            )
 
         flux_runner = getattr(self.engine, "flux2", None)
         if flux_runner is None:
@@ -98,9 +117,11 @@ class TryonService:
             steps=steps,
             seed=seed,
             use_lora=True,
-            lora_mode=str(lora_mode or getattr(self.config, "lora_mode", "tryon")),
+            lora_mode=resolved_lora_mode,
             lora_scale=lora_scale,
             bfs_lora_scale=bfs_lora_scale,
+            stacked_tryon_prompt=stacked_tryon_prompt,
+            stacked_bfs_prompt=stacked_bfs_prompt,
         )
         latency = float(flux_result.get("latency") or 0.0)
 

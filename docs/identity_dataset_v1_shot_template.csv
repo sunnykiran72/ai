@@ -1,0 +1,21 @@
+shot_id,pose_id,pose_description,angle_id,angle_description,background_id,lighting_id,garment_slot
+01,P1,"Standing neutral, arms relaxed",A1,Front,B1,L1,G_core_1
+02,P1,"Standing neutral, arms relaxed",A2,30° left,B1,L1,G_core_1
+03,P1,"Standing neutral, arms relaxed",A3,30° right,B1,L1,G_core_1
+04,P1,"Standing neutral, arms relaxed",A4,Near profile,B1,L2,G_core_1
+05,P2,Standing contrapposto (weight shift),A1,Front,B2,L1,G_core_2
+06,P2,Standing contrapposto (weight shift),A2,30° left,B2,L1,G_core_2
+07,P2,Standing contrapposto (weight shift),A3,30° right,B2,L2,G_core_2
+08,P2,Standing contrapposto (weight shift),A4,Near profile,B2,L2,G_core_2
+09,P3,"Seated upright, knees forward",A1,Front,B1,L2,G_rot_1
+10,P3,"Seated upright, knees forward",A2,30° left,B1,L2,G_rot_1
+11,P3,"Seated upright, knees forward",A3,30° right,B3,L1,G_rot_1
+12,P3,"Seated upright, knees forward",A4,Near profile,B3,L1,G_rot_1
+13,P4,Seated side posture,A1,Front,B2,L2,G_rot_2
+14,P4,Seated side posture,A2,30° left,B2,L2,G_rot_2
+15,P4,Seated side posture,A3,30° right,B3,L1,G_rot_2
+16,P4,Seated side posture,A4,Near profile,B3,L2,G_rot_2
+17,P5,Motion pose (step/walk freeze),A1,Front,B1,L1,G_rot_3
+18,P5,Motion pose (step/walk freeze),A2,30° left,B1,L2,G_rot_3
+19,P5,Motion pose (step/walk freeze),A3,30° right,B2,L1,G_rot_3
+20,P5,Motion pose (step/walk freeze),A4,Near profile,B2,L2,G_rot_3

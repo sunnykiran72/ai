@@ -100,6 +100,32 @@ class Flux2RuntimeLoraToggleTests(unittest.TestCase):
         self.assertIn(["tryon", "bfs_face"], runner._pipeline.adapter_names)
         self.assertIn([1.0, 0.65], runner._pipeline.adapter_weights)
 
+    def test_run_tryon_stacked_uses_api_scales(self):
+        runner = self._make_runner()
+        runner._active_lora_specs = [
+            SimpleNamespace(adapter_name="tryon", scale=1.0),
+            SimpleNamespace(adapter_name="bfs_face", scale=0.65),
+        ]
+        image = Image.new("RGB", (8, 8), color="black")
+
+        result = runner.run_tryon(
+            person_image=image,
+            board_image=image,
+            prompt="test",
+            steps=1,
+            seed=1,
+            lora_mode="stacked",
+            lora_scale=0.25,
+            bfs_lora_scale=0.75,
+        )
+
+        metadata = result["metadata"]
+        self.assertEqual(metadata["lora_stacked_strategy"], "dual_pass_blend")
+        self.assertEqual(metadata["lora_effective_scales"], {"tryon": 0.25, "bfs": 0.75})
+        self.assertAlmostEqual(float(metadata["lora_stacked_blend_alpha"]), 0.75, places=6)
+        self.assertIn(["tryon"], runner._pipeline.adapter_names)
+        self.assertIn(["bfs_face"], runner._pipeline.adapter_names)
+
     def test_resolve_tryon_dimensions_preserves_source_aspect(self):
         runner = self._make_runner()
         image = Image.new("RGB", (640, 480), color="white")
