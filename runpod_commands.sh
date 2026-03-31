@@ -5,7 +5,7 @@
 cd /workspace/hybrid_vto_v1_latest_v1
 
 # Step 2: Pull latest changes
-git pull origin kiran/latest_v1
+git pull origin wardobe_and_tryon
 
 # Step 3: Stop existing application
 pkill -f "uvicorn main:app"

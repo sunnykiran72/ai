@@ -19,7 +19,7 @@ STEP 2: Pull the Changes
 Once connected, copy and paste these commands:
 
 cd /workspace/hybrid_vto_v1_latest_v1
-git pull origin kiran/latest_v1
+git pull origin wardobe_and_tryon
 
 
 STEP 3: Restart the Application

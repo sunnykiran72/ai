@@ -33,7 +33,7 @@ echo ""
 echo "=========================================="
 echo "Step 2: Pulling latest changes from GitHub..."
 echo "=========================================="
-git pull origin kiran/latest_v1
+git pull origin wardobe_and_tryon
 echo ""
 
 echo "=========================================="
