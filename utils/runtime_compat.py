@@ -218,6 +218,8 @@ def _build_minicpm_garment_prompt(
         "Describe the product garment for high-fidelity virtual try-on. "
         f"The required garment category is {type_label}. "
         f"Describe only that single {type_label} and ignore every other clothing item or body region. "
+        "When describing left/right orientation, use the garment's own left/right side within the image, not the viewer's perspective. "
+        "For asymmetric garments, sleeve side, bare shoulder side, straps, and neckline direction must all follow garment-relative orientation consistently. "
         "Return exactly one valid JSON object with keys \"base_garment_prompt\" and \"extraction_avoid_clause\"; "
         "these keys must always be present. "
         "The JSON must contain: base_garment_prompt (one detailed sentence describing type, neckline/opening, "

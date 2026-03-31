@@ -4,6 +4,7 @@ import logging
 import os
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -579,6 +580,15 @@ class Flux2CVTONRunner:
             uniq.append(name)
         return uniq
 
+    @staticmethod
+    def _make_request_adapter_name(base_name: str) -> str:
+        cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in str(base_name or "").strip())
+        cleaned = cleaned.strip("-_")
+        if not cleaned:
+            cleaned = "request_lora"
+        suffix = uuid.uuid4().hex[:8]
+        return f"{cleaned}-{suffix}"
+
     def _download_lora_snapshot(self, repo_id: str, local_dir: Path) -> None:
         try:
             from huggingface_hub import snapshot_download
@@ -1046,6 +1056,9 @@ class Flux2CVTONRunner:
         lora_mode: Optional[str] = None,
         lora_scale: Optional[float] = None,
         bfs_lora_scale: Optional[float] = None,
+        lora_path: Optional[str] = None,
+        lora_weight_name: Optional[str] = None,
+        adapter_name: Optional[str] = None,
     ) -> Dict[str, Any]:
         self.ensure_ready()
 
@@ -1061,6 +1074,63 @@ class Flux2CVTONRunner:
         requested_lora_mode = str(lora_mode or self.lora_mode or "stacked").strip().lower()
         if requested_lora_mode not in {"tryon", "bfs", "stacked"}:
             requested_lora_mode = self.lora_mode if self.lora_mode in {"tryon", "bfs", "stacked"} else "stacked"
+        request_lora_path = str(lora_path or "").strip()
+        request_lora_weight_name = str(lora_weight_name or "").strip()
+        request_adapter_name = str(adapter_name or "").strip()
+        override_requested = any([request_lora_path, request_lora_weight_name, request_adapter_name])
+        override_restore: Dict[str, Any] = {}
+        if override_requested:
+            request_adapter_name_effective = self._make_request_adapter_name(
+                request_adapter_name or request_lora_weight_name or request_lora_path or self.adapter_name or "request_lora"
+            )
+            override_restore = {
+                "lora_path": self.lora_path,
+                "lora_weight_name": self.lora_weight_name,
+                "adapter_name": self.adapter_name,
+                "lora_mode": self.lora_mode,
+                "lora_scale": self.lora_scale,
+                "_active_lora_specs": list(self._active_lora_specs),
+                "_adapter_name_effective": self._adapter_name_effective,
+                "_lora_loaded": self._lora_loaded,
+                "_lora_fused": self._lora_fused,
+                "_lora_runtime_enabled": self._lora_runtime_enabled,
+                "request_adapter_name_effective": request_adapter_name_effective,
+            }
+            if request_lora_path:
+                self.lora_path = request_lora_path
+            if request_lora_weight_name:
+                self.lora_weight_name = request_lora_weight_name
+            self.adapter_name = request_adapter_name_effective
+            self.lora_mode = requested_lora_mode
+            if lora_scale is not None:
+                self.lora_scale = float(lora_scale)
+            try:
+                loaded_adapters = self._list_loaded_adapters(self._pipeline)
+                if loaded_adapters and hasattr(self._pipeline, "delete_adapters"):
+                    try:
+                        self._pipeline.delete_adapters(loaded_adapters)
+                    except Exception as err:
+                        logger.warning(f"Request-time LoRA adapter deletion failed; continuing: {err}")
+                if hasattr(self._pipeline, "unload_lora_weights"):
+                    self._pipeline.unload_lora_weights()
+                elif hasattr(self._pipeline, "disable_adapters"):
+                    self._pipeline.disable_adapters()
+            except Exception as err:
+                logger.warning(f"Request-time LoRA reset failed; continuing with reload attempt: {err}")
+            self._active_lora_specs = []
+            self._adapter_name_effective = str(self.adapter_name or "")
+            self._lora_loaded = False
+            self._lora_runtime_enabled = False
+            logger.info(
+                "Request-time LoRA override: mode=%s path=%s weight=%s adapter=%s requested_adapter=%s scale=%s",
+                self.lora_mode,
+                self.lora_path,
+                self.lora_weight_name,
+                self.adapter_name,
+                request_adapter_name or None,
+                self.lora_scale,
+            )
+            self._load_configured_loras_into_pipeline(self._pipeline)
         
         # Determine the CFG scale to use for this run
         effective_true_cfg_scale = float(true_cfg_scale if true_cfg_scale is not None else self.true_cfg_scale)
@@ -1119,22 +1189,83 @@ class Flux2CVTONRunner:
                     self._warned_negative_prompt_unsupported = True
             return self._pipeline(**call_kwargs).images[0]
 
-        with self._infer_lock, torch.inference_mode():
-            effective_lora = self._set_runtime_lora_state(
-                requested_lora,
-                mode_override=requested_lora_mode,
-                scale_overrides=scale_overrides if scale_overrides else None,
-            )
-            if (not self._did_warmup) and self.num_warmups > 0:
-                warm_t0 = time.time()
-                for _ in range(max(0, self.num_warmups)):
-                    _ = _invoke_once()
-                warmup_seconds = time.time() - warm_t0
-                self._did_warmup = True
+        cleanup_error: Optional[Exception] = None
+        try:
+            with self._infer_lock, torch.inference_mode():
+                effective_lora = self._set_runtime_lora_state(
+                    requested_lora,
+                    mode_override=requested_lora_mode,
+                    scale_overrides=scale_overrides if scale_overrides else None,
+                )
+                if (not self._did_warmup) and self.num_warmups > 0:
+                    warm_t0 = time.time()
+                    for _ in range(max(0, self.num_warmups)):
+                        _ = _invoke_once()
+                    warmup_seconds = time.time() - warm_t0
+                    self._did_warmup = True
 
-            infer_t0 = time.time()
-            result = _invoke_once()
-            latency = time.time() - infer_t0
+                infer_t0 = time.time()
+                result = _invoke_once()
+                latency = time.time() - infer_t0
+
+                if override_restore:
+                    try:
+                        request_adapter_name_effective = str(
+                            override_restore.get("request_adapter_name_effective") or self.adapter_name or ""
+                        ).strip()
+                        original_adapter_names = {
+                            str(getattr(spec, "adapter_name", "")).strip()
+                            for spec in override_restore.get("_active_lora_specs", [])
+                            if str(getattr(spec, "adapter_name", "")).strip()
+                        }
+                        loaded_adapters = self._list_loaded_adapters(self._pipeline)
+                        if loaded_adapters:
+                            request_loaded = [
+                                name
+                                for name in loaded_adapters
+                                if name == request_adapter_name_effective or name not in original_adapter_names
+                            ]
+                            if request_loaded and hasattr(self._pipeline, "delete_adapters"):
+                                try:
+                                    self._pipeline.delete_adapters(request_loaded)
+                                except Exception as err:
+                                    logger.warning(
+                                        "Request-time LoRA adapter cleanup failed; continuing with restore: %s", err
+                                    )
+                            if hasattr(self._pipeline, "unload_lora_weights"):
+                                self._pipeline.unload_lora_weights()
+                            elif hasattr(self._pipeline, "disable_adapters"):
+                                self._pipeline.disable_adapters()
+                    except Exception as err:
+                        cleanup_error = err
+
+                    self.lora_path = override_restore["lora_path"]
+                    self.lora_weight_name = override_restore["lora_weight_name"]
+                    self.adapter_name = override_restore["adapter_name"]
+                    self.lora_mode = override_restore["lora_mode"]
+                    self.lora_scale = override_restore["lora_scale"]
+                    self._active_lora_specs = override_restore["_active_lora_specs"]
+                    self._adapter_name_effective = override_restore["_adapter_name_effective"]
+                    self._lora_loaded = override_restore["_lora_loaded"]
+                    self._lora_fused = override_restore["_lora_fused"]
+                    self._lora_runtime_enabled = override_restore["_lora_runtime_enabled"]
+                    if self._pipeline is not None and self._active_lora_specs:
+                        try:
+                            self._load_configured_loras_into_pipeline(self._pipeline)
+                        except Exception as err:
+                            logger.warning(
+                                "Failed to restore original LoRA state after request override; continuing: %s", err
+                            )
+                    elif cleanup_error is not None:
+                        logger.warning(
+                            "Request-time LoRA cleanup encountered an error; original state restored anyway: %s",
+                            cleanup_error,
+                        )
+        finally:
+            if override_restore:
+                self._lora_loaded = override_restore["_lora_loaded"]
+                self._lora_fused = override_restore["_lora_fused"]
+                self._lora_runtime_enabled = override_restore["_lora_runtime_enabled"]
 
         return {
             "image": result,
@@ -1161,6 +1292,9 @@ class Flux2CVTONRunner:
                 "lora_requested_mode": requested_lora_mode,
                 "lora_scale_override": float(lora_scale) if lora_scale is not None else None,
                 "bfs_lora_scale_override": float(bfs_lora_scale) if bfs_lora_scale is not None else None,
+                "lora_path_override": request_lora_path or None,
+                "lora_weight_name_override": request_lora_weight_name or None,
+                "adapter_name_override": request_adapter_name or None,
                 "runtime_lora_toggle": bool(self.runtime_lora_toggle),
                 "startup_metrics": dict(self._startup_metrics),
             },

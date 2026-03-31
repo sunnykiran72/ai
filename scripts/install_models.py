@@ -18,6 +18,9 @@ DEFAULT_FLUX2_MODEL_ID = "black-forest-labs/FLUX.2-klein-9B"
 DEFAULT_FASHN_MODEL_ID = "fashn-ai/fashn-vton-1.5"
 DEFAULT_FASHN_LOCAL_DIR = "/workspace/models/fashn"
 DEFAULT_LORA_LOCAL_DIR = "/workspace/models/flux2-lora/fal-virtual-tryon"
+DEFAULT_BFS_LORA_LOCAL_DIR = "/workspace/models/flux2-lora/bfs-best-face-swap"
+DEFAULT_BFS_LORA_REPO = "Alissonerdx/BFS-Best-Face-Swap"
+DEFAULT_BFS_LORA_WEIGHT_NAME = "bfs_head_v1_flux-klein_9b_step3500_rank128.safetensors"
 
 
 def parse_env_file(path: Path) -> Dict[str, str]:
@@ -125,6 +128,7 @@ def main() -> int:
     parser.add_argument("--fashn-model-id", default=DEFAULT_FASHN_MODEL_ID)
     parser.add_argument("--fashn-local-dir", default=DEFAULT_FASHN_LOCAL_DIR)
     parser.add_argument("--lora-local-dir", default=DEFAULT_LORA_LOCAL_DIR)
+    parser.add_argument("--bfs-lora-local-dir", default=DEFAULT_BFS_LORA_LOCAL_DIR)
     parser.add_argument("--check-only", action="store_true")
     parser.add_argument("--force-redownload", action="store_true")
     parser.add_argument("--skip-lora", action="store_true")
@@ -148,17 +152,26 @@ def main() -> int:
 
     flux2_path = resolve_path(env_values.get("FLUX2_MODEL_PATH", "./flux2-klein"), project_root)
     fashn_path = resolve_path(env_values.get("FASHN_V15_PATH", args.fashn_local_dir), project_root)
+    lora_mode = env_values.get("FLUX2_LORA_MODE", "tryon").strip().lower()
+    if lora_mode not in {"tryon", "bfs", "stacked"}:
+        lora_mode = "tryon"
     lora_raw = env_values.get("FLUX2_LORA_PATH", "fal/flux-klein-9b-virtual-tryon-lora")
+    bfs_raw = env_values.get("FLUX2_BFS_LORA_PATH", DEFAULT_BFS_LORA_REPO)
     lora_is_repo = looks_like_hf_repo_id(lora_raw)
+    bfs_is_repo = looks_like_hf_repo_id(bfs_raw)
     lora_path = resolve_path(args.lora_local_dir if lora_is_repo else lora_raw, project_root)
+    bfs_path = resolve_path(args.bfs_lora_local_dir if bfs_is_repo else bfs_raw, project_root)
     lora_weight_name = env_values.get("FLUX2_LORA_WEIGHT_NAME", "flux-klein-tryon.safetensors")
+    bfs_weight_name = env_values.get("FLUX2_BFS_LORA_WEIGHT_NAME", DEFAULT_BFS_LORA_WEIGHT_NAME)
 
     checks = [
         ("flux2-klein-9b", flux2_path, path_ready(flux2_path)),
         ("fashn-vton-1.5", fashn_path, path_ready(fashn_path)),
     ]
-    if not args.skip_lora:
+    if not args.skip_lora and lora_mode in {"tryon", "stacked"}:
         checks.append(("flux2-tryon-lora", lora_path, lora_path_ready(lora_path, lora_weight_name)))
+    if not args.skip_lora and lora_mode in {"bfs", "stacked"}:
+        checks.append(("flux2-bfs-lora", bfs_path, lora_path_ready(bfs_path, bfs_weight_name)))
     print_status(checks)
 
     missing = [name for name, _, ok in checks if not ok]
@@ -191,7 +204,7 @@ def main() -> int:
             resume_download=True,
         )
 
-    if not args.skip_lora and (args.force_redownload or not lora_path_ready(lora_path, lora_weight_name)):
+    if not args.skip_lora and lora_mode in {"tryon", "stacked"} and (args.force_redownload or not lora_path_ready(lora_path, lora_weight_name)):
         lora_repo = lora_raw if lora_is_repo else ""
         if lora_repo:
             print(f"[run] snapshot_download {lora_repo} -> {lora_path}")
@@ -205,14 +218,38 @@ def main() -> int:
             )
             env_values["FLUX2_LORA_PATH"] = str(lora_path)
 
+    if not args.skip_lora and lora_mode in {"bfs", "stacked"} and (args.force_redownload or not lora_path_ready(bfs_path, bfs_weight_name)):
+        bfs_repo = bfs_raw if bfs_is_repo else ""
+        if bfs_repo:
+            print(f"[run] snapshot_download {bfs_repo} -> {bfs_path}")
+            bfs_path.mkdir(parents=True, exist_ok=True)
+            snapshot_download(
+                repo_id=bfs_repo,
+                local_dir=str(bfs_path),
+                token=hf_token,
+                resume_download=True,
+                allow_patterns=["*.safetensors", "*.json", "README.md", "*.txt"],
+            )
+            env_values["FLUX2_BFS_LORA_PATH"] = str(bfs_path)
+
     env_values["FLUX2_MODEL_PATH"] = str(flux2_path)
     env_values["FASHN_V15_PATH"] = str(fashn_path)
+    env_values["FLUX2_LORA_MODE"] = lora_mode
     env_values["FLUX2_ENABLE_LORA"] = env_values.get("FLUX2_ENABLE_LORA", "1") or "1"
     env_values["FLUX2_REQUIRE_LORA"] = env_values.get("FLUX2_REQUIRE_LORA", "1") or "1"
     env_values["FLUX2_LORA_AUTO_DOWNLOAD"] = env_values.get("FLUX2_LORA_AUTO_DOWNLOAD", "1") or "1"
     env_values["FLUX2_LORA_FALLBACK_REPO"] = env_values.get(
         "FLUX2_LORA_FALLBACK_REPO", "fal/flux-klein-9b-virtual-tryon-lora"
     ) or "fal/flux-klein-9b-virtual-tryon-lora"
+    env_values["FLUX2_BFS_LORA_PATH"] = env_values.get("FLUX2_BFS_LORA_PATH", DEFAULT_BFS_LORA_REPO) or DEFAULT_BFS_LORA_REPO
+    env_values["FLUX2_BFS_LORA_WEIGHT_NAME"] = env_values.get("FLUX2_BFS_LORA_WEIGHT_NAME", DEFAULT_BFS_LORA_WEIGHT_NAME) or DEFAULT_BFS_LORA_WEIGHT_NAME
+    env_values["FLUX2_BFS_LORA_SCALE"] = env_values.get("FLUX2_BFS_LORA_SCALE", "0.65") or "0.65"
+    env_values["FLUX2_BFS_LORA_FALLBACK_REPO"] = env_values.get(
+        "FLUX2_BFS_LORA_FALLBACK_REPO", DEFAULT_BFS_LORA_REPO
+    ) or DEFAULT_BFS_LORA_REPO
+    env_values["FLUX2_BFS_LORA_LOCAL_CACHE_DIR"] = env_values.get(
+        "FLUX2_BFS_LORA_LOCAL_CACHE_DIR", DEFAULT_BFS_LORA_LOCAL_DIR
+    ) or DEFAULT_BFS_LORA_LOCAL_DIR
     env_values["HF_TOKEN"] = hf_token
     env_values["HUGGINGFACE_HUB_TOKEN"] = hf_token
     write_env_file(env_file, env_values)
@@ -222,8 +259,10 @@ def main() -> int:
         ("flux2-klein-9b", flux2_path, path_ready(flux2_path)),
         ("fashn-vton-1.5", fashn_path, path_ready(fashn_path)),
     ]
-    if not args.skip_lora:
+    if not args.skip_lora and lora_mode in {"tryon", "stacked"}:
         checks.append(("flux2-tryon-lora", lora_path, lora_path_ready(lora_path, lora_weight_name)))
+    if not args.skip_lora and lora_mode in {"bfs", "stacked"}:
+        checks.append(("flux2-bfs-lora", bfs_path, lora_path_ready(bfs_path, bfs_weight_name)))
     print_status(checks)
     if any(not ok for _, _, ok in checks):
         return 1

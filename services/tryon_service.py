@@ -60,6 +60,9 @@ class TryonService:
         lora_mode: Optional[str] = None,
         lora_scale: Optional[float] = None,
         bfs_lora_scale: Optional[float] = None,
+        lora_path: Optional[str] = None,
+        lora_weight_name: Optional[str] = None,
+        adapter_name: Optional[str] = None,
         **_kwargs,
     ):
         """
@@ -101,6 +104,9 @@ class TryonService:
             lora_mode=str(lora_mode or getattr(self.config, "lora_mode", "tryon")),
             lora_scale=lora_scale,
             bfs_lora_scale=bfs_lora_scale,
+            lora_path=lora_path,
+            lora_weight_name=lora_weight_name,
+            adapter_name=adapter_name,
         )
         latency = float(flux_result.get("latency") or 0.0)
 

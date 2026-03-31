@@ -152,6 +152,9 @@ class Flux2TryonRequest(BaseModel):
     loraMode: Optional[str] = Field(default=None, description="LoRA mode override: tryon, bfs, stacked")
     loraScale: Optional[float] = Field(default=None, ge=0.0, le=2.0, description="Try-on LoRA scale override")
     bfsLoraScale: Optional[float] = Field(default=None, ge=0.0, le=2.0, description="BFS LoRA scale override")
+    loraPath: Optional[str] = Field(default=None, description="Try-on LoRA path or HF repo override")
+    loraWeightName: Optional[str] = Field(default=None, description="Try-on LoRA weight file override")
+    adapterName: Optional[str] = Field(default=None, description="Runtime LoRA adapter name override")
 
     @field_validator("loraMode")
     @classmethod
@@ -166,6 +169,16 @@ class Flux2TryonRequest(BaseModel):
         if cleaned not in {"tryon", "bfs", "stacked"}:
             raise ValueError("loraMode must be one of: tryon, bfs, stacked")
         return cleaned
+
+    @field_validator("loraPath", "loraWeightName", "adapterName")
+    @classmethod
+    def _validate_optional_lora_text(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("LoRA override values must be strings")
+        cleaned = value.strip()
+        return cleaned or None
 
 
 # ── Analyze Models ──

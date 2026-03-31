@@ -117,6 +117,12 @@ async def flux2_tryon_endpoint(
             tryon_kwargs["lora_scale"] = request.loraScale
         if request.bfsLoraScale is not None:
             tryon_kwargs["bfs_lora_scale"] = request.bfsLoraScale
+        if request.loraPath is not None:
+            tryon_kwargs["lora_path"] = request.loraPath
+        if request.loraWeightName is not None:
+            tryon_kwargs["lora_weight_name"] = request.loraWeightName
+        if request.adapterName is not None:
+            tryon_kwargs["adapter_name"] = request.adapterName
 
         result = await tryon_service.try_on(**tryon_kwargs)
         

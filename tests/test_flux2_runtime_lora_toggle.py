@@ -63,6 +63,34 @@ class Flux2RuntimeLoraToggleTests(unittest.TestCase):
         self.assertIn(("enable_lora",), runner._pipeline.calls)
         self.assertIn([runner.lora_scale], runner._pipeline.adapter_weights)
 
+    def test_run_extraction_can_keep_lora_active(self):
+        runner = self._make_runner()
+        runner.ensure_ready = lambda: None
+        runner._pipeline = _FakePipe()
+        runner._lora_loaded = True
+        runner._active_lora_specs = [SimpleNamespace(label="tryon", adapter_name="fal_tryon", scale=1.0)]
+        runner._adapter_name_effective = "fal_tryon"
+        image = Image.new("RGB", (8, 8), color="black")
+
+        result = runner.run_extraction(
+            garment_image=image,
+            prompt="test",
+            steps=1,
+            seed=1,
+            use_lora=True,
+            runtime_lora_path="dx8152/Flux2-Klein-9B-Consistency",
+            runtime_lora_weight_name="Klein-consistency.safetensors",
+            runtime_lora_adapter_name="consistency",
+            runtime_lora_scale=0.95,
+        )
+
+        self.assertTrue(result["metadata"]["lora_requested"])
+        self.assertTrue(result["metadata"]["lora_enabled"])
+        self.assertEqual(result["metadata"]["runtime_lora_path"], "dx8152/Flux2-Klein-9B-Consistency")
+        self.assertEqual(result["metadata"]["runtime_lora_adapter_name"], "consistency")
+        self.assertIn(("enable_lora",), runner._pipeline.calls)
+        self.assertIn(("disable_lora",), runner._pipeline.calls)
+
     def test_run_tryon_exposes_request_level_lora_metadata(self):
         runner = self._make_runner()
         image = Image.new("RGB", (8, 8), color="black")

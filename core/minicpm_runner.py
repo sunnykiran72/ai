@@ -202,6 +202,27 @@ class MiniCPMVRunner:
 
         return response
 
+    def describe_garment_compact(
+        self,
+        image: Image.Image,
+        garment_type: Optional[str] = None,
+        prompt_override: Optional[str] = None,
+        max_new_tokens: Optional[int] = None,
+    ) -> str:
+        from config.prompts import get_minicpm_lora_structured_prompt
+
+        instruction = (
+            str(prompt_override).strip()
+            if str(prompt_override or "").strip()
+            else get_minicpm_lora_structured_prompt(garment_type)
+        )
+        token_limit = int(max_new_tokens or min(192, self.garment_max_new_tokens))
+        return self._run_prompt(
+            image=image,
+            instruction=instruction,
+            max_new_tokens=token_limit,
+        )
+
     def describe_person_and_outfit(self, image: Image.Image, prompt_override: Optional[str] = None) -> str:
         from config.prompts import get_minicpm_person_outfit_prompt
         
