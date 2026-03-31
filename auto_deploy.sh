@@ -12,7 +12,7 @@ echo ""
 
 # Configuration
 REMOTE_HOST="root@157.157.221.30"
-REMOTE_PORT="53061"
+REMOTE_PORT="50423"
 REMOTE_PATH="/workspace/hybrid_vto_v1_latest_v1"
 
 echo "📡 Connecting to RunPod..."
