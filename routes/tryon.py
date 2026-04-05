@@ -107,16 +107,16 @@ async def flux2_tryon_endpoint(
         tryon_kwargs = dict(
             user_image_url=request.user_image.tryonImage,
             user_prompt_description=request.user_image.promptDescription,
+            source_worn_types=request.user_image.wornTypes,
             products=request.products,
+            mode=request.mode,
             steps=request.steps,
             seed=request.seed,
         )
-        if request.loraMode is not None:
-            tryon_kwargs["lora_mode"] = request.loraMode
+        if request.guidanceScale is not None:
+            tryon_kwargs["guidance_scale"] = request.guidanceScale
         if request.loraScale is not None:
             tryon_kwargs["lora_scale"] = request.loraScale
-        if request.bfsLoraScale is not None:
-            tryon_kwargs["bfs_lora_scale"] = request.bfsLoraScale
 
         result = await tryon_service.try_on(**tryon_kwargs)
         

@@ -3,8 +3,7 @@ from __future__ import annotations
 import re
 from typing import Callable, Dict, Optional, Tuple
 
-from config.prompts import get_analyze_flux2_positive_prompt, get_analyze_top_subtype_clause
-from utils.prompt_generation import infer_top_prompt_subtype
+from config.prompts import get_analyze_flux2_positive_prompt
 
 
 _COLOR_TERMS = {
@@ -176,13 +175,9 @@ def _build_direct_minicpm_prompt(
     strip_descriptor_color_clause: Callable[[str], str],
 ) -> str:
     text = " ".join(str(minicpm_desc or "").split()).strip()
-    if not text:
-        return ""
-
-    text = strip_descriptor_color_clause(text)
-    for term in _SCENE_TERMS:
-        text = re.sub(rf"\b{re.escape(term)}\b", " ", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s+", " ", text).strip(" ,.;:/-")
+    # Preserve MiniCPM descriptor as-is (normalized whitespace only) so
+    # /analyze always feeds the exact generated descriptor into FLUX.
+    _ = strip_descriptor_color_clause  # retained for call-site compatibility
     return text
 
 
@@ -204,17 +199,12 @@ def _build_flux2_prompt(
     strip_descriptor_color_clause: Callable[[str], str],
 ) -> tuple[str, str]:
     static_prompt = get_analyze_flux2_positive_prompt(selected_type)
-    if selected_type == "top":
-        subtype = infer_top_prompt_subtype(minicpm_desc)
-        subtype_clause = get_analyze_top_subtype_clause(subtype)
-        if subtype and subtype != "standard_top" and subtype_clause:
-            static_prompt = f"{static_prompt} {subtype_clause}".strip()
     direct_prompt = _build_direct_minicpm_prompt(
         minicpm_desc,
         strip_descriptor_color_clause=strip_descriptor_color_clause,
     )
-    prompt_source = "minicpm_direct_prompt"
-    flux_prompt = f"{static_prompt} {direct_prompt}".strip() if direct_prompt else static_prompt
+    prompt_source = "minicpm_raw_prompt"
+    flux_prompt = f"{static_prompt} {direct_prompt}".strip()
     return flux_prompt, direct_prompt, prompt_source
 
 

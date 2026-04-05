@@ -314,9 +314,10 @@ class Flux2CVTONRunner:
         self.bfs_lora_local_cache_dir = str(
             cfg.get("bfs_lora_local_cache_dir") or os.getenv("FLUX2_BFS_LORA_LOCAL_CACHE_DIR", "/tmp/flux2-lora/bfs-best-face-swap")
         ).strip()
-        self.lora_mode = str(cfg.get("lora_mode") or os.getenv("FLUX2_LORA_MODE", "tryon")).strip().lower()
-        if self.lora_mode not in {"tryon", "bfs", "stacked"}:
-            self.lora_mode = "tryon"
+        configured_lora_mode = str(cfg.get("lora_mode") or os.getenv("FLUX2_LORA_MODE", "tryon")).strip().lower()
+        if configured_lora_mode not in {"", "tryon"}:
+            logger.warning("Ignoring unsupported FLUX2_LORA_MODE=%s; forcing tryon-only mode.", configured_lora_mode)
+        self.lora_mode = "tryon"
         self._adapter_name_effective = str(self.adapter_name or "")
         self._active_lora_specs: List[LoraSpec] = []
         self.device = cfg.get("device") or os.getenv("FLUX2_DEVICE", "cuda")
@@ -403,7 +404,12 @@ class Flux2CVTONRunner:
             int(os.getenv("FLUX2_NEGATIVE_PROMPT_FALLBACK_MAX_CHARS", "900")),
         )
 
-    def _resolve_tryon_dimensions(self, person_image: Image.Image) -> Tuple[int, int]:
+    def _resolve_tryon_dimensions(
+        self,
+        person_image: Image.Image,
+        *,
+        max_edge_override: Optional[int] = None,
+    ) -> Tuple[int, int]:
         """
         Resolve try-on output dimensions from the source person image.
 
@@ -417,11 +423,17 @@ class Flux2CVTONRunner:
         if src_w <= 0 or src_h <= 0:
             return self.width, self.height
 
-        tryon_max_edge_raw = str(os.getenv("FLUX2_TRYON_MAX_EDGE", "")).strip()
-        try:
-            tryon_max_edge = int(tryon_max_edge_raw) if tryon_max_edge_raw else max(self.width, self.height)
-        except Exception:
-            tryon_max_edge = max(self.width, self.height)
+        if max_edge_override is not None:
+            try:
+                tryon_max_edge = int(max_edge_override)
+            except Exception:
+                tryon_max_edge = max(self.width, self.height)
+        else:
+            tryon_max_edge_raw = str(os.getenv("FLUX2_TRYON_MAX_EDGE", "")).strip()
+            try:
+                tryon_max_edge = int(tryon_max_edge_raw) if tryon_max_edge_raw else max(self.width, self.height)
+            except Exception:
+                tryon_max_edge = max(self.width, self.height)
         tryon_max_edge = max(256, int(tryon_max_edge))
 
         scale = min(1.0, float(tryon_max_edge) / float(max(src_w, src_h)))
@@ -481,24 +493,6 @@ class Flux2CVTONRunner:
             local_cache_dir=str(self.lora_local_cache_dir or "").strip(),
             auto_download=bool(self.lora_auto_download),
         )
-        bfs = LoraSpec(
-            label="bfs",
-            source=str(self.bfs_lora_path or "").strip(),
-            weight_name=str(self.bfs_lora_weight_name or "").strip(),
-            adapter_name=str(self.bfs_adapter_name or "").strip() or "bfs_face",
-            scale=float(self.bfs_lora_scale),
-            fallback_repo=str(self.bfs_lora_fallback_repo or "").strip(),
-            local_cache_dir=str(self.bfs_lora_local_cache_dir or "").strip(),
-            auto_download=bool(self.lora_auto_download),
-        )
-
-        if self.lora_mode == "bfs":
-            return [bfs]
-        if self.lora_mode == "stacked":
-            specs: List[LoraSpec] = [primary]
-            if bfs.source and bfs.source != primary.source:
-                specs.append(bfs)
-            return specs
         return [primary]
 
     def _load_configured_loras_into_pipeline(self, pipe: Any) -> Dict[str, Any]:
@@ -861,17 +855,15 @@ class Flux2CVTONRunner:
         if not active_specs:
             return []
 
-        mode = str(mode_override or self.lora_mode or "stacked").strip().lower()
+        mode = str(mode_override or self.lora_mode or "tryon").strip().lower()
         def _spec_label(spec: Any) -> str:
             label = str(getattr(spec, "label", "") or getattr(spec, "adapter_name", "")).strip().lower()
             return label
 
         if mode == "tryon":
             selected = [spec for spec in active_specs if _spec_label(spec) in {"tryon", "fal_tryon"}]
-        elif mode == "bfs":
-            selected = [spec for spec in active_specs if _spec_label(spec) in {"bfs", "bfs_face"}]
         else:
-            selected = list(active_specs)
+            selected = [spec for spec in active_specs if _spec_label(spec) in {"tryon", "fal_tryon"}]
 
         return selected or list(active_specs)
 
@@ -1040,6 +1032,7 @@ class Flux2CVTONRunner:
         prompt: str,
         steps: int = 6,
         seed: Optional[int] = None,
+        guidance_scale: Optional[float] = None,
         negative_prompt: Optional[str] = None,
         use_lora: Optional[bool] = None,
         true_cfg_scale: Optional[float] = None,
@@ -1048,6 +1041,7 @@ class Flux2CVTONRunner:
         bfs_lora_scale: Optional[float] = None,
         stacked_tryon_prompt: Optional[str] = None,
         stacked_bfs_prompt: Optional[str] = None,
+        output_max_edge: Optional[int] = None,
     ) -> Dict[str, Any]:
         self.ensure_ready()
 
@@ -1055,18 +1049,23 @@ class Flux2CVTONRunner:
         gen_seed = seed if seed is not None else self.seed
         generator = torch.Generator(device=self.device).manual_seed(gen_seed)
         warmup_seconds = 0.0
+        effective_guidance_scale = float(guidance_scale if guidance_scale is not None else self.guidance_scale)
 
         person = _flatten_rgba_to_white_rgb(person_image)
         board = _flatten_rgba_to_white_rgb(board_image)
         resolved_negative_prompt = str(negative_prompt or "").strip()
         requested_lora = self.enable_lora if use_lora is None else bool(use_lora)
-        requested_lora_mode = str(lora_mode or self.lora_mode or "stacked").strip().lower()
-        if requested_lora_mode not in {"tryon", "bfs", "stacked"}:
-            requested_lora_mode = self.lora_mode if self.lora_mode in {"tryon", "bfs", "stacked"} else "stacked"
+        requested_lora_mode = "tryon"
+        requested_mode_raw = str(lora_mode or "").strip().lower()
+        if requested_mode_raw and requested_mode_raw != "tryon":
+            logger.warning("Ignoring unsupported lora_mode=%s; tryon-only mode is enforced.", requested_mode_raw)
         
         # Determine the CFG scale to use for this run
         effective_true_cfg_scale = float(true_cfg_scale if true_cfg_scale is not None else self.true_cfg_scale)
-        output_width, output_height = self._resolve_tryon_dimensions(person)
+        output_width, output_height = self._resolve_tryon_dimensions(
+            person,
+            max_edge_override=output_max_edge,
+        )
         
         supports_negative_prompt = self._pipeline_accepts_negative_prompt()
         supports_true_cfg_scale = self._pipeline_accepts_true_cfg_scale()
@@ -1090,7 +1089,7 @@ class Flux2CVTONRunner:
         if lora_scale is not None:
             scale_overrides["tryon"] = float(lora_scale)
         if bfs_lora_scale is not None:
-            scale_overrides["bfs"] = float(bfs_lora_scale)
+            logger.warning("Ignoring bfs_lora_scale override in tryon-only mode.")
 
         def _invoke_once(
             run_generator: Optional[torch.Generator] = None,
@@ -1100,7 +1099,7 @@ class Flux2CVTONRunner:
                 "image": [person, board],
                 "prompt": str(prompt_override or effective_prompt),
                 "num_inference_steps": steps,
-                "guidance_scale": self.guidance_scale,
+                "guidance_scale": effective_guidance_scale,
                 "width": output_width,
                 "height": output_height,
                 "generator": run_generator if run_generator is not None else generator,
@@ -1147,7 +1146,7 @@ class Flux2CVTONRunner:
         stacked_effective_scales: Dict[str, float] = {}
         stacked_blend_alpha: Optional[float] = None
         stacked_prompts_used: Dict[str, str] = {}
-        using_stacked_dual_pass = bool(requested_lora and requested_lora_mode == "stacked")
+        using_stacked_dual_pass = False
 
         with self._infer_lock, torch.inference_mode():
             if using_stacked_dual_pass:
@@ -1262,6 +1261,7 @@ class Flux2CVTONRunner:
                 "input_resolution": (int(person.width), int(person.height)),
                 "warmup_seconds": warmup_seconds,
                 "request_total_seconds": time.time() - run_t0,
+                "guidance_scale": effective_guidance_scale,
                 "negative_prompt_used": bool(
                     resolved_negative_prompt and negative_prompt_mode in {"native_true_cfg", "prompt_fallback"}
                 ),

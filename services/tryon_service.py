@@ -22,7 +22,7 @@ from config import Flux2Config
 from services.ai_engine import AIEngine
 from shared.image_ops import download_image
 from shared.azure_storage import storage
-from utils import build_tryon_prompt_v2, infer_flux2_target_type, normalize_garment_type
+from utils import infer_flux2_target_type, normalize_garment_type
 from modules.vto.board_builder import BoardBuilder
 
 logger = logging.getLogger("glamify-ai")
@@ -57,9 +57,9 @@ class TryonService:
         negative_prompt: Optional[str] = None,
         steps: Optional[int] = None,
         seed: Optional[int] = None,
-        lora_mode: Optional[str] = None,
+        guidance_scale: Optional[float] = None,
+        mode: Optional[str] = None,
         lora_scale: Optional[float] = None,
-        bfs_lora_scale: Optional[float] = None,
         **_kwargs,
     ):
         """
@@ -78,51 +78,58 @@ class TryonService:
             prompt_description=prompt_description,
         )
         board, board_mode = self._build_board(garments)
+        source_worn_types = _kwargs.get("source_worn_types")
+        resolved_mode = str(mode or "tryon-lora").strip().lower()
+        if resolved_mode not in {"tryon-lora", "consistency-lora"}:
+            raise ValueError("mode must be one of: tryon-lora, consistency-lora")
+        effective_lora_scale = lora_scale
+        if resolved_mode == "tryon-lora" and effective_lora_scale is None:
+            # fal/flux-klein-9b-virtual-tryon-lora recommends scale=1.0.
+            effective_lora_scale = 1.0
+        prompt_text_for_metadata = ""
 
-        resolved_lora_mode = str(lora_mode or getattr(self.config, "lora_mode", "tryon"))
-
-        prompt_text = build_tryon_prompt_v2(
-            user_description=str(user_prompt_description or ""),
-            garment_descriptions=garment_descriptions,
-            target_types=garment_types,
-            board_mode=board_mode,
-            lora_mode=resolved_lora_mode,
-        )
-        stacked_tryon_prompt: Optional[str] = None
-        stacked_bfs_prompt: Optional[str] = None
-        if resolved_lora_mode.strip().lower() == "stacked":
-            stacked_tryon_prompt = build_tryon_prompt_v2(
-                user_description=str(user_prompt_description or ""),
+        if resolved_mode == "tryon-lora":
+            prompt_text = self._build_tryon_lora_prompt(
+                user_description=user_prompt_description,
                 garment_descriptions=garment_descriptions,
                 target_types=garment_types,
                 board_mode=board_mode,
+                source_worn_types=source_worn_types,
+            )
+            prompt_text_for_metadata = prompt_text
+
+            flux_runner = getattr(self.engine, "flux2", None)
+            if flux_runner is None:
+                raise RuntimeError("Flux2 runner is unavailable.")
+
+            flux_result = flux_runner.run_tryon(
+                person_image=person,
+                board_image=board,
+                prompt=prompt_text,
+                steps=steps,
+                seed=seed,
+                guidance_scale=guidance_scale,
+                use_lora=True,
                 lora_mode="tryon",
+                lora_scale=effective_lora_scale,
             )
-            stacked_bfs_prompt = build_tryon_prompt_v2(
-                user_description=str(user_prompt_description or ""),
-                garment_descriptions=garment_descriptions,
+        else:
+            flux_runner = getattr(self.engine, "flux2_consistency", None)
+            if flux_runner is None:
+                raise RuntimeError("Consistency Flux2 runner is unavailable.")
+            flux_result = flux_runner.run_tryon(
+                person_image=person,
+                board_image=board,
+                steps=steps,
+                seed=seed,
+                guidance_scale=guidance_scale,
+                lora_scale=lora_scale,
                 target_types=garment_types,
+                source_worn_types=source_worn_types,
+                garment_descriptions=garment_descriptions,
+                user_description=user_prompt_description,
                 board_mode=board_mode,
-                lora_mode="bfs",
             )
-
-        flux_runner = getattr(self.engine, "flux2", None)
-        if flux_runner is None:
-            raise RuntimeError("Flux2 runner is unavailable.")
-
-        flux_result = flux_runner.run_tryon(
-            person_image=person,
-            board_image=board,
-            prompt=prompt_text,
-            steps=steps,
-            seed=seed,
-            use_lora=True,
-            lora_mode=resolved_lora_mode,
-            lora_scale=lora_scale,
-            bfs_lora_scale=bfs_lora_scale,
-            stacked_tryon_prompt=stacked_tryon_prompt,
-            stacked_bfs_prompt=stacked_bfs_prompt,
-        )
         latency = float(flux_result.get("latency") or 0.0)
 
         image = flux_result.get("image")
@@ -137,12 +144,22 @@ class TryonService:
         total = time.time() - t0
         postprocess = max(0.0, total - latency)
         meta = dict(flux_result.get("metadata") or {})
+        if resolved_mode == "tryon-lora":
+            # Surface the actual effective try-on LoRA scale in metadata.
+            meta["lora_scale"] = float(effective_lora_scale) if effective_lora_scale is not None else 1.0
+        if not prompt_text_for_metadata:
+            prompt_text_for_metadata = str(meta.get("prompt") or "")
         meta.update(
             {
+                "mode": resolved_mode,
+                "engine_variant": "flux2_consistency" if resolved_mode == "consistency-lora" else "flux2_tryon_lora",
+                "effective_lora_scale": (
+                    float(meta.get("lora_scale")) if meta.get("lora_scale") is not None else None
+                ),
                 "board_mode": board_mode,
                 "garment_count": len(garments),
                 "target_types": garment_types,
-                "prompt": prompt_text,
+                "prompt": prompt_text_for_metadata,
                 "output_size": [int(image.width), int(image.height)],
                 "source_size": [int(person.width), int(person.height)],
             }
@@ -160,6 +177,188 @@ class TryonService:
                 "postprocess": postprocess,
             },
         }
+
+    def _build_tryon_lora_prompt(
+        self,
+        *,
+        user_description: Optional[str],
+        garment_descriptions: List[str],
+        target_types: List[str],
+        board_mode: str,
+        source_worn_types: Optional[List[str]],
+    ) -> str:
+        del board_mode, source_worn_types
+
+        clean_user = " ".join(str(user_description or "").split()).strip()
+        person_desc = clean_user or "same person"
+
+        item_count = max(len(target_types or []), len(garment_descriptions or []))
+        if item_count <= 0:
+            item_count = 1
+
+        ordered_kind_priority = {"top": 0, "dress": 1, "bottom": 2, "outer": 3}
+        garment_entries: List[Tuple[int, int, str, str]] = []
+        for idx in range(item_count):
+            raw_type = target_types[idx] if idx < len(target_types or []) else ""
+            raw_desc = garment_descriptions[idx] if idx < len(garment_descriptions or []) else ""
+            kind = str(normalize_garment_type(raw_type) or "").strip().lower()
+            if not kind:
+                inferred = infer_flux2_target_type(str(raw_desc or ""))
+                kind = str(normalize_garment_type(inferred) or "").strip().lower()
+            if not kind:
+                kind = "top"
+            desc = " ".join(str(raw_desc or "").split()).strip()
+            garment_entries.append(
+                (
+                    int(ordered_kind_priority.get(kind, 99)),
+                    idx,
+                    kind,
+                    desc or kind,
+                )
+            )
+
+        garment_entries.sort(key=lambda item: (item[0], item[1]))
+        garment_items = [item[3] for item in garment_entries]
+        kinds_ordered = [item[2] for item in garment_entries]
+        kind_counts: Dict[str, int] = {}
+        kind_first_desc: Dict[str, str] = {}
+        for _prio, _idx, kind, desc in garment_entries:
+            kind_counts[kind] = int(kind_counts.get(kind, 0)) + 1
+            if kind not in kind_first_desc:
+                kind_first_desc[kind] = desc
+
+        # Single-garment prompts use independent templates for top/bottom/outer/dress.
+        if len(garment_entries) == 1:
+            _kind_priority, _idx, kind, garment_text = garment_entries[0]
+
+            common_tail = (
+                "Keep face identity, hair, body proportions, pose, hands, camera framing, background, "
+                "and lighting unchanged. The final image is a full body shot."
+            )
+
+            if kind == "top":
+                return (
+                    f"TRYON {person_desc}. "
+                    f"Replace the upper garment with {garment_text} as shown in the reference images. "
+                    "Render the garment with accurate construction, silhouette, fit, seam and edge placement, drape, "
+                    "and length based on the reference garment. "
+                    "Preserve the exact garment color, tone, and shading from the reference. "
+                    "Keep lower-body clothing unchanged. "
+                    + common_tail
+                ).strip()
+
+            if kind == "bottom":
+                return (
+                    f"TRYON {person_desc}. "
+                    f"Replace the lower garment with {garment_text} as shown in the reference images. "
+                    "Render the garment with accurate construction, silhouette, fit, seam and edge placement, drape, "
+                    "and length based on the reference garment. "
+                    "Preserve the exact garment color, tone, and shading from the reference. "
+                    "Keep upper-body clothing unchanged. "
+                    + common_tail
+                ).strip()
+
+            if kind == "outer":
+                return (
+                    f"TRYON {person_desc}. "
+                    f"Replace the outer layer with {garment_text} as shown in the reference images. "
+                    "Render the garment as the outermost layer with accurate construction, silhouette, fit, seam and edge placement, "
+                    "drape, and length based on the reference garment. "
+                    "Preserve the exact garment color, tone, and shading from the reference. "
+                    "Keep the underlying outfit unchanged where visible. "
+                    + common_tail
+                ).strip()
+
+            if kind == "dress":
+                return (
+                    f"TRYON {person_desc}. "
+                    f"Replace the entire outfit completely with {garment_text} as shown in the reference images. "
+                    "Render one continuous dress across upper and lower clothing regions from top edge to hem with accurate construction, silhouette, fit, seam and edge placement, "
+                    "drape, and length based on the reference garment. "
+                    "Preserve the exact garment color, tone, and shading from the reference. "
+                    "Present a full one-piece dress appearance without separate upper and lower garment splits. "
+                    + common_tail
+                ).strip()
+
+        # Multi-garment prompts (v1): one active garment per category.
+        # If duplicates exist in the same category, fall back to generic composition.
+        has_duplicates = any(count > 1 for count in kind_counts.values())
+        unique_kinds = sorted(set(kinds_ordered), key=lambda k: int(ordered_kind_priority.get(k, 99)))
+
+        if not has_duplicates:
+            kind_set = set(unique_kinds)
+            common_multi_tail = (
+                "Keep face identity, hair, body proportions, pose, hands, camera framing, background, "
+                "and lighting unchanged. The final image is a full body shot."
+            )
+
+            # 1) top + bottom
+            if kind_set == {"top", "bottom"}:
+                top_desc = kind_first_desc.get("top", "top garment")
+                bottom_desc = kind_first_desc.get("bottom", "bottom garment")
+                return (
+                    f"TRYON {person_desc}. "
+                    f"Replace the upper garment with {top_desc} and replace the lower garment with {bottom_desc} as shown in the reference images. "
+                    "Assign region ownership explicitly: upper-body clothing region is owned by the top garment and lower-body clothing region is owned by the bottom garment. "
+                    "Render both garments with accurate construction, silhouette, fit, seam and edge placement, drape, and length based on their references. "
+                    "Preserve the exact garment color, tone, and shading for both garments from their references. "
+                    + common_multi_tail
+                ).strip()
+
+            # 2) dress + (top | outer)
+            if kind_set in ({"dress", "top"}, {"dress", "outer"}):
+                dress_desc = kind_first_desc.get("dress", "dress garment")
+                overlay_kind = "top" if "top" in kind_set else "outer"
+                overlay_desc = kind_first_desc.get(overlay_kind, f"{overlay_kind} garment")
+                return (
+                    f"TRYON {person_desc}. "
+                    f"Replace the outfit using {dress_desc} and {overlay_desc} as shown in the reference images. "
+                    f"Assign layer ownership explicitly: use the dress as the base garment and apply the {overlay_kind} garment as the upper-region overlay layer. "
+                    "Keep the lower dress structure visible where not covered by the overlay layer. "
+                    "Render both garments with accurate construction, silhouette, fit, seam and edge placement, drape, and length based on their references. "
+                    "Preserve the exact garment color, tone, and shading for both garments from their references. "
+                    + common_multi_tail
+                ).strip()
+
+            # 3) dress + bottom
+            if kind_set == {"dress", "bottom"}:
+                dress_desc = kind_first_desc.get("dress", "dress garment")
+                bottom_desc = kind_first_desc.get("bottom", "bottom garment")
+                return (
+                    f"TRYON {person_desc}. "
+                    f"Replace the outfit using {dress_desc} and {bottom_desc} as shown in the reference images. "
+                    "Assign region ownership explicitly: upper-body clothing region is owned by the dress and lower-body clothing region is owned by the bottom garment. "
+                    "Render both garments with accurate construction, silhouette, fit, seam and edge placement, drape, and length based on their references. "
+                    "Preserve the exact garment color, tone, and shading for both garments from their references. "
+                    + common_multi_tail
+                ).strip()
+
+            # 4) dress + (top | outer) + bottom
+            if kind_set in ({"dress", "top", "bottom"}, {"dress", "outer", "bottom"}):
+                dress_desc = kind_first_desc.get("dress", "dress garment")
+                bottom_desc = kind_first_desc.get("bottom", "bottom garment")
+                overlay_kind = "top" if "top" in kind_set else "outer"
+                overlay_desc = kind_first_desc.get(overlay_kind, f"{overlay_kind} garment")
+                return (
+                    f"TRYON {person_desc}. "
+                    f"Replace the outfit using {dress_desc}, {overlay_desc}, and {bottom_desc} as shown in the reference images. "
+                    f"Assign layer and region ownership explicitly: use the dress as base, apply the {overlay_kind} garment as an upper-region overlay layer, and assign the lower-body clothing region to the bottom garment. "
+                    "Keep edits confined to their owned regions and layers. "
+                    "Render all garments with accurate construction, silhouette, fit, seam and edge placement, drape, and length based on their references. "
+                    "Preserve the exact garment color, tone, and shading for all garments from their references. "
+                    + common_multi_tail
+                ).strip()
+
+        # Multi-garment fallback for unsupported/ambiguous combinations.
+        garments_text = ", ".join(garment_items)
+        return (
+            f"TRYON {person_desc}. "
+            f"Replace the entire outfit with {garments_text} as shown in the reference images. "
+            "Render all garments with accurate construction, silhouette, fit, seam and edge placement, drape, and length "
+            "based on the reference garments. Preserve the exact garment color, tone, and shading from the references. "
+            "Keep face identity, hair, body proportions, pose, hands, camera framing, background, and lighting unchanged. "
+            "The final image is a full body shot."
+        ).strip()
 
     async def try_on_legacy_flux(self, request):
         """

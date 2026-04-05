@@ -45,7 +45,9 @@ from routes import (
     analyze_router, 
     extract_router, 
     user_prep_router, 
-    health_router
+    health_router,
+    tryon_lab_router,
+    tryon_lora_multi_lab_router,
 )
 
 # Shared utilities
@@ -127,6 +129,8 @@ app.include_router(tryon_router, tags=["tryon"])
 app.include_router(analyze_router, tags=["analyze"])
 app.include_router(extract_router, tags=["extract"])
 app.include_router(user_prep_router, tags=["user-prep"])
+app.include_router(tryon_lab_router, tags=["tryon-lab"])
+app.include_router(tryon_lora_multi_lab_router, tags=["tryon-lora-multi-lab"])
 
 # Dependency injection helpers
 def get_tryon_service() -> TryonService:
@@ -406,13 +410,7 @@ def _describe_user_image_for_prepare(image: Image.Image, description_backend: Op
     if not isinstance(image, Image.Image):
         return ""
     return (
-        "identity: face-preservation reference for a person with unknown facial details, hairline, and age band. "
-        "face: neutral expression with unchanged facial geometry and head shape. "
-        "body pose: standing with upper-body orientation, arm placement, and shoulder angle preserved. "
-        "lower body pose: legs, knees, feet, and stance remain in the same position. "
-        "framing/lighting: centered full-body crop with even lighting. "
-        "occlusion: any phone or held object remains in the same hand, same angle, and same overlap. "
-        "preserve: face identity, facial geometry, body proportions, pose, hand placement, object placement, leg position, framing, lighting, and background unchanged."
+        "person with visible hairstyle, balanced build, relaxed standing pose, identity cues preserved."
     )
 
 

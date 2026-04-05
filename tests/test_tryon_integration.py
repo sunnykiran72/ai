@@ -130,7 +130,9 @@ class TestTryonIntegration:
         mock_tryon_service.try_on.assert_called_once_with(
             user_image_url=flux2_request.user_image.tryonImage,
             user_prompt_description=flux2_request.user_image.promptDescription,
+            source_worn_types=flux2_request.user_image.wornTypes,
             products=flux2_request.products,
+            mode=flux2_request.mode,
             steps=flux2_request.steps,
             seed=flux2_request.seed,
         )
@@ -141,8 +143,8 @@ class TestTryonIntegration:
         assert response.data == sample_service_response
 
     @pytest.mark.asyncio
-    async def test_flux2_tryon_endpoint_forwards_lora_overrides(self, mock_tryon_service, sample_service_response):
-        """Test Flux2 try-on forwards LoRA override fields when provided."""
+    async def test_flux2_tryon_endpoint_forwards_guidance_and_lora_scale(self, mock_tryon_service, sample_service_response):
+        """Test Flux2 try-on forwards supported generation overrides."""
         flux2_request = Flux2TryonRequest(
             user_image={"tryonImage": "https://example.com/user.jpg", "promptDescription": "portrait, soft studio"},
             products=[
@@ -154,9 +156,8 @@ class TestTryonIntegration:
             ],
             steps=12,
             seed=99,
-            loraMode="stacked",
+            guidanceScale=2.5,
             loraScale=0.9,
-            bfsLoraScale=0.55,
         )
 
         mock_tryon_service.try_on.return_value = sample_service_response
@@ -166,14 +167,71 @@ class TestTryonIntegration:
         mock_tryon_service.try_on.assert_called_once_with(
             user_image_url=flux2_request.user_image.tryonImage,
             user_prompt_description=flux2_request.user_image.promptDescription,
+            source_worn_types=flux2_request.user_image.wornTypes,
             products=flux2_request.products,
+            mode=flux2_request.mode,
             steps=flux2_request.steps,
             seed=flux2_request.seed,
-            lora_mode="stacked",
+            guidance_scale=2.5,
             lora_scale=0.9,
-            bfs_lora_scale=0.55,
         )
         assert response.status == "success"
+
+    def test_flux2_tryon_request_default_mode(self):
+        request = Flux2TryonRequest(
+            user_image={"tryonImage": "https://example.com/user.jpg"},
+            products=[
+                {
+                    "image": "https://example.com/garment.jpg",
+                    "promptDescription": "elegant evening dress",
+                }
+            ],
+        )
+        assert request.mode == "tryon-lora"
+
+    def test_flux2_tryon_request_invalid_mode(self):
+        with pytest.raises(Exception):
+            Flux2TryonRequest(
+                user_image={"tryonImage": "https://example.com/user.jpg"},
+                products=[
+                    {
+                        "image": "https://example.com/garment.jpg",
+                        "promptDescription": "elegant evening dress",
+                    }
+                ],
+                mode="invalid-mode",
+            )
+
+    def test_flux2_tryon_request_accepts_user_worn_types(self):
+        request = Flux2TryonRequest(
+            user_image={
+                "tryonImage": "https://example.com/user.jpg",
+                "wornTypes": ["dress", "outer"],
+            },
+            products=[
+                {
+                    "image": "https://example.com/garment.jpg",
+                    "promptDescription": "structured cropped top",
+                    "targetType": "top",
+                }
+            ],
+        )
+        assert request.user_image.wornTypes == ["dress", "outer"]
+
+    def test_flux2_tryon_request_invalid_user_worn_types(self):
+        with pytest.raises(Exception):
+            Flux2TryonRequest(
+                user_image={
+                    "tryonImage": "https://example.com/user.jpg",
+                    "wornTypes": ["invalid-type"],
+                },
+                products=[
+                    {
+                        "image": "https://example.com/garment.jpg",
+                        "promptDescription": "structured cropped top",
+                    }
+                ],
+            )
     
     @pytest.mark.asyncio
     async def test_legacy_flux_tryon_endpoint_success(self, mock_tryon_service, sample_service_response):

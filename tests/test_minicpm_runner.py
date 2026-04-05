@@ -17,21 +17,18 @@ class _StubRunner(MiniCPMVRunner):
 
     def _run_prompt(self, image, instruction, max_new_tokens):
         self.calls.append(instruction)
-        if len(self.calls) == 1:
-            return "short garment sentence"
-        return " ".join(["detailed"] * 220)
+        return "short garment sentence"
 
 
-class TestMiniCPMVRunnerRetry(unittest.TestCase):
-    def test_describe_garment_retries_when_output_is_too_short(self):
+class TestMiniCPMVRunnerPromptFlow(unittest.TestCase):
+    def test_describe_garment_runs_single_pass_without_retry(self):
         runner = _StubRunner()
         image = Image.new("RGB", (32, 32), "white")
 
         result = runner.describe_garment(image)
 
-        self.assertGreaterEqual(len(runner.calls), 2)
-        self.assertIn("previous answer was too short", runner.calls[1].lower())
-        self.assertGreaterEqual(len(result.split()), 200)
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual(result, "short garment sentence")
 
     def test_describe_garment_uses_category_specific_prompt(self):
         runner = _StubRunner()

@@ -33,13 +33,7 @@ except Exception:  # pragma: no cover - fallback for isolated unit tests
 
 
 DEFAULT_USER_DESCRIPTION = (
-    "identity: face-preservation reference for a person with unknown facial details, hairline, and age band. "
-    "face: neutral expression with unchanged facial geometry and head shape. "
-    "body pose: standing with upper-body orientation, arm placement, and shoulder angle preserved. "
-    "lower body pose: legs, knees, feet, and stance remain in the same position. "
-    "framing/lighting: centered full-body crop with even lighting. "
-    "occlusion: any phone or held object remains in the same hand, same angle, and same overlap. "
-    "preserve: face identity, facial geometry, body proportions, pose, hand placement, object placement, leg position, framing, lighting, and background unchanged."
+    "person with visible hairstyle, balanced build, relaxed standing pose, identity cues preserved."
 )
 
 DEFAULT_VERIFICATION_PROMPT = (

@@ -604,6 +604,8 @@ class TestGarmentPromptNatural:
         prompt = get_minicpm_garment_prompt().lower()
 
         assert "requested garment type" in prompt
+        assert "50 to 80 words" in prompt
+        assert "do not add fluff" in prompt
         assert "never infer hidden length" in prompt
         assert "not fully visible" in prompt
         assert "feature-rich way" in prompt
@@ -615,8 +617,17 @@ class TestGarmentPromptNatural:
         assert "top-only guidance" in prompt
         assert "shoulder layout" in prompt
         assert "torso panel continuity" in prompt
+        assert "without assigning a side" in prompt
+        assert "name the feature itself rather than its direction" in prompt
         assert "lower-body features" in prompt
         assert "not fully visible" in prompt
+
+    def test_minicpm_dress_prompt_includes_nondirectional_asymmetry_guidance(self):
+        prompt = get_minicpm_garment_prompt("dress").lower()
+
+        assert "dress-only guidance" in prompt
+        assert "without assigning a side" in prompt
+        assert "name the feature itself rather than its direction" in prompt
 
     def test_minicpm_outer_prompt_excludes_inner_layers(self):
         prompt = get_minicpm_garment_prompt("outer").lower()

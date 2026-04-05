@@ -3703,6 +3703,15 @@ _USER_PREP_APPAREL_TERMS = (
     "blouse", "jacket", "coat", "pants", "trousers", "jeans", "skirt", "shorts", "shoe",
     "footwear", "sleeve", "bodice",
 )
+_USER_PREP_DIRECTION_TERMS = (
+    "left", "right", "viewer-left", "viewer-right", "toward left", "toward right",
+    "facing left", "facing right", "to the left", "to the right",
+)
+_USER_PREP_BANNED_CONTEXT_TERMS = (
+    "background", "backdrop", "scene", "room", "wall", "floor", "studio",
+    "lighting", "camera", "framing", "aesthetic", "mood", "style",
+    "outfit", "clothing", "garment", "dress", "top", "bottom", "outer", "sleeve",
+)
 
 
 def _format_user_prepare_reference(fields: Dict[str, str], *, include_outfit: bool) -> str:
@@ -3718,29 +3727,55 @@ def _format_user_prepare_reference(fields: Dict[str, str], *, include_outfit: bo
         outfit = _clean(fields.get("current_outfit", "") or fields.get("outfit", "") or fields.get("clothing", ""))
     framing = _clean(fields.get("framing_lighting", ""))
     occlusion = _clean(fields.get("occlusion", ""))
-    held_object = _clean(fields.get("held_object", ""))
     preserve = _clean(fields.get("preserve", ""))
 
     parts: List[str] = []
     if identity:
-        parts.append(f"identity: {identity}")
+        parts.append(identity)
     if face:
-        parts.append(f"face: {face}")
+        parts.append(face)
     if pose:
-        parts.append(f"pose: {pose}")
+        parts.append(pose)
     if lower_body_pose:
-        parts.append(f"lower body pose: {lower_body_pose}")
-    if outfit:
-        parts.append(f"current outfit: {outfit}")
-    if framing:
-        parts.append(f"framing/lighting: {framing}")
+        parts.append(lower_body_pose)
+    if include_outfit and outfit:
+        parts.append(outfit)
     if occlusion and occlusion.lower() not in {"none", "no", "n/a"}:
-        parts.append(f"occlusion: {occlusion}")
-    if held_object:
-        parts.append(f"held object: {held_object}")
+        parts.append(occlusion)
     if preserve:
-        parts.append(f"preserve: {preserve}")
-    cleaned = ". ".join(parts).strip(" .>;,:")
+        parts.append(preserve)
+    return " ".join(parts).strip(" .>;,:")
+
+
+def _finalize_user_prepare_brief(text: str, *, max_words: Optional[int] = None) -> str:
+    cleaned = " ".join(str(text or "").split()).strip(" ,.;:>")
+    if not cleaned:
+        return "person with visible hair, balanced build, relaxed standing pose."
+
+    cleaned = re.sub(
+        r"\b(?:identity|face|pose|body pose|lower body pose|framing\/lighting|occlusion|preserve)\s*:\s*",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+    for term in _USER_PREP_DIRECTION_TERMS:
+        cleaned = re.sub(rf"\b{re.escape(term)}\b", " ", cleaned, flags=re.IGNORECASE)
+    for term in _USER_PREP_BANNED_CONTEXT_TERMS:
+        cleaned = re.sub(rf"\b{re.escape(term)}\b", " ", cleaned, flags=re.IGNORECASE)
+
+    cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:>")
+    if not cleaned:
+        return "person with visible hair, balanced build, relaxed standing pose."
+
+    if max_words and max_words > 0:
+        words = cleaned.split()
+        if len(words) > max_words:
+            cleaned = " ".join(words[:max_words]).strip(" ,.;:>")
+
+    if not cleaned:
+        cleaned = "person with visible hair, balanced build, relaxed standing pose"
+    if not cleaned.endswith("."):
+        cleaned = f"{cleaned}."
     return cleaned
 
 
@@ -3751,18 +3786,27 @@ def _normalize_user_prepare_api_prompt_description(raw_text: str) -> str:
 
     fields = _parse_structured_descriptor(text)
     if fields:
-        cleaned = _format_user_prepare_reference(fields, include_outfit=True)
+        cleaned = _format_user_prepare_reference(fields, include_outfit=False)
         if cleaned:
-            return cleaned
+            return _finalize_user_prepare_brief(cleaned)
 
+    text = re.sub(
+        r"\b(?:current\s*outfit|outfit|clothing|garments?)\b\s*(?:=|:)\s*[^;|.]+",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
     text = re.sub(
         r"\b(?:background|backdrop|scene|room|wall|floor|studio|furniture)\b\s*(?:=|:)\s*[^;|.]+",
         "",
         text,
         flags=re.IGNORECASE,
     )
+    # For plain-language outputs (non key-value), reuse the identity-first cleaner
+    # so API promptDescription stays concise and avoids outfit-heavy wording.
+    text = _normalize_user_prepare_prompt_description(text)
     text = re.sub(r"\s{2,}", " ", text).strip(" ,.;:>")
-    return text
+    return _finalize_user_prepare_brief(text)
 
 
 def _normalize_user_prepare_prompt_description(raw_text: str) -> str:
@@ -3774,7 +3818,7 @@ def _normalize_user_prepare_prompt_description(raw_text: str) -> str:
     if fields:
         cleaned = _format_user_prepare_reference(fields, include_outfit=False)
         if cleaned:
-            return cleaned
+            return _finalize_user_prepare_brief(cleaned)
 
     text = re.sub(
         r"\b(?:current\s*outfit|outfit|clothing|garments?)\b\s*(?:=|:)\s*[^;|.]+",
@@ -3804,8 +3848,8 @@ def _normalize_user_prepare_prompt_description(raw_text: str) -> str:
     cleaned = ". ".join(kept[:4]).strip(" .")
     cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,.")
     if cleaned:
-        return cleaned
-    return text
+        return _finalize_user_prepare_brief(cleaned)
+    return _finalize_user_prepare_brief(text)
 
 
 def _user_prep_has_multiple_prominent_people(candidates: List[Dict]) -> bool:

@@ -7,8 +7,7 @@ from typing import Callable, Dict, Optional, Tuple
 import numpy as np
 from PIL import Image
 
-from config.prompts import get_analyze_flux2_positive_prompt, get_analyze_top_subtype_clause
-from utils.prompt_generation import infer_top_prompt_subtype
+from config.prompts import get_analyze_flux2_positive_prompt
 
 
 def run_selected_item_extraction_or_response(
@@ -141,21 +140,11 @@ def run_selected_item_extraction_or_response(
         prompt_desc = prompt_bundle_desc or selected_prompt_hint or prompt_bundle_base
     else:
         # Rebuild as a fallback only when the prompting stage did not supply
-        # a usable prompt bundle. Use the raw MiniCPM description directly.
+        # a usable prompt bundle. Use static category prompt + raw MiniCPM text.
         static_prompt = get_analyze_flux2_positive_prompt(selected_type)
-        if selected_type == "top":
-            subtype = infer_top_prompt_subtype(minicpm_description)
-            subtype_clause = get_analyze_top_subtype_clause(subtype)
-            if subtype and subtype != "standard_top" and subtype_clause:
-                static_prompt = f"{static_prompt} {subtype_clause}".strip()
         direct_prompt = " ".join(minicpm_description.split()).strip()
-        if direct_prompt:
-            direct_prompt = strip_descriptor_color_clause(direct_prompt)
-            base_prompt = f"{static_prompt} {direct_prompt}".strip()
-            prompt_desc = direct_prompt
-        else:
-            base_prompt = static_prompt
-            prompt_desc = selected_prompt_hint
+        base_prompt = f"{static_prompt} {direct_prompt}".strip()
+        prompt_desc = direct_prompt or selected_prompt_hint
 
     extracted_url = ""
     extraction_meta = {}

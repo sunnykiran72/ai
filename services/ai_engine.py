@@ -16,6 +16,7 @@ import threading
 
 from config import Config
 from core.flux2_cvton_runner import Flux2CVTONRunner
+from core.flux2_consistency_runner import Flux2ConsistencyRunner
 from core.florence_runner import FlorenceRunner
 from core.qwen25vl_runner import Qwen25VLRunner
 from core.joycaption_runner import JoyCaptionRunner
@@ -85,6 +86,7 @@ class AIEngine:
             shared_flux2_config["fuse_lora"] = False
         
         self.flux2 = Flux2CVTONRunner(config=shared_flux2_config)
+        self.flux2_consistency = Flux2ConsistencyRunner()
         self._analyze_flux2: Optional[Flux2CVTONRunner] = None
         self._analyze_flux2_lock = threading.Lock()
         
@@ -164,6 +166,7 @@ class AIEngine:
         analyze_startup = dict(getattr(analyze_flux2, "_startup_metrics", {}) or {}) if analyze_flux2 else {}
         return {
             "flux2_loaded": self.flux2._pipeline is not None,
+            "flux2_consistency_loaded": bool(self.flux2_consistency._pipeline is not None),
             "analyze_flux2_loaded": bool(analyze_flux2 and analyze_flux2._pipeline is not None),
             "analyze_flux2_isolated": bool(self.config.analyze.flux_disable_lora and not self._share_flux2_base_runner),
             "flux2_shared_base_runner": bool(self._share_flux2_base_runner),

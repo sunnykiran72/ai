@@ -18,32 +18,30 @@ from typing import Optional
 # ═══════════════════════════════════════════════════════════════════════════════
 
 MINICPM_GARMENT_DESCRIPTION_COMMON = """Describe only the requested garment type in the image and ignore every other garment. If multiple garments are visible, focus only on the requested type.
-Return one single rich garment paragraph, not JSON, not a schema, not a label list, and not a caption. Mention only visible garment facts. Do not mention colors, person, mannequin, body, skin, hair, hands, pose, background, camera, room, props, or recommendations.
-Describe the garment as it actually appears in the image. If a detail is not visible, omit it or describe it as absent, none, no, or unknown only when that helps preserve the structure. Never infer hidden length, hidden panels, or unseen edges from garment priors.
-If the hem or lower edge is partially visible, say that it is partially visible or not fully visible instead of guessing the full length.
-Cover the garment in a structured, feature-rich way so the output can be used directly for reconstruction."""
+Strictly return one single precise and accurate garment paragraph of 60 to 120 words only, plain text only, not JSON, not schema, not label list, and not caption.
+Use only visible garment construction facts. Strictly do not mention colors, person, mannequin, body, skin, hair, hands, pose, background, camera, room, props, or recommendations.
+Do not add fluff, styling language, trend language, mood words, scene description, or aesthetic wording. If a detail is uncertain or not visible, omit it.
+Do not infer hidden length, hidden panels, or unseen edges from garment priors.
+Write concise, reconstruction-ready garment construction details that can be reused for extraction and virtual try-on."""
+
 
 MINICPM_GARMENT_DESCRIPTION_BY_TYPE = {
-    "top": """Top-only guidance: describe the upper edge or neckline, collar or lapel if visible, shoulder layout, sleeve or strap geometry, shoulder coverage, open chest areas, torso panel continuity, seam placement, panel shapes, bodice and waist structure, bust shaping, hem endpoint, fit, silhouette, closures, trims, ruching, pleats, boning, padding, lining, drape, stretch, stitching, and any other visible construction details. If the lower edge or hem is not fully visible, say that it is partially visible or not fully visible instead of guessing the full torso length. Do not describe lower-body features, skirts, pants, legs, or full-outfit structure.""",
+    "top": """Top-only guidance: describe the upper edge or neckline, collar or lapel if visible, shoulder layout, sleeve or strap geometry, shoulder coverage, open chest areas, torso panel continuity, seam placement, panel shapes, bodice and waist structure, bust shaping, hem endpoint, fit, silhouette, closures, trims, ruching, pleats, boning, padding, lining, drape, stretch, stitching, and any other visible construction details. Describe asymmetry through construction terms only, such as one-shoulder, diagonal strap, single sleeve, uneven neckline, asymmetric drape, gathered shoulder detail, side cutout, or asymmetric hem etc.., without assigning a side. When an asymmetric feature is visible, name the feature itself rather than its direction. Do not describe lower-body features, skirts, pants, legs, or full-outfit structure.""",
     "bottom": """Bottom-only guidance: describe the waistband, rise, hip shaping, leg shape, skirt shape if present, inseam or split details, hem endpoint, closures, pockets, seams, panel structure, fit, silhouette, drape, stretch, and any other visible construction details. If the lower hem is cut off or obscured, say that the full length is not fully visible instead of guessing knee, ankle, or full-length coverage. Do not describe upper-body features, sleeves, collars, shoulders, or neckline details.""",
-    "dress": """Dress-only guidance: describe the bodice, neckline or upper edge, shoulder layout, sleeve or strap geometry, waist transition, skirt construction, continuous body flow, hem endpoint, fit, silhouette, closures, ruching, pleats, boning, lining, drape, stretch, and any other visible construction details. If the hem is cut off, say that the full dress length is not fully visible instead of guessing the missing lower length. Do not split the dress into separate top and bottom garments or describe it as two pieces.""",
+    "dress": """Dress-only guidance: describe the bodice, neckline or upper edge, shoulder layout, sleeve or strap geometry, waist transition, skirt construction, continuous body flow, hem endpoint, fit, silhouette, closures, ruching, pleats, boning, lining, drape, stretch, and any other visible construction details. Describe asymmetry through construction terms only, such as one-shoulder, diagonal strap, single sleeve, uneven neckline, asymmetric drape, gathered shoulder detail, side cutout, or asymmetric hem, without assigning a side. When an asymmetric feature is visible, name the feature itself rather than its direction. Do not split the dress into separate top and bottom garments or describe it as two pieces.""",
     "outer": """Outerwear-only guidance: describe the collar, lapel, opening, shoulder structure, sleeve length, cuff shape, layering behavior, front overlap, waistline, hem endpoint, fit, silhouette, closures, pockets, epaulets, lining, drape, structure, and any other visible construction details. If the lower hem is not fully visible, say that the outerwear length is partially visible or not fully visible instead of guessing a hidden full coat length. Do not describe inner garments as part of the outerwear.""",
 }
 
 MINICPM_GARMENT_DESCRIPTION_PROMPT = MINICPM_GARMENT_DESCRIPTION_COMMON
 
-MINICPM_PERSON_OUTFIT_DESCRIPTION_PROMPT = """Describe only the human subject for identity-preserving virtual try-on. 
-Return exactly one single line with this schema: 
-identity=<face-preservation reference, face shape/features, skin tone, hair style/color, age band>; 
-face=<facial expression, gaze direction, visible facial hair or makeup, head shape>; 
-body_pose=<pose, camera angle, visible limbs, hand placement, upper-body orientation>; 
-lower_body_pose=<lower-body stance, leg spacing, knee angle, foot placement>; 
-framing_lighting=<framing, crop, light direction/intensity, background condition>; 
-occlusion=<hair/hands/accessories/objects overlapping the face or garment region>; 
-held_object=<objects held or used in hand, especially phone, bag, or prop>; 
-preserve=<face identity, facial geometry, skin tone, hair, body proportions, pose, hand placement, object placement, leg position, framing, lighting, and background unchanged>. 
-Do not describe the background or current clothing unless it overlaps the garment region. 
-Be factual from visible pixels only; use 'unknown' for hidden details."""
+MINICPM_PERSON_OUTFIT_DESCRIPTION_PROMPT = """Describe only the human subject for identity-preserving virtual try-on.
+Return exactly one clean sentence with at most 20 words.
+Include only person type, hair style, body build, and pose style.
+Do not use key-value sections, labels, JSON, bullets, or semicolon fields.
+Do not mention left, right, side, viewer-left, viewer-right, or directional wording.
+Do not describe clothing, outfit, background, lighting, camera, mood, or aesthetics.
+If uncertain, omit the detail instead of guessing.
+Output only the sentence."""
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # FLUX2 POSITIVE PROMPTS (What TO Generate)

@@ -129,6 +129,10 @@ class Flux2TryonUserImage(BaseModel):
     """User image for Flux2 try-on."""
     tryonImage: str = Field(..., description="User image URL")
     promptDescription: Optional[str] = Field(None, description="User prompt description")
+    wornTypes: Optional[List[str]] = Field(
+        default=None,
+        description="Optional current worn garment types for source user image (top, bottom, dress, outer)",
+    )
 
     @field_validator("tryonImage")
     @classmethod
@@ -142,29 +146,53 @@ class Flux2TryonUserImage(BaseModel):
             raise ValueError("tryonImage must start with http:// or https://")
         return cleaned
 
+    @field_validator("wornTypes")
+    @classmethod
+    def _validate_worn_types(cls, value: Optional[List[str]]) -> Optional[List[str]]:
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise ValueError("wornTypes must be a list")
+        cleaned: List[str] = []
+        for idx, raw in enumerate(value):
+            if not isinstance(raw, str):
+                raise ValueError(f"wornTypes[{idx}] must be a string")
+            kind = raw.strip().lower()
+            if not kind:
+                continue
+            if kind not in {"top", "bottom", "dress", "outer"}:
+                raise ValueError("wornTypes must contain only: top, bottom, dress, outer")
+            if kind not in cleaned:
+                cleaned.append(kind)
+        return cleaned
+
 
 class Flux2TryonRequest(BaseModel):
     """Request model for Flux2 try-on endpoint (multi-garment)."""
     products: List[Flux2TryonProduct]
     user_image: Flux2TryonUserImage
+    mode: str = Field(
+        default="tryon-lora",
+        description="Try-on mode selector: tryon-lora (default) or consistency-lora",
+    )
     steps: int = Field(default=20, ge=4, le=50, description="Number of generation steps")
     seed: int = Field(default=42, ge=0, le=2147483647, description="Random seed for generation")
-    loraMode: Optional[str] = Field(default=None, description="LoRA mode override: tryon, bfs, stacked")
-    loraScale: Optional[float] = Field(default=None, ge=0.0, le=2.0, description="Try-on LoRA scale override")
-    bfsLoraScale: Optional[float] = Field(default=None, ge=0.0, le=2.0, description="BFS LoRA scale override")
+    guidanceScale: Optional[float] = Field(default=None, ge=0.0, le=20.0, description="Guidance scale override")
+    loraScale: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=2.0,
+        description="Try-on LoRA scale override (defaults to 1.0 in tryon-lora mode)",
+    )
 
-    @field_validator("loraMode")
+    @field_validator("mode")
     @classmethod
-    def _validate_lora_mode(cls, value: Optional[str]) -> Optional[str]:
-        if value is None:
-            return None
+    def _validate_mode(cls, value: str) -> str:
         if not isinstance(value, str):
-            raise ValueError("loraMode must be a string")
+            raise ValueError("mode must be a string")
         cleaned = value.strip().lower()
-        if not cleaned:
-            return None
-        if cleaned not in {"tryon", "bfs", "stacked"}:
-            raise ValueError("loraMode must be one of: tryon, bfs, stacked")
+        if cleaned not in {"tryon-lora", "consistency-lora"}:
+            raise ValueError("mode must be one of: tryon-lora, consistency-lora")
         return cleaned
 
 
