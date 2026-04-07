@@ -40,11 +40,22 @@ Rules:
 - garments: include only garment categories worn on the main body of the dominant person.
 - Allowed garment values: top, bottom, outer, dress.
 - garments may include multiple values; do not include duplicates.
+- Include garments only when they are physically worn on the person's body (torso, lower body, or outer layer).
+- Do not include garments that are held in hands, carried, draped over arms/shoulders without being worn, placed nearby, or present in the background.
+- Category definitions:
+  - top: upper-body garment piece only.
+  - bottom: lower-body garment piece only.
+  - dress: one continuous one-piece garment spanning upper and lower body.
+  - outer: outermost layer worn over base garment(s).
+- Base-outfit exclusivity:
+  - Use either top+bottom or dress as base outfit.
+  - Do not output dress together with top or bottom for the same worn outfit.
+  - outer may appear with either base-outfit form.
 - Do not include side objects, hand-held items, nearby garments, or background apparel.
-- prompt: exactly one clean sentence with 25 to 35 words.
-- prompt must include person type, visible age band, hair style, hair length, body build, facial expression, head tilt, gaze style, overall posture, shoulder posture, arm and hand pose, lower-body posture, leg pose, and feet stance.
-- Include only these fields and nothing else: person type, visible age band, hair style, hair length, body build, facial expression, head tilt, gaze style, overall posture, shoulder posture, arm/hand pose, lower-body posture, leg pose, feet stance.
-- Never mention clothing, garment type, colors, footwear, accessories, background, lighting, camera, or scene details.
+- prompt: exactly one clean sentence with 30 to 45 words.
+- prompt must include: person type, visible age band, hair style, hair length, body build, facial expression, head tilt, gaze style, overall posture, shoulder posture, arm and hand pose, hand-to-hand relationship using exactly one term (touching/clasped/separate/overlapping), hand contact target (ground/lap/knee/object when visible), lower-body posture, leg pose, and feet stance.
+- Include only these fields and nothing else: person type, visible age band, hair style, hair length, body build, facial expression, head tilt, gaze style, overall posture, shoulder posture, arm/hand pose, hand-to-hand relationship, hand contact target, lower-body posture, leg pose, feet stance.
+- Strictly never mention clothing, garment type, colors, footwear, accessories, background, lighting, camera, or scene details.
 - Do not mention left, right, side, viewer-left, viewer-right, or directional wording.
 - Do not describe background, lighting, camera, mood, or aesthetics.
 - If uncertain, omit that detail instead of guessing.

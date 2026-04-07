@@ -110,6 +110,25 @@ def _normalize_worn_types(values: Any) -> List[str]:
     return out
 
 
+def _sanitize_worn_types_policy(values: List[str]) -> List[str]:
+    """Apply deterministic outfit policy: base outfit is either dress or top+bottom."""
+    out = list(values or [])
+    has_top = "top" in out
+    has_bottom = "bottom" in out
+    has_dress = "dress" in out
+    if not has_dress:
+        return out
+
+    # top + bottom means two-piece base; drop dress.
+    if has_top and has_bottom:
+        return [v for v in out if v != "dress"]
+
+    # dress + orphan top/bottom means one-piece base; drop orphan.
+    if has_top and not has_bottom:
+        return [v for v in out if v != "top"]
+    return out
+
+
 def _extract_user_prepare_prompt_bundle(raw_text: str) -> Tuple[str, List[str]]:
     text = str(raw_text or "").strip()
     if not text:
@@ -136,13 +155,15 @@ def _extract_user_prepare_prompt_bundle(raw_text: str) -> Tuple[str, List[str]]:
         if not isinstance(obj, dict):
             continue
         prompt = str(obj.get("prompt") or obj.get("description") or "").strip()
-        worn_types = _normalize_worn_types(obj.get("garments") or obj.get("wornTypes"))
+        worn_types = _sanitize_worn_types_policy(
+            _normalize_worn_types(obj.get("garments") or obj.get("wornTypes"))
+        )
         if prompt or worn_types:
             break
 
     if not prompt:
         prompt = text
-    worn_types = _normalize_worn_types(worn_types)
+    worn_types = _sanitize_worn_types_policy(_normalize_worn_types(worn_types))
 
     if not prompt:
         prompt = DEFAULT_USER_DESCRIPTION
