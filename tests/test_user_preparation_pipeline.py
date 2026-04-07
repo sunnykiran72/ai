@@ -2,132 +2,118 @@ import unittest
 
 from PIL import Image
 
-from utils.user_preparation import prepare_user_image_core
+from utils.user_preparation import prepare_user_image_core, _extract_user_prepare_prompt_bundle
 
 
 class TestUserPreparationPipeline(unittest.TestCase):
-    def test_accepts_single_person_with_visible_face(self):
-        image = Image.new("RGB", (320, 480), "white")
+    def test_extract_prompt_bundle_from_json(self):
+        raw = (
+            '{"garments":["top","bottom","top"],'
+            '"prompt":"young woman with curly hair, medium build, smiling while seated with hands grounded and legs spread"}'
+        )
+        prompt, worn_types = _extract_user_prepare_prompt_bundle(raw)
+        self.assertTrue(prompt.startswith("young woman with curly hair"))
+        self.assertEqual(worn_types, ["top", "bottom"])
 
-        def detector_fn(_image, conf=0.25, iou=0.45):
-            return [{"bbox": [24, 12, 272, 444], "confidence": 0.96, "area_ratio": 0.69}]
+    def test_extract_prompt_bundle_from_plain_text_without_keyword_inference(self):
+        raw = "young woman wearing a jacket over a dress, seated casually with one hand on the floor"
+        prompt, worn_types = _extract_user_prepare_prompt_bundle(raw)
+        self.assertIn("young woman", prompt)
+        self.assertEqual(worn_types, [])
 
-        def verifier_fn(_image, prompt):
-            self.assertIn("dominant foreground person", prompt)
+    def test_accepts_with_grounding_dino_and_verifier(self):
+        image = Image.new("RGB", (400, 600), "white")
+
+        def grounding_detector_fn(_image, prompts):
+            self.assertIn("person", prompts)
+            return [
+                {"label": "person", "bbox": [60, 20, 340, 580], "score": 0.82, "source": "grounding_dino"},
+                {"label": "face", "bbox": [150, 40, 240, 140], "score": 0.74, "source": "grounding_dino"},
+                {"label": "upper body", "bbox": [100, 120, 310, 320], "score": 0.65, "source": "grounding_dino"},
+                {"label": "lower body", "bbox": [100, 300, 320, 570], "score": 0.68, "source": "grounding_dino"},
+            ]
+
+        def verifier_fn(_image, _prompt):
             return {
                 "single_person": True,
                 "face_visible": True,
-                "full_body_visible": True,
+                "upper_body_visible": True,
+                "lower_body_visible": True,
                 "clear_human": True,
                 "reason": "ok",
             }
 
-        def upload_fn(image_bytes):
-            self.assertGreater(len(image_bytes), 0)
-            return "https://example.com/prepared.png"
-
-        def description_fn(_image):
-            return "identity: test subject. face: clear. pose: standing. preserve: pose"
-
         result = prepare_user_image_core(
             image,
-            person_detector_fn=detector_fn,
+            grounding_detector_fn=grounding_detector_fn,
             verifier_fn=verifier_fn,
-            description_fn=description_fn,
-            upload_fn=upload_fn,
+            description_fn=lambda _img: "identity: test subject. face: clear.",
+            upload_fn=lambda _bytes: "https://example.com/prepared.png",
             blur_check_enabled=False,
             verification_required=True,
         )
 
         self.assertNotIn("error", result)
         self.assertEqual(result["url"], "https://example.com/prepared.png")
-        self.assertIn("test subject", result["promptDescription"])
-        self.assertEqual(result["meta"]["detect"]["count"], 1)
-        self.assertTrue(result["meta"]["verification"]["parsed"]["face_visible"])
+        self.assertEqual(result["meta"]["detect"].get("backend"), "grounding_dino")
 
-    def test_accepts_pose_agnostic_full_body_when_face_detector_is_present(self):
+    def test_rejects_when_grounding_detector_is_missing(self):
         image = Image.new("RGB", (320, 480), "white")
-
-        def detector_fn(_image, conf=0.25, iou=0.45):
-            return [{"bbox": [18, 12, 302, 448], "confidence": 0.96, "area_ratio": 0.78}]
-
-        def face_detector_fn(_image):
-            return [{"bbox": [120, 26, 170, 96], "confidence": 0.93, "source": "stub"}]
-
         result = prepare_user_image_core(
             image,
-            person_detector_fn=detector_fn,
-            face_detector_fn=face_detector_fn,
+            grounding_detector_fn=None,
             verifier_fn=None,
             description_fn=None,
             upload_fn=lambda _bytes: "https://example.com/prepared.png",
             blur_check_enabled=False,
             verification_required=False,
         )
+        self.assertEqual(result["error"], "detector_unavailable")
+        self.assertEqual(int(result["status_code"]), 503)
 
-        self.assertNotIn("error", result)
-        self.assertEqual(result["meta"]["face"]["body_visibility"]["major_axis"], "vertical")
-        self.assertTrue(result["meta"]["face"]["body_visibility"]["visible"])
+    def test_rejects_multiple_people_from_grounding_gate(self):
+        image = Image.new("RGB", (400, 600), "white")
+        called = {"verifier": 0}
 
-    def test_accepts_horizontal_full_body_pose_when_face_is_at_body_end(self):
-        image = Image.new("RGB", (500, 400), "white")
-
-        def detector_fn(_image, conf=0.25, iou=0.45):
-            return [{"bbox": [20, 110, 470, 260], "confidence": 0.95, "area_ratio": 0.62}]
-
-        def face_detector_fn(_image):
-            return [{"bbox": [32, 126, 88, 196], "confidence": 0.92, "source": "stub"}]
-
-        result = prepare_user_image_core(
-            image,
-            person_detector_fn=detector_fn,
-            face_detector_fn=face_detector_fn,
-            verifier_fn=None,
-            description_fn=None,
-            upload_fn=lambda _bytes: "https://example.com/prepared.png",
-            blur_check_enabled=False,
-            verification_required=False,
-        )
-
-        self.assertNotIn("error", result)
-        self.assertEqual(result["meta"]["face"]["body_visibility"]["major_axis"], "horizontal")
-        self.assertTrue(result["meta"]["face"]["body_visibility"]["visible"])
-
-    def test_rejects_cropped_body_even_when_face_is_visible(self):
-        image = Image.new("RGB", (320, 480), "white")
-
-        def detector_fn(_image, conf=0.25, iou=0.45):
-            return [{"bbox": [18, 12, 150, 220], "confidence": 0.95, "area_ratio": 0.20}]
-
-        def face_detector_fn(_image):
-            return [{"bbox": [120, 24, 170, 96], "confidence": 0.92, "source": "stub"}]
-
-        result = prepare_user_image_core(
-            image,
-            person_detector_fn=detector_fn,
-            face_detector_fn=face_detector_fn,
-            verifier_fn=None,
-            description_fn=None,
-            upload_fn=lambda _bytes: "https://example.com/prepared.png",
-            blur_check_enabled=False,
-            verification_required=False,
-        )
-
-        self.assertEqual(result["error"], "full_body_not_visible")
-        self.assertIn("full body is not visible", result["message"].lower())
-
-    def test_rejects_multiple_prominent_people(self):
-        image = Image.new("RGB", (320, 480), "white")
-
-        def detector_fn(_image, conf=0.25, iou=0.45):
+        def grounding_detector_fn(_image, _prompts):
             return [
-                {"bbox": [18, 16, 156, 438], "confidence": 0.91, "area_ratio": 0.47},
-                {"bbox": [168, 20, 304, 440], "confidence": 0.89, "area_ratio": 0.44},
+                {"label": "person", "bbox": [20, 20, 190, 590], "score": 0.82, "source": "grounding_dino"},
+                {"label": "person", "bbox": [210, 20, 380, 590], "score": 0.78, "source": "grounding_dino"},
+                {"label": "face", "bbox": [50, 40, 120, 120], "score": 0.74, "source": "grounding_dino"},
+                {"label": "upper body", "bbox": [30, 120, 170, 310], "score": 0.65, "source": "grounding_dino"},
+                {"label": "lower body", "bbox": [30, 300, 170, 580], "score": 0.68, "source": "grounding_dino"},
+            ]
+
+        def verifier_fn(_image, _prompt):
+            called["verifier"] += 1
+            return {}
+
+        result = prepare_user_image_core(
+            image,
+            grounding_detector_fn=grounding_detector_fn,
+            verifier_fn=verifier_fn,
+            description_fn=None,
+            upload_fn=lambda _bytes: "https://example.com/prepared.png",
+            blur_check_enabled=False,
+            verification_required=True,
+        )
+
+        self.assertEqual(result["error"], "multiple_people")
+        self.assertEqual(called["verifier"], 0)
+
+    def test_rejects_when_face_is_missing_in_detection_gate(self):
+        image = Image.new("RGB", (400, 600), "white")
+
+        def grounding_detector_fn(_image, _prompts):
+            return [
+                {"label": "person", "bbox": [60, 20, 340, 580], "score": 0.82, "source": "grounding_dino"},
+                {"label": "upper body", "bbox": [100, 120, 310, 320], "score": 0.65, "source": "grounding_dino"},
+                {"label": "lower body", "bbox": [100, 300, 320, 570], "score": 0.68, "source": "grounding_dino"},
             ]
 
         result = prepare_user_image_core(
             image,
-            person_detector_fn=detector_fn,
+            grounding_detector_fn=grounding_detector_fn,
             verifier_fn=None,
             description_fn=None,
             upload_fn=lambda _bytes: "https://example.com/prepared.png",
@@ -135,28 +121,26 @@ class TestUserPreparationPipeline(unittest.TestCase):
             verification_required=False,
         )
 
-        self.assertEqual(result["error"], "multiple_people")
-        self.assertIn("dominant person", result["message"].lower())
+        self.assertEqual(result["error"], "face_hidden")
 
-    def test_rejects_hidden_face_from_verifier(self):
-        image = Image.new("RGB", (320, 480), "white")
+    def test_rejects_when_bottom_is_missing_in_detection_gate(self):
+        image = Image.new("RGB", (400, 600), "white")
+        called = {"verifier": 0}
 
-        def detector_fn(_image, conf=0.25, iou=0.45):
-            return [{"bbox": [24, 12, 272, 444], "confidence": 0.96, "area_ratio": 0.69}]
+        def grounding_detector_fn(_image, _prompts):
+            return [
+                {"label": "person", "bbox": [60, 20, 340, 580], "score": 0.82, "source": "grounding_dino"},
+                {"label": "face", "bbox": [150, 420, 240, 520], "score": 0.74, "source": "grounding_dino"},
+                {"label": "upper body", "bbox": [100, 120, 310, 320], "score": 0.65, "source": "grounding_dino"},
+            ]
 
-        def verifier_fn(_image, prompt):
-            self.assertIn("full_body_visible", prompt)
-            return {
-                "single_person": True,
-                "face_visible": False,
-                "full_body_visible": True,
-                "clear_human": True,
-                "reason": "face hidden by hand",
-            }
+        def verifier_fn(_image, _prompt):
+            called["verifier"] += 1
+            return {}
 
         result = prepare_user_image_core(
             image,
-            person_detector_fn=detector_fn,
+            grounding_detector_fn=grounding_detector_fn,
             verifier_fn=verifier_fn,
             description_fn=None,
             upload_fn=lambda _bytes: "https://example.com/prepared.png",
@@ -164,43 +148,106 @@ class TestUserPreparationPipeline(unittest.TestCase):
             verification_required=True,
         )
 
-        self.assertEqual(result["error"], "face_hidden")
-        self.assertIn("face hidden", result["message"].lower())
+        self.assertEqual(result["error"], "bottom_section_not_visible")
+        self.assertEqual(called["verifier"], 0)
 
-    def test_falls_back_to_full_frame_when_detector_errors(self):
-        image = Image.new("RGB", (320, 480), "white")
+    def test_rejects_when_verifier_reports_lower_body_not_visible(self):
+        image = Image.new("RGB", (400, 600), "white")
 
-        def detector_fn(_image, conf=0.25, iou=0.45):
-            raise RuntimeError("expected mat1 and mat2 to have the same dtype, but got: float != c10::BFloat16")
+        def grounding_detector_fn(_image, _prompts):
+            return [
+                {"label": "person", "bbox": [60, 20, 340, 580], "score": 0.82, "source": "grounding_dino"},
+                {"label": "face", "bbox": [150, 40, 240, 140], "score": 0.74, "source": "grounding_dino"},
+                {"label": "upper body", "bbox": [100, 120, 310, 320], "score": 0.65, "source": "grounding_dino"},
+                {"label": "lower body", "bbox": [100, 300, 320, 570], "score": 0.68, "source": "grounding_dino"},
+            ]
 
-        def fallback_detector_fn(image, conf=0.25, iou=0.45):
-            return [{"bbox": [0, 0, image.width, image.height], "confidence": 1.0, "area_ratio": 1.0}]
-
-        def verifier_fn(_image, prompt):
-            self.assertIn("dominant foreground person", prompt)
+        def verifier_fn(_image, _prompt):
             return {
                 "single_person": True,
                 "face_visible": True,
-                "full_body_visible": True,
+                "upper_body_visible": True,
+                "lower_body_visible": False,
+                "clear_human": True,
+                "reason": "lower body is cropped",
+            }
+
+        result = prepare_user_image_core(
+            image,
+            grounding_detector_fn=grounding_detector_fn,
+            verifier_fn=verifier_fn,
+            description_fn=None,
+            upload_fn=lambda _bytes: "https://example.com/prepared.png",
+            blur_check_enabled=False,
+            verification_required=True,
+        )
+
+        self.assertEqual(result["error"], "bottom_section_not_visible")
+
+    def test_rejects_when_verifier_is_required_but_missing(self):
+        image = Image.new("RGB", (400, 600), "white")
+
+        def grounding_detector_fn(_image, _prompts):
+            return [
+                {"label": "person", "bbox": [60, 20, 340, 580], "score": 0.82, "source": "grounding_dino"},
+                {"label": "face", "bbox": [150, 40, 240, 140], "score": 0.74, "source": "grounding_dino"},
+                {"label": "upper body", "bbox": [100, 120, 310, 320], "score": 0.65, "source": "grounding_dino"},
+                {"label": "lower body", "bbox": [100, 300, 320, 570], "score": 0.68, "source": "grounding_dino"},
+            ]
+
+        result = prepare_user_image_core(
+            image,
+            grounding_detector_fn=grounding_detector_fn,
+            verifier_fn=None,
+            description_fn=None,
+            upload_fn=lambda _bytes: "https://example.com/prepared.png",
+            blur_check_enabled=False,
+            verification_required=True,
+        )
+
+        self.assertEqual(result["error"], "verifier_unavailable")
+        self.assertEqual(int(result["status_code"]), 503)
+
+    def test_accepts_with_grounding_person_anchor_fallback_when_primary_has_no_person_label(self):
+        image = Image.new("RGB", (400, 600), "white")
+        called = {"anchor": 0}
+
+        def grounding_detector_fn(_image, prompts):
+            prompt_set = {str(p).strip().lower() for p in prompts}
+            if "single person" in prompt_set:
+                called["anchor"] += 1
+                return [
+                    {"label": "single person", "bbox": [55, 20, 345, 585], "score": 0.81, "source": "grounding_dino"},
+                ]
+            return [
+                {"label": "face", "bbox": [155, 45, 240, 140], "score": 0.74, "source": "grounding_dino"},
+                {"label": "upper body", "bbox": [100, 120, 310, 320], "score": 0.65, "source": "grounding_dino"},
+                {"label": "lower body", "bbox": [100, 300, 320, 570], "score": 0.68, "source": "grounding_dino"},
+            ]
+
+        def verifier_fn(_image, _prompt):
+            return {
+                "single_person": True,
+                "face_visible": True,
+                "upper_body_visible": True,
+                "lower_body_visible": True,
                 "clear_human": True,
                 "reason": "ok",
             }
 
         result = prepare_user_image_core(
             image,
-            person_detector_fn=detector_fn,
-            fallback_detector_fn=fallback_detector_fn,
+            grounding_detector_fn=grounding_detector_fn,
             verifier_fn=verifier_fn,
-            description_fn=lambda _image: "identity: fallback subject. face: clear. pose: standing.",
+            description_fn=None,
             upload_fn=lambda _bytes: "https://example.com/prepared.png",
             blur_check_enabled=False,
             verification_required=True,
         )
 
         self.assertNotIn("error", result)
-        self.assertEqual(result["url"], "https://example.com/prepared.png")
-        self.assertTrue(result["meta"]["detect"].get("fallback_used"))
-        self.assertEqual(result["meta"]["detect"].get("reason"), "person_detector_fallback")
+        self.assertEqual(called["anchor"], 1)
+        self.assertTrue(result["meta"]["detect"].get("person_anchor_used"))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,42 @@
+FLUX Try-on vs Qwen Image Edit Benchmark
+
+This benchmark compares your current /v1/flux2/tryon pipeline against Qwen Image Edit on the same try-on cases.
+
+What It Measures
+- Success/failure rate
+- End-to-end wall latency
+- FLUX-reported generation latency (if returned)
+- Type-hit accuracy proxy (optional): runs /analyze on generated outputs for each requested type
+
+Files
+- Script: /Users/kiran/Documents/github/clients/glamify/hybrid_vto_v1/ai/scripts/benchmark_flux_vs_qwen_image_edit.py
+- Sample cases: /Users/kiran/Documents/github/clients/glamify/hybrid_vto_v1/ai/scripts/fixtures/flux_vs_qwen_cases.sample.json
+
+Prerequisites
+- Running Glamify API (for FLUX try-on and optional /analyze)
+- DashScope API key for Qwen Image Edit (DASHSCOPE_API_KEY)
+
+Example: Single + Multi Garment
+python3 scripts/benchmark_flux_vs_qwen_image_edit.py \
+  --cases-file scripts/fixtures/flux_vs_qwen_cases.sample.json \
+  --flux-base-url http://127.0.0.1:8000 \
+  --qwen-model qwen-image-2.0-pro \
+  --repeats 3
+
+Useful Flags
+- --flux-mode tryon-lora|consistency-lora
+- --qwen-endpoint <url> (default: DashScope Intl endpoint)
+- --qwen-max-input-images 3 (includes user image)
+- --qwen-size 768*1024
+- --skip-analyze to disable type-hit proxy scoring
+
+Output
+Reports are written under:
+/Users/kiran/Documents/github/clients/glamify/hybrid_vto_v1/ai/debug_comparisons/flux_vs_qwen_image_edit
+
+- JSON: detailed per-run payloads/metrics
+- TXT/Markdown: quick summary table (overall + per case)
+
+Notes
+- Qwen request supports a limited number of input images. If a case has more products than allowed by --qwen-max-input-images - 1, extra products are dropped and recorded in report metadata.
+- Keep case prompts/descriptions realistic and consistent between engines for fair comparison.

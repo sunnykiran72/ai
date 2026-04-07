@@ -293,31 +293,6 @@ class Flux2CVTONRunner:
         )
         self.lora_weight_name = cfg.get("lora_weight_name") or os.getenv("FLUX2_LORA_WEIGHT_NAME", "flux-klein-tryon.safetensors")
         self.adapter_name = cfg.get("adapter_name") or os.getenv("FLUX2_ADAPTER_NAME", "fal_tryon")
-        self.bfs_lora_path = _resolve_existing_path(
-            cfg.get("bfs_lora_path") or os.getenv("FLUX2_BFS_LORA_PATH", "Alissonerdx/BFS-Best-Face-Swap"),
-            (
-                "/workspace/models/flux2-lora/bfs-best-face-swap",
-                "/workspace/hybrid_vto_v1_latest_v1/models/flux2-lora/bfs-best-face-swap",
-            ),
-        )
-        self.bfs_lora_weight_name = cfg.get("bfs_lora_weight_name") or os.getenv(
-            "FLUX2_BFS_LORA_WEIGHT_NAME",
-            "bfs_head_v1_flux-klein_9b_step3500_rank128.safetensors",
-        )
-        self.bfs_adapter_name = cfg.get("bfs_adapter_name") or os.getenv("FLUX2_BFS_ADAPTER_NAME", "bfs_face")
-        self.bfs_lora_scale = float(
-            cfg["bfs_lora_scale"] if ("bfs_lora_scale" in cfg and cfg.get("bfs_lora_scale") is not None) else os.getenv("FLUX2_BFS_LORA_SCALE", "0.65")
-        )
-        self.bfs_lora_fallback_repo = str(
-            cfg.get("bfs_lora_fallback_repo") or os.getenv("FLUX2_BFS_LORA_FALLBACK_REPO", "Alissonerdx/BFS-Best-Face-Swap")
-        ).strip()
-        self.bfs_lora_local_cache_dir = str(
-            cfg.get("bfs_lora_local_cache_dir") or os.getenv("FLUX2_BFS_LORA_LOCAL_CACHE_DIR", "/tmp/flux2-lora/bfs-best-face-swap")
-        ).strip()
-        configured_lora_mode = str(cfg.get("lora_mode") or os.getenv("FLUX2_LORA_MODE", "tryon")).strip().lower()
-        if configured_lora_mode not in {"", "tryon"}:
-            logger.warning("Ignoring unsupported FLUX2_LORA_MODE=%s; forcing tryon-only mode.", configured_lora_mode)
-        self.lora_mode = "tryon"
         self._adapter_name_effective = str(self.adapter_name or "")
         self._active_lora_specs: List[LoraSpec] = []
         self.device = cfg.get("device") or os.getenv("FLUX2_DEVICE", "cuda")
@@ -665,16 +640,7 @@ class Flux2CVTONRunner:
             raise RuntimeError("LoRA source is empty after resolution.")
 
         weight_candidates = [str(spec.weight_name or "").strip()] if str(spec.weight_name or "").strip() else []
-        if spec.label == "bfs":
-            weight_candidates.extend(
-                [
-                    "bfs_head_v1_flux-klein_9b_step3500_rank128.safetensors",
-                    "bfs_head_v1_flux-klein_9b_step3750_rank64.safetensors",
-                    "pytorch_lora_weights.safetensors",
-                ]
-            )
-        else:
-            weight_candidates.extend(self._candidate_lora_weight_names())
+        weight_candidates.extend(self._candidate_lora_weight_names())
         weight_candidates = [w for i, w in enumerate(weight_candidates) if w and w not in weight_candidates[:i]]
         attempt_weights = list(weight_candidates)
 
@@ -790,8 +756,7 @@ class Flux2CVTONRunner:
             logger.info("Skipping LoRA load for Flux2 CVTON (FLUX2_ENABLE_LORA=0).")
         else:
             logger.info(
-                "Loading LoRA(s) for mode=%s (configured sources=%s)...",
-                self.lora_mode,
+                "Loading tryon LoRA(s) (configured sources=%s)...",
                 ", ".join([spec.source for spec in self._configured_lora_specs() if spec.source]),
             )
             lora_t0 = time.time()
@@ -821,9 +786,7 @@ class Flux2CVTONRunner:
             "lora_enabled": bool(self.enable_lora),
             "lora_required": bool(self.require_lora),
             "lora_loaded": bool(lora_loaded),
-            "lora_mode": str(self.lora_mode),
             "lora_path": str(self.lora_path or ""),
-            "bfs_lora_path": str(self.bfs_lora_path or ""),
             "lora_source_resolved": lora_sources[0] if lora_sources else "",
             "lora_sources_resolved": lora_sources,
             "lora_weight_loaded": lora_weights_loaded[0] if lora_weights_loaded else "",
@@ -847,34 +810,19 @@ class Flux2CVTONRunner:
         }
         return pipe
 
-    def _resolve_runtime_lora_specs(
-        self,
-        mode_override: Optional[str] = None,
-    ) -> List[LoraSpec]:
+    def _resolve_runtime_lora_specs(self) -> List[LoraSpec]:
         active_specs = list(self._active_lora_specs or [])
         if not active_specs:
             return []
-
-        mode = str(mode_override or self.lora_mode or "tryon").strip().lower()
-        def _spec_label(spec: Any) -> str:
-            label = str(getattr(spec, "label", "") or getattr(spec, "adapter_name", "")).strip().lower()
-            return label
-
-        if mode == "tryon":
-            selected = [spec for spec in active_specs if _spec_label(spec) in {"tryon", "fal_tryon"}]
-        else:
-            selected = [spec for spec in active_specs if _spec_label(spec) in {"tryon", "fal_tryon"}]
-
-        return selected or list(active_specs)
+        return list(active_specs)
 
     def _apply_loaded_lora_activation(
         self,
         pipe: Any,
         enabled: bool,
-        mode_override: Optional[str] = None,
         scale_overrides: Optional[Dict[str, float]] = None,
     ) -> bool:
-        active_specs = self._resolve_runtime_lora_specs(mode_override=mode_override)
+        active_specs = self._resolve_runtime_lora_specs()
         if active_specs:
             names = [str(spec.adapter_name) for spec in active_specs if str(spec.adapter_name).strip()]
             weights = [
@@ -925,7 +873,6 @@ class Flux2CVTONRunner:
     def _set_runtime_lora_state(
         self,
         enabled: bool,
-        mode_override: Optional[str] = None,
         scale_overrides: Optional[Dict[str, float]] = None,
     ) -> bool:
         if self._pipeline is None:
@@ -953,7 +900,6 @@ class Flux2CVTONRunner:
         return self._apply_loaded_lora_activation(
             self._pipeline,
             enabled=enabled,
-            mode_override=mode_override,
             scale_overrides=scale_overrides,
         )
 
@@ -1038,9 +984,6 @@ class Flux2CVTONRunner:
         true_cfg_scale: Optional[float] = None,
         lora_mode: Optional[str] = None,
         lora_scale: Optional[float] = None,
-        bfs_lora_scale: Optional[float] = None,
-        stacked_tryon_prompt: Optional[str] = None,
-        stacked_bfs_prompt: Optional[str] = None,
         output_max_edge: Optional[int] = None,
     ) -> Dict[str, Any]:
         self.ensure_ready()
@@ -1055,7 +998,6 @@ class Flux2CVTONRunner:
         board = _flatten_rgba_to_white_rgb(board_image)
         resolved_negative_prompt = str(negative_prompt or "").strip()
         requested_lora = self.enable_lora if use_lora is None else bool(use_lora)
-        requested_lora_mode = "tryon"
         requested_mode_raw = str(lora_mode or "").strip().lower()
         if requested_mode_raw and requested_mode_raw != "tryon":
             logger.warning("Ignoring unsupported lora_mode=%s; tryon-only mode is enforced.", requested_mode_raw)
@@ -1085,11 +1027,7 @@ class Flux2CVTONRunner:
             else:
                 negative_prompt_mode = "ignored"
 
-        scale_overrides: Dict[str, float] = {}
-        if lora_scale is not None:
-            scale_overrides["tryon"] = float(lora_scale)
-        if bfs_lora_scale is not None:
-            logger.warning("Ignoring bfs_lora_scale override in tryon-only mode.")
+        scale_overrides: Dict[str, float] = {"tryon": float(lora_scale)} if lora_scale is not None else {}
 
         def _invoke_once(
             run_generator: Optional[torch.Generator] = None,
@@ -1123,42 +1061,13 @@ class Flux2CVTONRunner:
                     self._warned_negative_prompt_unsupported = True
             return self._pipeline(**call_kwargs).images[0]
 
-        def _new_seeded_generator() -> torch.Generator:
-            return torch.Generator(device=self.device).manual_seed(gen_seed)
-
-        def _mode_label(spec: Any) -> str:
-            return str(getattr(spec, "label", "") or getattr(spec, "adapter_name", "")).strip().lower()
-
-        def _loaded_mode_scale(mode: str) -> float:
-            if mode == "tryon":
-                for spec in self._active_lora_specs:
-                    if _mode_label(spec) in {"tryon", "fal_tryon"}:
-                        return float(getattr(spec, "scale", self.lora_scale))
-                return float(self.lora_scale)
-            if mode == "bfs":
-                for spec in self._active_lora_specs:
-                    if _mode_label(spec) in {"bfs", "bfs_face"}:
-                        return float(getattr(spec, "scale", self.bfs_lora_scale))
-                return float(self.bfs_lora_scale)
-            return float(self.lora_scale)
-
-        stacked_strategy = "native_adapters"
-        stacked_effective_scales: Dict[str, float] = {}
-        stacked_blend_alpha: Optional[float] = None
-        stacked_prompts_used: Dict[str, str] = {}
-        using_stacked_dual_pass = False
-
         with self._infer_lock, torch.inference_mode():
-            if using_stacked_dual_pass:
-                effective_lora = bool(requested_lora)
-            else:
-                effective_lora = self._set_runtime_lora_state(
-                    requested_lora,
-                    mode_override=requested_lora_mode,
-                    scale_overrides=scale_overrides if scale_overrides else None,
-                )
+            effective_lora = self._set_runtime_lora_state(
+                requested_lora,
+                scale_overrides=scale_overrides if scale_overrides else None,
+            )
             if logger.isEnabledFor(logging.INFO):
-                active_specs = self._resolve_runtime_lora_specs(mode_override=requested_lora_mode)
+                active_specs = self._resolve_runtime_lora_specs()
                 active_adapter_names = [
                     str(spec.adapter_name).strip()
                     for spec in active_specs
@@ -1173,8 +1082,7 @@ class Flux2CVTONRunner:
                 ]
                 loaded_adapters = self._list_loaded_adapters(self._pipeline)
                 logger.info(
-                    "Flux2 try-on runtime state: requested_mode=%s effective_lora=%s loaded_adapters=%s active_adapter_names=%s active_adapter_scales=%s runtime_toggle=%s fuse_lora=%s",
-                    requested_lora_mode,
+                    "Flux2 try-on runtime state: effective_lora=%s loaded_adapters=%s active_adapter_names=%s active_adapter_scales=%s runtime_toggle=%s fuse_lora=%s",
                     bool(effective_lora),
                     loaded_adapters,
                     active_adapter_names,
@@ -1182,7 +1090,7 @@ class Flux2CVTONRunner:
                     bool(self.runtime_lora_toggle),
                     bool(self.fuse_lora),
                 )
-            if (not self._did_warmup) and self.num_warmups > 0 and not using_stacked_dual_pass:
+            if (not self._did_warmup) and self.num_warmups > 0:
                 warm_t0 = time.time()
                 for _ in range(max(0, self.num_warmups)):
                     _ = _invoke_once()
@@ -1190,65 +1098,7 @@ class Flux2CVTONRunner:
                 self._did_warmup = True
 
             infer_t0 = time.time()
-            result: Any
-            if using_stacked_dual_pass and bool(effective_lora):
-                tryon_scale_effective = max(0.0, float(scale_overrides.get("tryon", _loaded_mode_scale("tryon"))))
-                bfs_scale_effective = max(0.0, float(scale_overrides.get("bfs", _loaded_mode_scale("bfs"))))
-                stacked_effective_scales = {
-                    "tryon": tryon_scale_effective,
-                    "bfs": bfs_scale_effective,
-                }
-
-                # Some FLUX.2 builds do not reliably apply simultaneous LoRA adapter weights.
-                # Run per-adapter deterministic passes and blend by API-provided scales.
-                stacked_strategy = "dual_pass_blend"
-                tryon_prompt = str(stacked_tryon_prompt or effective_prompt)
-                bfs_prompt = str(stacked_bfs_prompt or effective_prompt)
-                stacked_prompts_used = {
-                    "tryon_prompt": tryon_prompt,
-                    "bfs_prompt": bfs_prompt,
-                }
-                if tryon_scale_effective <= 0.0 and bfs_scale_effective <= 0.0:
-                    effective_lora = self._set_runtime_lora_state(False)
-                    result = _invoke_once()
-                elif tryon_scale_effective <= 0.0:
-                    effective_lora = self._set_runtime_lora_state(
-                        True,
-                        mode_override="bfs",
-                        scale_overrides={"bfs": bfs_scale_effective},
-                    )
-                    result = _invoke_once(run_generator=_new_seeded_generator(), prompt_override=bfs_prompt)
-                elif bfs_scale_effective <= 0.0:
-                    effective_lora = self._set_runtime_lora_state(
-                        True,
-                        mode_override="tryon",
-                        scale_overrides={"tryon": tryon_scale_effective},
-                    )
-                    result = _invoke_once(run_generator=_new_seeded_generator(), prompt_override=tryon_prompt)
-                else:
-                    _ = self._set_runtime_lora_state(
-                        True,
-                        mode_override="tryon",
-                        scale_overrides={"tryon": tryon_scale_effective},
-                    )
-                    tryon_result = _invoke_once(
-                        run_generator=_new_seeded_generator(),
-                        prompt_override=tryon_prompt,
-                    ).convert("RGB")
-                    _ = self._set_runtime_lora_state(
-                        True,
-                        mode_override="bfs",
-                        scale_overrides={"bfs": bfs_scale_effective},
-                    )
-                    bfs_result = _invoke_once(
-                        run_generator=_new_seeded_generator(),
-                        prompt_override=bfs_prompt,
-                    ).convert("RGB")
-                    denom = float(tryon_scale_effective + bfs_scale_effective)
-                    stacked_blend_alpha = float(bfs_scale_effective / denom) if denom > 0.0 else 0.5
-                    result = Image.blend(tryon_result, bfs_result, stacked_blend_alpha)
-            else:
-                result = _invoke_once()
+            result = _invoke_once()
             latency = time.time() - infer_t0
 
         return {
@@ -1274,13 +1124,7 @@ class Flux2CVTONRunner:
                 "negative_prompt_true_cfg_scale": float(effective_true_cfg_scale),
                 "lora_requested": bool(requested_lora),
                 "lora_effective": bool(effective_lora),
-                "lora_requested_mode": requested_lora_mode,
                 "lora_scale_override": float(lora_scale) if lora_scale is not None else None,
-                "bfs_lora_scale_override": float(bfs_lora_scale) if bfs_lora_scale is not None else None,
-                "lora_stacked_strategy": stacked_strategy if requested_lora_mode == "stacked" else None,
-                "lora_effective_scales": stacked_effective_scales if requested_lora_mode == "stacked" else None,
-                "lora_stacked_blend_alpha": stacked_blend_alpha if requested_lora_mode == "stacked" else None,
-                "lora_stacked_prompts_used": stacked_prompts_used if requested_lora_mode == "stacked" else None,
                 "runtime_lora_toggle": bool(self.runtime_lora_toggle),
                 "startup_metrics": dict(self._startup_metrics),
             },

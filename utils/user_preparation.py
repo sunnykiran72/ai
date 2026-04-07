@@ -25,31 +25,498 @@ except Exception:  # pragma: no cover - face detection is optional in tests
 
 from utils.validation import validate_image_quality
 
-try:  # The runtime compat helper keeps the prompt cleanup consistent with the app.
-    from utils.runtime_compat import _normalize_user_prepare_api_prompt_description
-except Exception:  # pragma: no cover - fallback for isolated unit tests
-    def _normalize_user_prepare_api_prompt_description(raw_text: str) -> str:
-        return " ".join(str(raw_text or "").split()).strip()
-
 
 DEFAULT_USER_DESCRIPTION = (
     "person with visible hairstyle, balanced build, relaxed standing pose, identity cues preserved."
 )
+ALLOWED_WORN_TYPES = ("top", "bottom", "outer", "dress")
 
 DEFAULT_VERIFICATION_PROMPT = (
     "You are a strict image eligibility validator for a user photo upload. "
     "Return JSON only with these keys: "
-    '{"single_person": true/false, "face_visible": true/false, "full_body_visible": true/false, '
-    '"clear_human": true/false, "reason": "short reason"}. '
+    '{"single_person": true/false, "face_visible": true/false, "upper_body_visible": true/false, '
+    '"lower_body_visible": true/false, "clear_human": true/false, "reason": "short reason"}. '
+    "Do not add extra keys. "
     "Rules: "
     "single_person should be true only when one dominant foreground person is present. "
-    "Small background people are allowed only if they are clearly not competing with the main subject. "
-    "face_visible should be false if the face is hidden, covered, turned away too much, or too small to verify. "
-    "A partial face, side face, or softly occluded face can still count as visible if it is clear enough for try-on. "
-    "full_body_visible should be true only if the complete person is visible in frame, regardless of pose. "
-    "Standing, sitting, and lying down are allowed only when the body is not cropped and the full outline is visible. "
-    "If the result is ambiguous, return false values. Do not include markdown or extra text."
+    "face_visible should be true only when the face is clearly visible and usable for try-on identity consistency. "
+    "upper_body_visible should be true only when torso/upper-body region is clearly visible. "
+    "lower_body_visible should be true only when lower-body region is clearly visible. "
+    "clear_human should be true only when the subject is a clear real human photo. "
+    "If uncertain, return false values. Do not include markdown or extra text."
 )
+
+GROUNDING_DINO_PROMPTS = [
+    "person",
+    "face",
+    "head",
+    "upper body",
+    "lower body",
+    "torso",
+    "hip",
+    "thigh",
+    "leg",
+    "foot",
+]
+
+GROUNDING_PERSON_ANCHOR_PROMPTS = [
+    "single person",
+    "full body person",
+    "person",
+    "human body",
+    "human",
+]
+
+GROUNDING_PERSON_KEYS = ("person", "human")
+GROUNDING_FACE_KEYS = ("face",)
+GROUNDING_HEAD_KEYS = ("head",)
+GROUNDING_TOP_KEYS = ("upper body", "torso", "shirt", "t-shirt", "blouse", "jacket", "top")
+GROUNDING_BOTTOM_KEYS = (
+    "lower body",
+    "hip",
+    "thigh",
+    "leg",
+    "foot",
+    "pants",
+    "trousers",
+    "jeans",
+    "skirt",
+    "shorts",
+    "bottom",
+)
+
+# Low threshold by design to preserve recall while still enforcing explicit section visibility.
+GROUNDING_MIN_SCORE = 0.30
+GROUNDING_MIN_BODY_EXTENT_RATIO = 0.30
+GROUNDING_MULTIPLE_RATIO = 0.85
+GROUNDING_MULTIPLE_SECOND_MIN = 0.30
+GROUNDING_MULTIPLE_AREA_RATIO = 0.45
+
+
+def _normalize_worn_types(values: Any) -> List[str]:
+    out: List[str] = []
+    if values is None:
+        return out
+    if isinstance(values, str):
+        items = re.split(r"[,\s]+", values)
+    elif isinstance(values, (list, tuple, set)):
+        items = [str(v or "") for v in values]
+    else:
+        items = [str(values or "")]
+    for raw in items:
+        token = str(raw or "").strip().lower()
+        if token in ALLOWED_WORN_TYPES and token not in out:
+            out.append(token)
+    return out
+
+
+def _extract_user_prepare_prompt_bundle(raw_text: str) -> Tuple[str, List[str]]:
+    text = str(raw_text or "").strip()
+    if not text:
+        return DEFAULT_USER_DESCRIPTION, []
+
+    candidate_payloads: List[str] = [text]
+    if text.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?|```$", "", text, flags=re.IGNORECASE).strip()
+        if stripped:
+            candidate_payloads.append(stripped)
+    if "{" in text and "}" in text:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            candidate_payloads.append(text[start : end + 1].strip())
+
+    prompt = ""
+    worn_types: List[str] = []
+    for payload in candidate_payloads:
+        try:
+            obj = json.loads(payload)
+        except Exception:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        prompt = str(obj.get("prompt") or obj.get("description") or "").strip()
+        worn_types = _normalize_worn_types(obj.get("garments") or obj.get("wornTypes"))
+        if prompt or worn_types:
+            break
+
+    if not prompt:
+        prompt = text
+    worn_types = _normalize_worn_types(worn_types)
+
+    if not prompt:
+        prompt = DEFAULT_USER_DESCRIPTION
+    return prompt, worn_types
+
+
+def _label_matches_any(label: Any, keys: Sequence[str]) -> bool:
+    low = str(label or "").strip().lower()
+    if not low:
+        return False
+    return any(key in low for key in keys)
+
+
+def _bbox_contains_point(bbox: Sequence[int], x: float, y: float) -> bool:
+    if len(bbox) != 4:
+        return False
+    x0, y0, x1, y1 = [float(v) for v in bbox]
+    return x0 <= x <= x1 and y0 <= y <= y1
+
+
+def _top_label_candidate(
+    detections: List[Dict[str, Any]],
+    *,
+    keys: Sequence[str],
+    min_score: float,
+    person_bbox: Optional[Sequence[int]],
+    image_width: int,
+    image_height: int,
+) -> Optional[Dict[str, Any]]:
+    ranked: List[Tuple[float, Dict[str, Any]]] = []
+    for det in detections:
+        if not _label_matches_any(det.get("label"), keys):
+            continue
+        score = float(det.get("score") or det.get("confidence") or 0.0)
+        if score < min_score:
+            continue
+        bbox = _normalize_bbox(det.get("bbox") or [0, 0, image_width, image_height], image_width, image_height)
+        cx, cy = _bbox_center(bbox)
+        inside_bonus = 0.0
+        if person_bbox is not None and _bbox_contains_point(person_bbox, cx, cy):
+            inside_bonus = 0.05
+        ranked.append((score + inside_bonus, {**det, "bbox": bbox, "score": score}))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return ranked[0][1]
+
+
+def detect_grounding_visibility(
+    image: Image.Image,
+    detector_fn: Optional[Callable[..., Any]] = None,
+    *,
+    min_score: float = GROUNDING_MIN_SCORE,
+    min_body_extent_ratio: float = GROUNDING_MIN_BODY_EXTENT_RATIO,
+) -> Dict[str, Any]:
+    if not isinstance(image, Image.Image):
+        return {"ok": False, "error": "invalid_image", "message": "Expected a valid image."}
+
+    width, height = image.size
+    if width <= 0 or height <= 0:
+        return {"ok": False, "error": "invalid_image_size", "message": "Invalid image size."}
+
+    if detector_fn is None:
+        return {
+            "ok": False,
+            "error": "detector_unavailable",
+            "message": "Grounding detector is unavailable.",
+            "meta": {"backend": "grounding_dino", "reason": "detector_fn_missing"},
+        }
+
+    def _run_detector(prompts: Sequence[str]) -> Any:
+        try:
+            return detector_fn(image, prompts=prompts)
+        except TypeError:
+            return detector_fn(image, prompts)
+
+    try:
+        outputs = _run_detector(GROUNDING_DINO_PROMPTS)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "error": "detector_failed",
+            "message": f"Grounding detection failed: {exc}",
+            "meta": {"backend": "grounding_dino", "reason": "detector_call_failed", "error": str(exc)},
+        }
+
+    if not isinstance(outputs, list):
+        outputs = []
+    detections: List[Dict[str, Any]] = []
+    for item in outputs:
+        if not isinstance(item, dict):
+            continue
+        bbox = _normalize_bbox(item.get("bbox") or [0, 0, width, height], width, height)
+        score = float(item.get("score") or item.get("confidence") or 0.0)
+        label = str(item.get("label") or "").strip()
+        if not label:
+            continue
+        detections.append(
+            {
+                "bbox": bbox,
+                "score": score,
+                "label": label,
+                "source": str(item.get("source") or "grounding_dino"),
+            }
+        )
+
+    person_pool = [
+        det for det in detections
+        if _label_matches_any(det.get("label"), GROUNDING_PERSON_KEYS) and float(det.get("score") or 0.0) >= min_score
+    ]
+    person_anchor_used = False
+    anchor_counts: Dict[str, Any] = {"all": 0, "person": 0}
+    if not person_pool:
+        anchor_outputs: Any = []
+        try:
+            anchor_outputs = _run_detector(GROUNDING_PERSON_ANCHOR_PROMPTS)
+        except Exception:
+            anchor_outputs = []
+
+        if not isinstance(anchor_outputs, list):
+            anchor_outputs = []
+
+        anchor_detections: List[Dict[str, Any]] = []
+        for item in anchor_outputs:
+            if not isinstance(item, dict):
+                continue
+            bbox = _normalize_bbox(item.get("bbox") or [0, 0, width, height], width, height)
+            score = float(item.get("score") or item.get("confidence") or 0.0)
+            label = str(item.get("label") or "").strip()
+            if not label:
+                continue
+            anchor_detections.append(
+                {
+                    "bbox": bbox,
+                    "score": score,
+                    "label": label,
+                    "source": str(item.get("source") or "grounding_dino_anchor"),
+                }
+            )
+
+        anchor_person_pool = [
+            det
+            for det in anchor_detections
+            if _label_matches_any(det.get("label"), GROUNDING_PERSON_KEYS) and float(det.get("score") or 0.0) >= min_score
+        ]
+        anchor_counts = {"all": len(anchor_detections), "person": len(anchor_person_pool)}
+        if anchor_person_pool:
+            person_anchor_used = True
+            person_pool = anchor_person_pool
+            detections.extend(anchor_detections)
+
+    if not person_pool:
+        return {
+            "ok": False,
+            "error": "no_person",
+            "message": "No person detected in the image.",
+            "meta": {
+                "backend": "grounding_dino",
+                "prompts": list(GROUNDING_DINO_PROMPTS),
+                "person_anchor_prompts": list(GROUNDING_PERSON_ANCHOR_PROMPTS),
+                "thresholds": {"score_min": float(min_score), "body_extent_min": float(min_body_extent_ratio)},
+                "counts": {"all": len(detections), "person": 0},
+                "anchor_counts": dict(anchor_counts),
+            },
+        }
+
+    def _person_rank_key(det: Dict[str, Any]) -> Tuple[float, float]:
+        bbox = det.get("bbox") or [0, 0, width, height]
+        area_ratio = float(_bbox_area(bbox)) / float(max(1, width * height))
+        return (
+            float(det.get("score") or 0.0) + (0.08 * area_ratio),
+            area_ratio,
+        )
+
+    person_ranked = sorted(person_pool, key=_person_rank_key, reverse=True)
+    primary_person = person_ranked[0]
+    primary_bbox = _normalize_bbox(primary_person.get("bbox") or [0, 0, width, height], width, height)
+    primary_score = float(primary_person.get("score") or 0.0)
+    primary_area_ratio = float(_bbox_area(primary_bbox)) / float(max(1, width * height))
+
+    if len(person_ranked) > 1:
+        second = person_ranked[1]
+        second_bbox = _normalize_bbox(second.get("bbox") or [0, 0, width, height], width, height)
+        second_score = float(second.get("score") or 0.0)
+        second_area_ratio = float(_bbox_area(second_bbox)) / float(max(1, width * height))
+        if (
+            second_score >= max(GROUNDING_MULTIPLE_SECOND_MIN, primary_score * GROUNDING_MULTIPLE_RATIO)
+            and second_area_ratio >= (primary_area_ratio * GROUNDING_MULTIPLE_AREA_RATIO)
+        ):
+            return {
+                "ok": False,
+                "error": "multiple_people",
+                "message": "Multiple prominent people detected. Please upload a photo with one clearly dominant person.",
+                "meta": {
+                    "backend": "grounding_dino",
+                    "counts": {"all": len(detections), "person": len(person_pool)},
+                    "selected_person": {
+                        "bbox": primary_bbox,
+                        "score": round(primary_score, 4),
+                        "area_ratio": round(primary_area_ratio, 4),
+                    },
+                    "second_person": {
+                        "bbox": second_bbox,
+                        "score": round(second_score, 4),
+                        "area_ratio": round(second_area_ratio, 4),
+                    },
+                    "thresholds": {
+                        "multiple_ratio": GROUNDING_MULTIPLE_RATIO,
+                        "multiple_second_min": GROUNDING_MULTIPLE_SECOND_MIN,
+                        "multiple_area_ratio": GROUNDING_MULTIPLE_AREA_RATIO,
+                    },
+                },
+            }
+
+    face_det = _top_label_candidate(
+        detections,
+        keys=GROUNDING_FACE_KEYS,
+        min_score=min_score,
+        person_bbox=primary_bbox,
+        image_width=width,
+        image_height=height,
+    )
+    if face_det is None:
+        return {
+            "ok": False,
+            "error": "face_hidden",
+            "message": "Face not clearly visible.",
+            "meta": {
+                "backend": "grounding_dino",
+                "counts": {"all": len(detections), "person": len(person_pool), "face": 0},
+                "selected_person": {"bbox": primary_bbox, "score": round(primary_score, 4)},
+                "head_detected": bool(
+                    _top_label_candidate(
+                        detections,
+                        keys=GROUNDING_HEAD_KEYS,
+                        min_score=min_score,
+                        person_bbox=primary_bbox,
+                        image_width=width,
+                        image_height=height,
+                    )
+                ),
+            },
+        }
+
+    face_bbox = _normalize_bbox(face_det.get("bbox") or [0, 0, width, height], width, height)
+    fx0, fy0, fx1, fy1 = face_bbox
+    face_center_x = (fx0 + fx1) / 2.0
+    face_center_y = (fy0 + fy1) / 2.0
+    x0, y0, x1, y1 = primary_bbox
+    bbox_h = max(1, y1 - y0)
+    bbox_w = max(1, x1 - x0)
+    face_rel_y = (face_center_y - y0) / float(bbox_h)
+
+    top_det = _top_label_candidate(
+        detections,
+        keys=GROUNDING_TOP_KEYS,
+        min_score=min_score,
+        person_bbox=primary_bbox,
+        image_width=width,
+        image_height=height,
+    )
+    if top_det is None:
+        # Fallback: if the face is clearly in upper half of person bbox, infer upper-body visibility.
+        if 0.0 <= face_rel_y <= 0.55:
+            top_det = {
+                "bbox": [x0, y0, x1, _clamp(y0 + int(round(0.58 * bbox_h)), y0 + 1, y1)],
+                "score": float(face_det.get("score") or 0.0),
+                "label": "upper_body_proxy_from_face",
+                "source": "grounding_dino_proxy",
+            }
+        else:
+            return {
+                "ok": False,
+                "error": "top_section_not_visible",
+                "message": "Upper body is not clearly visible.",
+                "meta": {
+                    "backend": "grounding_dino",
+                    "selected_person": {"bbox": primary_bbox, "score": round(primary_score, 4)},
+                    "selected_face": {"bbox": face_bbox, "score": round(float(face_det.get("score") or 0.0), 4)},
+                },
+            }
+
+    bottom_det = _top_label_candidate(
+        detections,
+        keys=GROUNDING_BOTTOM_KEYS,
+        min_score=min_score,
+        person_bbox=primary_bbox,
+        image_width=width,
+        image_height=height,
+    )
+    if bottom_det is None:
+        # Fallback: infer lower-body section from person bbox when face is in upper region.
+        if 0.0 <= face_rel_y <= 0.55:
+            bottom_det = {
+                "bbox": [_clamp(x0, 0, width), _clamp(y0 + int(round(0.42 * bbox_h)), 0, height), _clamp(x1, 0, width), _clamp(y1, 0, height)],
+                "score": float(primary_score),
+                "label": "lower_body_proxy_from_person",
+                "source": "grounding_dino_proxy",
+            }
+        else:
+            return {
+                "ok": False,
+                "error": "bottom_section_not_visible",
+                "message": "Lower body is not clearly visible.",
+                "meta": {
+                    "backend": "grounding_dino",
+                    "selected_person": {"bbox": primary_bbox, "score": round(primary_score, 4)},
+                    "selected_face": {"bbox": face_bbox, "score": round(float(face_det.get("score") or 0.0), 4)},
+                    "selected_top": {"bbox": top_det.get("bbox"), "score": round(float(top_det.get("score") or 0.0), 4)},
+                },
+            }
+
+    major_axis = "vertical" if bbox_h >= bbox_w else "horizontal"
+    body_extent_ratio = (bbox_h / float(max(1, height))) if major_axis == "vertical" else (bbox_w / float(max(1, width)))
+    if body_extent_ratio < float(min_body_extent_ratio):
+        return {
+            "ok": False,
+            "error": "body_not_clear",
+            "message": "Body visibility is too low.",
+            "meta": {
+                "backend": "grounding_dino",
+                "selected_person": {
+                    "bbox": primary_bbox,
+                    "score": round(primary_score, 4),
+                    "area_ratio": round(primary_area_ratio, 4),
+                },
+                "metrics": {
+                    "major_axis": major_axis,
+                    "body_extent_ratio": round(float(body_extent_ratio), 4),
+                },
+                "thresholds": {"body_extent_min": float(min_body_extent_ratio)},
+            },
+        }
+
+    face_area_ratio_in_person = float(_bbox_area(face_bbox)) / float(max(1, _bbox_area(primary_bbox)))
+    result_meta = {
+        "backend": "grounding_dino",
+        "prompts": list(GROUNDING_DINO_PROMPTS),
+        "person_anchor_prompts": list(GROUNDING_PERSON_ANCHOR_PROMPTS),
+        "person_anchor_used": bool(person_anchor_used),
+        "thresholds": {"score_min": float(min_score), "body_extent_min": float(min_body_extent_ratio)},
+        "counts": {
+            "all": len(detections),
+            "person": len(person_pool),
+            "face": len([d for d in detections if _label_matches_any(d.get("label"), GROUNDING_FACE_KEYS)]),
+            "head": len([d for d in detections if _label_matches_any(d.get("label"), GROUNDING_HEAD_KEYS)]),
+            "top": len([d for d in detections if _label_matches_any(d.get("label"), GROUNDING_TOP_KEYS)]),
+            "bottom": len([d for d in detections if _label_matches_any(d.get("label"), GROUNDING_BOTTOM_KEYS)]),
+        },
+        "selected": {
+            "person": {"bbox": primary_bbox, "score": round(primary_score, 4), "label": str(primary_person.get("label") or "person")},
+            "face": {"bbox": face_bbox, "score": round(float(face_det.get("score") or 0.0), 4), "label": str(face_det.get("label") or "face")},
+            "top": {"bbox": _normalize_bbox(top_det.get("bbox") or [0, 0, width, height], width, height), "score": round(float(top_det.get("score") or 0.0), 4), "label": str(top_det.get("label") or "upper body")},
+            "bottom": {"bbox": _normalize_bbox(bottom_det.get("bbox") or [0, 0, width, height], width, height), "score": round(float(bottom_det.get("score") or 0.0), 4), "label": str(bottom_det.get("label") or "lower body")},
+        },
+        "metrics": {
+            "major_axis": major_axis,
+            "body_extent_ratio": round(float(body_extent_ratio), 4),
+            "bbox_area_ratio": round(float(primary_area_ratio), 4),
+            "face_area_ratio_in_person": round(float(face_area_ratio_in_person), 4),
+            "face_rel_y": round(float(face_rel_y), 4),
+        },
+    }
+    return {
+        "ok": True,
+        "primary_person": {
+            "bbox": primary_bbox,
+            "confidence": float(primary_score),
+            "area_ratio": float(primary_area_ratio),
+            "person_score": float(primary_score),
+            "source": "grounding_dino",
+        },
+        "meta": result_meta,
+    }
 
 
 @dataclass(frozen=True)
@@ -564,8 +1031,46 @@ def _clean_jsonish_text(raw_text: str) -> str:
 
 
 def parse_verifier_response(raw_text: Any) -> Dict[str, Any]:
+    def _coerce_bool(value: Any) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        text = str(value or "").strip().lower()
+        if text in {"true", "yes", "y", "1"}:
+            return True
+        if text in {"false", "no", "n", "0"}:
+            return False
+        return None
+
+    def _normalize_verdict(verdict: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(verdict, dict):
+            return {}
+        out = dict(verdict)
+        for key in (
+            "single_person",
+            "face_visible",
+            "upper_body_visible",
+            "lower_body_visible",
+            "clear_human",
+        ):
+            parsed = _coerce_bool(out.get(key))
+            if parsed is not None:
+                out[key] = parsed
+        # Backward compatibility with older verifier schema.
+        full_body_visible = _coerce_bool(out.get("full_body_visible"))
+        legs_visible = _coerce_bool(out.get("legs_70_visible"))
+        if _coerce_bool(out.get("upper_body_visible")) is None and full_body_visible is not None:
+            out["upper_body_visible"] = bool(full_body_visible)
+        if _coerce_bool(out.get("lower_body_visible")) is None:
+            if full_body_visible is not None:
+                out["lower_body_visible"] = bool(full_body_visible)
+            elif legs_visible is not None:
+                out["lower_body_visible"] = bool(legs_visible)
+        return out
+
     if isinstance(raw_text, dict):
-        return raw_text
+        return _normalize_verdict(raw_text)
 
     text = _clean_jsonish_text(str(raw_text or ""))
     if not text:
@@ -578,20 +1083,22 @@ def parse_verifier_response(raw_text: Any) -> Dict[str, Any]:
         try:
             parsed = json.loads(json_blob)
             if isinstance(parsed, dict):
-                return parsed
+                return _normalize_verdict(parsed)
         except Exception:
             pass
 
     # Fallback for terse yes/no style answers.
     low = text.lower()
-    return {
+    parsed = {
         "single_person": "single" in low and ("true" in low or "yes" in low),
         "face_visible": "face" in low and ("true" in low or "yes" in low),
-        "full_body_visible": "full body" in low and ("true" in low or "yes" in low),
+        "upper_body_visible": ("upper body" in low or "torso" in low) and ("true" in low or "yes" in low),
+        "lower_body_visible": ("lower body" in low or "legs" in low or "hip" in low or "thigh" in low) and ("true" in low or "yes" in low),
         "clear_human": "human" in low and ("true" in low or "yes" in low),
         "reason": text[:160],
         "_raw": text,
     }
+    return _normalize_verdict(parsed)
 
 
 def build_verification_prompt(
@@ -604,7 +1111,8 @@ def build_verification_prompt(
     return (
         DEFAULT_VERIFICATION_PROMPT
         + f" The main subject bbox is {bbox}. "
-        + "Pay attention to whether the face is clearly visible, the full body is visible in any pose, and whether there is only one dominant foreground person."
+        + "Pay attention to whether the face is clearly visible, whether upper and lower body sections are visible, "
+        + "and whether there is only one dominant foreground person."
     )
 
 
@@ -652,9 +1160,7 @@ def _error_payload(error: str, message: str, *, meta: Optional[Dict[str, Any]] =
 def prepare_user_image_core(
     image: Image.Image,
     *,
-    person_detector_fn: Optional[Callable[..., Any]] = None,
-    fallback_detector_fn: Optional[Callable[..., Any]] = None,
-    face_detector_fn: Optional[Callable[..., Any]] = None,
+    grounding_detector_fn: Optional[Callable[..., Any]] = None,
     verifier_fn: Optional[Callable[..., Any]] = None,
     description_fn: Optional[Callable[..., Any]] = None,
     fallback_description_fn: Optional[Callable[..., Any]] = None,
@@ -668,36 +1174,38 @@ def prepare_user_image_core(
         return _error_payload("invalid_image", "Expected a valid image.", status_code=422)
 
     width, height = image.size
-    candidates, detect_meta = detect_person_candidates(image, detector_fn=person_detector_fn)
-    if (
-        not candidates
-        and fallback_detector_fn is not None
-        and str(detect_meta.get("reason") or "") in {"person_detector_failed", "person_detector_unavailable"}
-    ):
-        fallback_candidates, fallback_meta = detect_person_candidates(image, detector_fn=fallback_detector_fn)
-        if fallback_candidates:
-            candidates = fallback_candidates
-            detect_meta = {
-                **detect_meta,
-                **fallback_meta,
-                "reason": "person_detector_fallback",
-                "fallback_used": True,
-            }
-    if not candidates:
+    candidates: List[Dict[str, Any]] = []
+    detect_meta: Dict[str, Any] = {"backend": "none", "count": 0}
+    primary_candidate: Optional[Dict[str, Any]] = None
+
+    if grounding_detector_fn is None:
+        return _error_payload(
+            "detector_unavailable",
+            "GroundingDINO detector is unavailable.",
+            meta={"detect": {"backend": "grounding_dino", "reason": "detector_fn_missing"}},
+            status_code=503,
+        )
+
+    grounding_gate = detect_grounding_visibility(image, detector_fn=grounding_detector_fn)
+    detect_meta = dict(grounding_gate.get("meta") or {})
+    detect_meta.setdefault("backend", "grounding_dino")
+    if not bool(grounding_gate.get("ok", False)):
+        return _error_payload(
+            str(grounding_gate.get("error") or "detection_failed"),
+            str(grounding_gate.get("message") or "Image detection failed."),
+            meta={"detect": detect_meta},
+        )
+    primary_candidate = dict(grounding_gate.get("primary_person") or {})
+    primary_candidate["bbox"] = _normalize_bbox(primary_candidate.get("bbox") or [0, 0, width, height], width, height)
+    candidates = [primary_candidate]
+    detect_meta["count"] = 1
+
+    if primary_candidate is None:
         return _error_payload(
             "no_person",
             "No person detected in the image.",
             meta={"detect": detect_meta},
         )
-
-    if has_multiple_prominent_people(candidates):
-        return _error_payload(
-            "multiple_people",
-            "Multiple prominent people detected. Please upload a photo with one clearly dominant person.",
-            meta={"detect": detect_meta},
-        )
-
-    primary_candidate = select_main_person_candidate(candidates)
     crop, bbox = crop_main_person(image, primary_candidate)
     focus = focus_score(crop, max_edge=blur_focus_max_edge)
     if blur_check_enabled and focus < float(blur_min_focus_score):
@@ -711,36 +1219,7 @@ def prepare_user_image_core(
             },
         )
 
-    face_meta: Dict[str, Any] = {"enabled": False, "backend": "none"}
-    if face_detector_fn is not None:
-        face_meta["enabled"] = True
-        face_candidates, face_detect_meta = detect_face_candidates(image, detector_fn=face_detector_fn)
-        face_meta["backend"] = str((face_candidates[0].get("source") if face_candidates else "none") or "none")
-        face_meta["detect"] = face_detect_meta
-        primary_face = select_main_face_candidate(face_candidates)
-        if not face_candidates or primary_face is None:
-            return _error_payload(
-                "face_hidden",
-                "Face not clearly visible.",
-                meta={
-                    "detect": detect_meta,
-                    "face": face_meta,
-                    "focusScore": round(float(focus), 4),
-                },
-            )
-
-        body_visibility = assess_full_body_visibility(image, primary_candidate, primary_face)
-        face_meta["body_visibility"] = body_visibility
-        if not bool(body_visibility.get("visible", False)):
-            return _error_payload(
-                "full_body_not_visible",
-                "Full body is not visible in the image.",
-                meta={
-                    "detect": detect_meta,
-                    "face": face_meta,
-                    "focusScore": round(float(focus), 4),
-                },
-            )
+    face_meta: Dict[str, Any] = {"enabled": True, "backend": "grounding_dino"}
 
     verification_meta: Dict[str, Any] = {"enabled": False, "backend": "none"}
     if verifier_fn is None and verification_required:
@@ -786,10 +1265,16 @@ def prepare_user_image_core(
                 str(verdict.get("reason") or "Face not clearly visible."),
                 meta={"detect": detect_meta, "verification": verification_meta},
             )
-        if not bool(verdict.get("full_body_visible", True)):
+        if not bool(verdict.get("upper_body_visible", True)):
             return _error_payload(
-                "full_body_not_visible",
-                str(verdict.get("reason") or "Full body is not visible."),
+                "top_section_not_visible",
+                str(verdict.get("reason") or "Upper body is not clearly visible."),
+                meta={"detect": detect_meta, "verification": verification_meta},
+            )
+        if not bool(verdict.get("lower_body_visible", True)):
+            return _error_payload(
+                "bottom_section_not_visible",
+                str(verdict.get("reason") or "Lower body is not clearly visible."),
                 meta={"detect": detect_meta, "verification": verification_meta},
             )
         if not bool(verdict.get("clear_human", True)):
@@ -829,11 +1314,16 @@ def prepare_user_image_core(
     if not description_raw:
         description_raw = DEFAULT_USER_DESCRIPTION
 
-    prompt_description = _normalize_user_prepare_api_prompt_description(description_raw)
+    prompt_description, worn_types = _extract_user_prepare_prompt_bundle(description_raw)
 
     return {
         "url": url,
         "promptDescription": prompt_description,
+        "wornTypes": worn_types,
+        "minicpmOutput": {
+            "garments": worn_types,
+            "prompt": prompt_description,
+        },
         "focusScore": float(focus),
         "meta": {
             "person_bbox": bbox,
@@ -851,9 +1341,7 @@ def prepare_user_image_core(
 async def prepare_user_image_pipeline(
     upload: Any,
     *,
-    person_detector_fn: Optional[Callable[..., Any]] = None,
-    fallback_detector_fn: Optional[Callable[..., Any]] = None,
-    face_detector_fn: Optional[Callable[..., Any]] = None,
+    grounding_detector_fn: Optional[Callable[..., Any]] = None,
     verifier_fn: Optional[Callable[..., Any]] = None,
     description_fn: Optional[Callable[..., Any]] = None,
     fallback_description_fn: Optional[Callable[..., Any]] = None,
@@ -880,9 +1368,7 @@ async def prepare_user_image_pipeline(
 
     return prepare_user_image_core(
         image,
-        person_detector_fn=person_detector_fn,
-        fallback_detector_fn=fallback_detector_fn,
-        face_detector_fn=face_detector_fn,
+        grounding_detector_fn=grounding_detector_fn,
         verifier_fn=verifier_fn,
         description_fn=description_fn,
         fallback_description_fn=fallback_description_fn,

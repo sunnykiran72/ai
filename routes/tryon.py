@@ -117,6 +117,8 @@ async def flux2_tryon_endpoint(
             tryon_kwargs["guidance_scale"] = request.guidanceScale
         if request.loraScale is not None:
             tryon_kwargs["lora_scale"] = request.loraScale
+        if request.outputMaxEdge is not None:
+            tryon_kwargs["output_max_edge"] = request.outputMaxEdge
 
         result = await tryon_service.try_on(**tryon_kwargs)
         

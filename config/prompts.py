@@ -34,14 +34,21 @@ MINICPM_GARMENT_DESCRIPTION_BY_TYPE = {
 
 MINICPM_GARMENT_DESCRIPTION_PROMPT = MINICPM_GARMENT_DESCRIPTION_COMMON
 
-MINICPM_PERSON_OUTFIT_DESCRIPTION_PROMPT = """Describe only the human subject for identity-preserving virtual try-on.
-Return exactly one clean sentence with at most 20 words.
-Include only person type, hair style, body build, and pose style.
-Do not use key-value sections, labels, JSON, bullets, or semicolon fields.
-Do not mention left, right, side, viewer-left, viewer-right, or directional wording.
-Do not describe clothing, outfit, background, lighting, camera, mood, or aesthetics.
-If uncertain, omit the detail instead of guessing.
-Output only the sentence."""
+MINICPM_PERSON_OUTFIT_DESCRIPTION_PROMPT = """Analyze the image for user-image preparation and return JSON only with this exact schema:
+{"garments":["top","bottom","outer","dress"],"prompt":"<single sentence>"}
+Rules:
+- garments: include only garment categories worn on the main body of the dominant person.
+- Allowed garment values: top, bottom, outer, dress.
+- garments may include multiple values; do not include duplicates.
+- Do not include side objects, hand-held items, nearby garments, or background apparel.
+- prompt: exactly one clean sentence with 25 to 35 words.
+- prompt must include person type, visible age band, hair style, hair length, body build, facial expression, head tilt, gaze style, overall posture, shoulder posture, arm and hand pose, lower-body posture, leg pose, and feet stance.
+- Include only these fields and nothing else: person type, visible age band, hair style, hair length, body build, facial expression, head tilt, gaze style, overall posture, shoulder posture, arm/hand pose, lower-body posture, leg pose, feet stance.
+- Never mention clothing, garment type, colors, footwear, accessories, background, lighting, camera, or scene details.
+- Do not mention left, right, side, viewer-left, viewer-right, or directional wording.
+- Do not describe background, lighting, camera, mood, or aesthetics.
+- If uncertain, omit that detail instead of guessing.
+- Return only valid JSON, no markdown, no extra keys."""
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # FLUX2 POSITIVE PROMPTS (What TO Generate)

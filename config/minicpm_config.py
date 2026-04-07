@@ -53,7 +53,7 @@ class MiniCPMConfig(BaseModel):
         description="Maximum new tokens for garment descriptions"
     )
     person_max_new_tokens: int = Field(
-        default=140,
+        default=200,
         ge=32,
         description="Maximum new tokens for person descriptions"
     )
@@ -169,7 +169,7 @@ class MiniCPMConfig(BaseModel):
         ))
         person_max_new_tokens = max(32, env_int(
             "MINICPM_SERVICE_PERSON_MAX_NEW_TOKENS",
-            96 if low_latency_mode else 140
+            128 if low_latency_mode else 200
         ))
         
         # Caching - affected by low latency mode

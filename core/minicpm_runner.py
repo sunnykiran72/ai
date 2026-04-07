@@ -44,7 +44,7 @@ class MiniCPMVRunner:
         self.garment_min_words = max(4, int(os.getenv("MINICPM_GARMENT_MIN_WORDS", "200")))
         self.user_max_new_tokens = max(
             64,
-            int(os.getenv("MINICPM_USER_MAX_NEW_TOKENS", str(self.max_new_tokens))),
+            int(os.getenv("MINICPM_USER_MAX_NEW_TOKENS", "200")),
         )
         # MiniCPM-V 4.5 officially uses sdpa in recent transformers runtimes.
         self.attn_implementation = os.getenv("MINICPM_ATTN_IMPLEMENTATION", "sdpa").strip().lower()

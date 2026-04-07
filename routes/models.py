@@ -173,7 +173,7 @@ class Flux2TryonRequest(BaseModel):
     user_image: Flux2TryonUserImage
     mode: str = Field(
         default="tryon-lora",
-        description="Try-on mode selector: tryon-lora (default) or consistency-lora",
+        description="Try-on mode selector: only tryon-lora is supported",
     )
     steps: int = Field(default=20, ge=4, le=50, description="Number of generation steps")
     seed: int = Field(default=42, ge=0, le=2147483647, description="Random seed for generation")
@@ -184,6 +184,12 @@ class Flux2TryonRequest(BaseModel):
         le=2.0,
         description="Try-on LoRA scale override (defaults to 1.0 in tryon-lora mode)",
     )
+    outputMaxEdge: Optional[int] = Field(
+        default=None,
+        ge=512,
+        le=2048,
+        description="Optional output max edge in pixels (longest side) for try-on generation",
+    )
 
     @field_validator("mode")
     @classmethod
@@ -191,8 +197,8 @@ class Flux2TryonRequest(BaseModel):
         if not isinstance(value, str):
             raise ValueError("mode must be a string")
         cleaned = value.strip().lower()
-        if cleaned not in {"tryon-lora", "consistency-lora"}:
-            raise ValueError("mode must be one of: tryon-lora, consistency-lora")
+        if cleaned != "tryon-lora":
+            raise ValueError("mode must be: tryon-lora")
         return cleaned
 
 

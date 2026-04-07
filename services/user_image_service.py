@@ -5,10 +5,9 @@ This module provides the UserImageService class that orchestrates user
 image preparation workflows.
 
 Responsibilities:
-- Validate user images (blur, person detection, face detection)
-- Remove background using BiRefNet
-- Detect and crop to main person
-- Generate user descriptors for identity preservation
+- Run GroundingDINO one-shot eligibility gate
+- Run MiniCPM verification when detection passes
+- Upload prepared image and return prompt description
 """
 
 from typing import Dict, Optional, Tuple
@@ -17,7 +16,7 @@ from PIL import Image
 
 from config import Config
 from services.ai_engine import AIEngine
-from utils.user_preparation import _opencv_face_detector, prepare_user_image_pipeline
+from utils.user_preparation import prepare_user_image_pipeline
 
 
 class UserImageService:
@@ -25,10 +24,9 @@ class UserImageService:
     Orchestrates user image preparation workflows.
     
     Responsibilities:
-    - Validate user images (blur, person detection, face detection)
-    - Remove background using BiRefNet
-    - Detect and crop to main person
-    - Generate user descriptors for identity preservation
+    - Run GroundingDINO one-shot eligibility gate
+    - Run MiniCPM verification after detection passes
+    - Upload prepared image and return prompt description
     """
     
     def __init__(self, engine: AIEngine, config: Config):
@@ -51,27 +49,12 @@ class UserImageService:
             import main as main_mod
 
         minicpm_runner = getattr(self.engine, "minicpm", None)
-        person_detector = getattr(self.engine, "person_detector", None)
+        grounding_dino = getattr(self.engine, "grounding_dino", None)
 
-        def _person_detector_fn(image, conf=0.25, iou=0.45):
-            if person_detector is None:
+        def _grounding_detector_fn(image, prompts):
+            if grounding_dino is None:
                 return None
-            return person_detector.predict(image, conf=conf, iou=iou)
-
-        def _fallback_person_detector_fn(image, conf=0.25, iou=0.45):
-            if image is None or not hasattr(image, "width") or not hasattr(image, "height"):
-                return None
-            return [
-                {
-                    "bbox": [0, 0, int(image.width), int(image.height)],
-                    "confidence": 1.0,
-                    "area_ratio": 1.0,
-                    "source": "fallback_full_frame",
-                }
-            ]
-
-        def _face_detector_fn(image):
-            return _opencv_face_detector(image)
+            return grounding_dino.detect(image, prompts=list(prompts or []))
 
         def _description_fn(image):
             if minicpm_runner is None:
@@ -91,9 +74,7 @@ class UserImageService:
 
         return await prepare_user_image_pipeline(
             upload,
-            person_detector_fn=_person_detector_fn,
-            fallback_detector_fn=_fallback_person_detector_fn,
-            face_detector_fn=_face_detector_fn,
+            grounding_detector_fn=_grounding_detector_fn,
             verifier_fn=_verification_fn,
             description_fn=_description_fn,
             fallback_description_fn=lambda image: main_mod._describe_user_image_for_prepare(image, description_backend=None),

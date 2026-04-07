@@ -1,5 +1,5 @@
 """
-Developer-facing FLUX2 consistency try-on lab UI.
+Developer-facing FLUX2 try-on LoRA lab UI.
 
 This module adds a lightweight, file-upload based test page for rapid
 prompt/parameter iteration without changing the public production contract.
@@ -23,19 +23,7 @@ logger = logging.getLogger("glamify-ai")
 router = APIRouter()
 
 _VALID_GARMENT_TYPES = {"top", "bottom", "dress", "outer"}
-_VALID_LORA_PROFILES = {"consistency", "tryon"}
-_DEFAULT_CONSISTENCY_PROMPT = (
-    "Image 1 is the person and scene anchor. Image 2 is the garment anchor. "
-    "Keep the same face identity, skin tone, hair, body proportions, pose, hand placement, "
-    "camera framing, background, and lighting from Image 1. "
-    "Single-garment try-on target type: top. "
-    "Apply the top garment from Image 2 on the upper clothing region from shoulders to waist. "
-    "Keep waist-down clothing, legs, and footwear styling from Image 1 consistent. "
-    "Render realistic fabric drape, natural fold direction, clean seam lines, and crisp garment edges. "
-    "Maintain stable garment boundaries inside the intended edit region with natural transitions."
-)
 _PROFILE_DEFAULTS = {
-    "consistency": {"steps": 8, "guidance_scale": 3.5, "lora_scale": 0.4},
     "tryon": {"steps": 28, "guidance_scale": 2.5, "lora_scale": 1.0},
 }
 
@@ -109,19 +97,17 @@ def _default_prompt_for_profile(
     garment_description: str,
     user_description: str,
 ) -> str:
-    normalized_profile = str(profile or "consistency").strip().lower()
-    if normalized_profile == "tryon":
-        return _build_tryon_prompt(
-            target_type=target_type,
-            garment_description=garment_description,
-            user_description=user_description,
-        )
-    return _DEFAULT_CONSISTENCY_PROMPT
+    del profile
+    return _build_tryon_prompt(
+        target_type=target_type,
+        garment_description=garment_description,
+        user_description=user_description,
+    )
 
 
-@router.get("/dev/flux2/consistency-lab", response_class=HTMLResponse)
-async def consistency_lab_page() -> HTMLResponse:
-    """Serve a standalone test page for rapid consistency-LoRA iteration."""
+@router.get("/dev/flux2/tryon-lab", response_class=HTMLResponse)
+async def tryon_lab_page() -> HTMLResponse:
+    """Serve a standalone test page for rapid tryon-LoRA iteration."""
     default_tryon_prompt = _default_prompt_for_profile(
         profile="tryon",
         target_type="top",
@@ -318,13 +304,12 @@ async def consistency_lab_page() -> HTMLResponse:
             <div>
               <label>LoRA Profile</label>
               <select name="lora_profile" id="lora_profile">
-                <option value="consistency">consistency</option>
                 <option value="tryon" selected>tryon</option>
               </select>
             </div>
             <div>
               <label>Steps</label>
-              <input name="steps" type="number" min="4" max="50" step="1" value="8" />
+              <input name="steps" type="number" min="4" max="50" step="1" value="28" />
             </div>
             <div>
               <label>Seed</label>
@@ -334,11 +319,11 @@ async def consistency_lab_page() -> HTMLResponse:
           <div class="row">
             <div>
               <label>LoRA Scale</label>
-              <input name="lora_scale" type="number" min="0" max="2" step="0.01" value="0.4" />
+              <input name="lora_scale" type="number" min="0" max="2" step="0.01" value="1.0" />
             </div>
             <div>
               <label>Guidance Scale</label>
-              <input name="guidance_scale" type="number" min="0" max="20" step="0.1" value="3.5" />
+              <input name="guidance_scale" type="number" min="0" max="20" step="0.1" value="2.5" />
             </div>
           </div>
           <div class="row">
@@ -424,26 +409,21 @@ async def consistency_lab_page() -> HTMLResponse:
     const guidanceInput = form.querySelector('[name="guidance_scale"]');
     const loraScaleInput = form.querySelector('[name="lora_scale"]');
     const profileDefaults = {{
-      consistency: {{ steps: 8, guidance_scale: 3.5, lora_scale: 0.4 }},
       tryon: {{ steps: 28, guidance_scale: 2.5, lora_scale: 1.0 }},
     }};
-    const defaultConsistencyPrompt = { _DEFAULT_CONSISTENCY_PROMPT!r };
     const defaultTryonPrompt = { default_tryon_prompt!r };
 
-    function buildDefaultPrompt(profile) {{
-      if (profile === "tryon") {{
-        return defaultTryonPrompt;
-      }}
-      return defaultConsistencyPrompt;
+    function buildDefaultPrompt() {{
+      return defaultTryonPrompt;
     }}
 
-    function applyProfileDefaults(profile, forcePrompt=false) {{
-      const defaults = profileDefaults[profile] || profileDefaults.consistency;
+    function applyProfileDefaults(forcePrompt=false) {{
+      const defaults = profileDefaults.tryon;
       stepsInput.value = defaults.steps;
       guidanceInput.value = defaults.guidance_scale;
       loraScaleInput.value = defaults.lora_scale;
       if (forcePrompt) {{
-        promptInput.value = buildDefaultPrompt(profile);
+        promptInput.value = buildDefaultPrompt();
       }}
     }}
 
@@ -462,11 +442,12 @@ async def consistency_lab_page() -> HTMLResponse:
     garmentInput.addEventListener("change", () => filePreview(garmentInput, imgGarment));
 
     clearBtn.addEventListener("click", () => {{
-      promptInput.value = buildDefaultPrompt(loraProfileInput.value);
+      promptInput.value = buildDefaultPrompt();
     }});
 
     loraProfileInput.addEventListener("change", () => {{
-      applyProfileDefaults(loraProfileInput.value, true);
+      loraProfileInput.value = "tryon";
+      applyProfileDefaults(true);
     }});
 
     form.addEventListener("submit", async (event) => {{
@@ -496,7 +477,7 @@ async def consistency_lab_page() -> HTMLResponse:
       imgOutput.src = "";
 
       try {{
-        const response = await fetch("/dev/flux2/consistency-lab/run", {{
+        const response = await fetch("/dev/flux2/tryon-lab/run", {{
           method: "POST",
           body: formData
         }});
@@ -528,28 +509,24 @@ async def consistency_lab_page() -> HTMLResponse:
     return HTMLResponse(content=html)
 
 
-@router.post("/dev/flux2/consistency-lab/run")
-async def consistency_lab_run(
+@router.post("/dev/flux2/tryon-lab/run")
+async def tryon_lab_run(
     user_image: UploadFile = File(...),
     garment_image: UploadFile = File(...),
-    lora_profile: str = Form("tryon"),
     target_type: str = Form("top"),
     source_worn_types: str = Form("top,bottom"),
     garment_prompt_description: str = Form("garment"),
     user_prompt_description: str = Form(""),
     prompt: str = Form(""),
-    steps: int = Form(8, ge=4, le=50),
+    steps: int = Form(28, ge=4, le=50),
     seed: int = Form(42, ge=0, le=2147483647),
-    lora_scale: float = Form(0.4, ge=0.0, le=2.0),
-    guidance_scale: float = Form(3.5, ge=0.0, le=20.0),
+    lora_scale: float = Form(1.0, ge=0.0, le=2.0),
+    guidance_scale: float = Form(2.5, ge=0.0, le=20.0),
     engine: AIEngine = Depends(get_ai_engine),
 ):
     """
-    Run consistency-LoRA try-on with uploaded files and return image + full metrics.
+    Run tryon-LoRA try-on with uploaded files and return image + full metrics.
     """
-    normalized_profile = str(lora_profile or "").strip().lower()
-    if normalized_profile not in _VALID_LORA_PROFILES:
-        raise HTTPException(status_code=422, detail="lora_profile must be one of: consistency, tryon")
     normalized_target_type = str(target_type or "").strip().lower()
     if normalized_target_type not in _VALID_GARMENT_TYPES:
         raise HTTPException(status_code=422, detail="target_type must be one of: top, bottom, dress, outer")
@@ -561,50 +538,31 @@ async def consistency_lab_run(
     user_prompt_text = str(user_prompt_description or "").strip()
     prompt_override = " ".join(str(prompt or "").split()).strip() or None
     prompt_text = prompt_override or _default_prompt_for_profile(
-        profile=normalized_profile,
+        profile="tryon",
         target_type=normalized_target_type,
         garment_description=garment_prompt_text,
         user_description=user_prompt_text,
     )
 
     try:
-        if normalized_profile == "tryon":
-            flux_runner = getattr(engine, "flux2", None)
-            if flux_runner is None:
-                raise HTTPException(status_code=500, detail="Try-on runner is unavailable.")
-            run_result = flux_runner.run_tryon(
-                person_image=person_image,
-                board_image=garment_ref,
-                prompt=prompt_text,
-                steps=steps,
-                seed=seed,
-                guidance_scale=guidance_scale,
-                use_lora=True,
-                lora_mode="tryon",
-                lora_scale=lora_scale,
-            )
-        else:
-            flux_runner = getattr(engine, "flux2_consistency", None)
-            if flux_runner is None:
-                raise HTTPException(status_code=500, detail="Consistency runner is unavailable.")
-            run_result = flux_runner.run_tryon(
-                person_image=person_image,
-                board_image=garment_ref,
-                steps=steps,
-                seed=seed,
-                lora_scale=lora_scale,
-                guidance_scale=guidance_scale,
-                target_types=[normalized_target_type],
-                source_worn_types=source_types,
-                garment_descriptions=[garment_prompt_text],
-                user_description=user_prompt_text,
-                board_mode="single",
-                prompt_override=prompt_override,
-            )
+        flux_runner = getattr(engine, "flux2", None)
+        if flux_runner is None:
+            raise HTTPException(status_code=500, detail="Try-on runner is unavailable.")
+        run_result = flux_runner.run_tryon(
+            person_image=person_image,
+            board_image=garment_ref,
+            prompt=prompt_text,
+            steps=steps,
+            seed=seed,
+            guidance_scale=guidance_scale,
+            use_lora=True,
+            lora_mode="tryon",
+            lora_scale=lora_scale,
+        )
     except HTTPException:
         raise
     except Exception as exc:
-        logger.exception("Consistency lab run failed")
+        logger.exception("Tryon lab run failed")
         raise HTTPException(status_code=500, detail=f"Inference failed: {exc}") from exc
 
     image = run_result.get("image")
@@ -616,17 +574,17 @@ async def consistency_lab_run(
     image_base64 = base64.b64encode(out.getvalue()).decode("ascii")
     metadata = dict(run_result.get("metadata") or {})
     metadata.setdefault("prompt", prompt_text)
-    metadata["lab_lora_profile"] = normalized_profile
+    metadata["lab_lora_profile"] = "tryon"
     latency = float(run_result.get("latency") or 0.0)
 
     return {
         "status": "success",
-        "message": "Consistency lab run completed",
+        "message": "Tryon lab run completed",
         "image_base64_jpeg": image_base64,
         "latency_seconds": latency,
         "metadata": metadata,
         "request": {
-            "lora_profile": normalized_profile,
+            "lora_profile": "tryon",
             "target_type": normalized_target_type,
             "source_worn_types": source_types,
             "steps": steps,

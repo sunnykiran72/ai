@@ -16,7 +16,7 @@ class GroundingDinoRunner:
     """
 
     def __init__(self, model_path: Optional[str] = None, device: Optional[str] = None):
-        self.model_path = model_path or os.getenv("GROUNDING_DINO_MODEL_PATH", "IDEA-Research/grounding-dino-tiny")
+        self.model_path = model_path or os.getenv("GROUNDING_DINO_MODEL_PATH", "IDEA-Research/grounding-dino-base")
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.threshold = self._env_float("GROUNDING_DINO_BOX_THRESHOLD", 0.35)
         self.text_threshold = self._env_float("GROUNDING_DINO_TEXT_THRESHOLD", 0.25)

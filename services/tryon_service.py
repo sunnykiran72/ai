@@ -60,6 +60,7 @@ class TryonService:
         guidance_scale: Optional[float] = None,
         mode: Optional[str] = None,
         lora_scale: Optional[float] = None,
+        output_max_edge: Optional[int] = None,
         **_kwargs,
     ):
         """
@@ -80,56 +81,39 @@ class TryonService:
         board, board_mode = self._build_board(garments)
         source_worn_types = _kwargs.get("source_worn_types")
         resolved_mode = str(mode or "tryon-lora").strip().lower()
-        if resolved_mode not in {"tryon-lora", "consistency-lora"}:
-            raise ValueError("mode must be one of: tryon-lora, consistency-lora")
+        if resolved_mode != "tryon-lora":
+            raise ValueError("mode must be: tryon-lora")
         effective_lora_scale = lora_scale
-        if resolved_mode == "tryon-lora" and effective_lora_scale is None:
+        if effective_lora_scale is None:
             # fal/flux-klein-9b-virtual-tryon-lora recommends scale=1.0.
             effective_lora_scale = 1.0
         prompt_text_for_metadata = ""
 
-        if resolved_mode == "tryon-lora":
-            prompt_text = self._build_tryon_lora_prompt(
-                user_description=user_prompt_description,
-                garment_descriptions=garment_descriptions,
-                target_types=garment_types,
-                board_mode=board_mode,
-                source_worn_types=source_worn_types,
-            )
-            prompt_text_for_metadata = prompt_text
+        prompt_text = self._build_tryon_lora_prompt(
+            user_description=user_prompt_description,
+            garment_descriptions=garment_descriptions,
+            target_types=garment_types,
+            board_mode=board_mode,
+            source_worn_types=source_worn_types,
+        )
+        prompt_text_for_metadata = prompt_text
 
-            flux_runner = getattr(self.engine, "flux2", None)
-            if flux_runner is None:
-                raise RuntimeError("Flux2 runner is unavailable.")
+        flux_runner = getattr(self.engine, "flux2", None)
+        if flux_runner is None:
+            raise RuntimeError("Flux2 runner is unavailable.")
 
-            flux_result = flux_runner.run_tryon(
-                person_image=person,
-                board_image=board,
-                prompt=prompt_text,
-                steps=steps,
-                seed=seed,
-                guidance_scale=guidance_scale,
-                use_lora=True,
-                lora_mode="tryon",
-                lora_scale=effective_lora_scale,
-            )
-        else:
-            flux_runner = getattr(self.engine, "flux2_consistency", None)
-            if flux_runner is None:
-                raise RuntimeError("Consistency Flux2 runner is unavailable.")
-            flux_result = flux_runner.run_tryon(
-                person_image=person,
-                board_image=board,
-                steps=steps,
-                seed=seed,
-                guidance_scale=guidance_scale,
-                lora_scale=lora_scale,
-                target_types=garment_types,
-                source_worn_types=source_worn_types,
-                garment_descriptions=garment_descriptions,
-                user_description=user_prompt_description,
-                board_mode=board_mode,
-            )
+        flux_result = flux_runner.run_tryon(
+            person_image=person,
+            board_image=board,
+            prompt=prompt_text,
+            steps=steps,
+            seed=seed,
+            guidance_scale=guidance_scale,
+            use_lora=True,
+            lora_mode="tryon",
+            lora_scale=effective_lora_scale,
+            output_max_edge=output_max_edge,
+        )
         latency = float(flux_result.get("latency") or 0.0)
 
         image = flux_result.get("image")
@@ -144,15 +128,14 @@ class TryonService:
         total = time.time() - t0
         postprocess = max(0.0, total - latency)
         meta = dict(flux_result.get("metadata") or {})
-        if resolved_mode == "tryon-lora":
-            # Surface the actual effective try-on LoRA scale in metadata.
-            meta["lora_scale"] = float(effective_lora_scale) if effective_lora_scale is not None else 1.0
+        # Surface the actual effective try-on LoRA scale in metadata.
+        meta["lora_scale"] = float(effective_lora_scale) if effective_lora_scale is not None else 1.0
         if not prompt_text_for_metadata:
             prompt_text_for_metadata = str(meta.get("prompt") or "")
         meta.update(
             {
                 "mode": resolved_mode,
-                "engine_variant": "flux2_consistency" if resolved_mode == "consistency-lora" else "flux2_tryon_lora",
+                "engine_variant": "flux2_tryon_lora",
                 "effective_lora_scale": (
                     float(meta.get("lora_scale")) if meta.get("lora_scale") is not None else None
                 ),
@@ -190,7 +173,8 @@ class TryonService:
         del board_mode, source_worn_types
 
         clean_user = " ".join(str(user_description or "").split()).strip()
-        person_desc = clean_user or "same person"
+        # Avoid duplicate punctuation like ".." when user description already ends with a period.
+        person_desc = clean_user.rstrip(" .!?").strip() or "same person"
 
         item_count = max(len(target_types or []), len(garment_descriptions or []))
         if item_count <= 0:

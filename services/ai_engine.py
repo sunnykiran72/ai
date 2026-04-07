@@ -16,7 +16,6 @@ import threading
 
 from config import Config
 from core.flux2_cvton_runner import Flux2CVTONRunner
-from core.flux2_consistency_runner import Flux2ConsistencyRunner
 from core.florence_runner import FlorenceRunner
 from core.qwen25vl_runner import Qwen25VLRunner
 from core.joycaption_runner import JoyCaptionRunner
@@ -27,6 +26,7 @@ from core.human_parser_runner import HumanParserRunner
 from core.openclip_runner import OpenCLIPRunner
 from core.fashion_color_classifier_runner import FashionColorClassifierRunner
 from core.garment_color_masker import GarmentColorMasker
+from core.grounding_dino_runner import GroundingDinoRunner
 from modules.wardrobe.yolo_cropper import YoloCropper
 from modules.wardrobe.human_parser import HumanParser
 from modules.wardrobe.cloth_detection import ClothDetector
@@ -51,6 +51,7 @@ class AIEngine:
         self.yolo_runner = YoloRunner()
         self.person_detector = YoloPersonDetectorRunner()
         self.fashion_detection_runner = FashionDetectionRunner()
+        self.grounding_dino = GroundingDinoRunner()
         self.parser_runner = HumanParserRunner() if config.analyze.enable_human_parser else None
         
         # Wrappers
@@ -86,7 +87,6 @@ class AIEngine:
             shared_flux2_config["fuse_lora"] = False
         
         self.flux2 = Flux2CVTONRunner(config=shared_flux2_config)
-        self.flux2_consistency = Flux2ConsistencyRunner()
         self._analyze_flux2: Optional[Flux2CVTONRunner] = None
         self._analyze_flux2_lock = threading.Lock()
         
@@ -166,7 +166,6 @@ class AIEngine:
         analyze_startup = dict(getattr(analyze_flux2, "_startup_metrics", {}) or {}) if analyze_flux2 else {}
         return {
             "flux2_loaded": self.flux2._pipeline is not None,
-            "flux2_consistency_loaded": bool(self.flux2_consistency._pipeline is not None),
             "analyze_flux2_loaded": bool(analyze_flux2 and analyze_flux2._pipeline is not None),
             "analyze_flux2_isolated": bool(self.config.analyze.flux_disable_lora and not self._share_flux2_base_runner),
             "flux2_shared_base_runner": bool(self._share_flux2_base_runner),
@@ -194,6 +193,8 @@ class AIEngine:
             "yolo_class_count": self.yolo_runner.class_count,
             "fashion_detection_loaded": self.fashion_detection_runner.is_loaded,
             "fashion_detection_model_path": self.fashion_detection_runner.model_path,
+            "grounding_dino_loaded": self.grounding_dino.is_loaded,
+            "grounding_dino_model_path": self.grounding_dino.model_path,
             "human_parser_loaded": bool(self.parser_runner and self.parser_runner.is_loaded),
         }
     

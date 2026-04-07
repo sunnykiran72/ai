@@ -1,0 +1,37 @@
+[
+  {
+    "case_id": "single_top_demo",
+    "user_image": "https://example.com/user_full_body_01.png",
+    "user_prompt_description": "front-facing full-body studio portrait",
+    "source_worn_types": ["top", "bottom"],
+    "products": [
+      {
+        "image": "https://example.com/product_top_red.png",
+        "promptDescription": "red fitted sleeveless top with scoop neckline",
+        "targetType": "top"
+      }
+    ],
+    "steps": 20,
+    "seed": 42
+  },
+  {
+    "case_id": "multi_top_bottom_demo",
+    "user_image": "https://example.com/user_full_body_02.png",
+    "user_prompt_description": "standing full-body photo, natural indoor lighting",
+    "source_worn_types": ["dress"],
+    "products": [
+      {
+        "image": "https://example.com/product_top_white.png",
+        "promptDescription": "white long-sleeve blouse with button placket",
+        "targetType": "top"
+      },
+      {
+        "image": "https://example.com/product_bottom_navy.png",
+        "promptDescription": "navy wide-leg trousers with high waist",
+        "targetType": "bottom"
+      }
+    ],
+    "steps": 24,
+    "seed": 23
+  }
+]
