@@ -27,6 +27,14 @@ from modules.vto.board_builder import BoardBuilder
 
 logger = logging.getLogger("glamify-ai")
 
+SINGLE_GARMENT_PRESERVE_TAIL = (
+    "Keep the same face, body measurements, hair color, eye directions, exact footwear, "
+    "same accessories, and preserve the strict body pose. "
+    "The final image should read as one coherent, anatomically correct full-body fashion photograph "
+    "of the same person in the same scene. "
+    "The final image is a full body shot."
+)
+
 
 class TryonService:
     """
@@ -170,7 +178,7 @@ class TryonService:
         board_mode: str,
         source_worn_types: Optional[List[str]],
     ) -> str:
-        del board_mode, source_worn_types
+        del board_mode
 
         clean_user = " ".join(str(user_description or "").split()).strip()
         # Avoid duplicate punctuation like ".." when user description already ends with a period.
@@ -215,60 +223,19 @@ class TryonService:
             if kind not in kind_first_desc:
                 kind_first_desc[kind] = desc
 
+        normalized_source_worn_types = self._normalize_source_worn_types(source_worn_types)
+
         # Single-garment prompts use independent templates for top/bottom/outer/dress.
         if len(garment_entries) == 1:
             _kind_priority, _idx, kind, garment_text = garment_entries[0]
-
-            common_tail = (
-                "Keep face identity, hair, body proportions, pose, hands, camera framing, background, "
-                "and lighting unchanged. "
-                + framing_lock_clause
-                + " The final image is a full body shot."
+            single_prompt = self._build_single_garment_tryon_prompt(
+                person_desc=person_desc,
+                garment_kind=kind,
+                garment_text=garment_text,
+                source_worn_types=normalized_source_worn_types,
             )
-
-            if kind == "top":
-                return (
-                    f"TRYON {person_desc}. "
-                    f"Replace the upper garment with {garment_text} as shown in the reference images. "
-                    "Render the garment with accurate construction, silhouette, fit, seam and edge placement, drape, "
-                    "and length based on the reference garment. "
-                    "Preserve the exact garment color, tone, and shading from the reference. "
-                    "Keep lower-body clothing unchanged. "
-                    + common_tail
-                ).strip()
-
-            if kind == "bottom":
-                return (
-                    f"TRYON {person_desc}. "
-                    f"Replace the lower garment with {garment_text} as shown in the reference images. "
-                    "Render the garment with accurate construction, silhouette, fit, seam and edge placement, drape, "
-                    "and length based on the reference garment. "
-                    "Preserve the exact garment color, tone, and shading from the reference. "
-                    "Keep upper-body clothing unchanged. "
-                    + common_tail
-                ).strip()
-
-            if kind == "outer":
-                return (
-                    f"TRYON {person_desc}. "
-                    f"Replace the outer layer with {garment_text} as shown in the reference images. "
-                    "Render the garment as the outermost layer with accurate construction, silhouette, fit, seam and edge placement, "
-                    "drape, and length based on the reference garment. "
-                    "Preserve the exact garment color, tone, and shading from the reference. "
-                    "Keep the underlying outfit unchanged where visible. "
-                    + common_tail
-                ).strip()
-
-            if kind == "dress":
-                return (
-                    f"TRYON {person_desc}. "
-                    f"Replace the entire outfit completely with {garment_text} as shown in the reference image. "
-                    "Strictly remove other worn garments. "
-                    "Keep the same face, body measurements, hair color, eye directions, exact footwear, same accessories, "
-                    "and preserve the strict body pose. "
-                    "The final image should read as one coherent, anatomically correct full-body fashion photograph of the same person in the same scene. "
-                    "The final image is a full body shot."
-                ).strip()
+            if single_prompt:
+                return single_prompt
 
         # Multi-garment prompts (v1): one active garment per category.
         # If duplicates exist in the same category, fall back to generic composition.
@@ -353,6 +320,172 @@ class TryonService:
             + " "
             "The final image is a full body shot."
         ).strip()
+
+    @staticmethod
+    def _normalize_source_worn_types(source_worn_types: Optional[List[str]]) -> List[str]:
+        cleaned: List[str] = []
+        for raw in source_worn_types or []:
+            kind = str(normalize_garment_type(raw) or "").strip().lower()
+            if kind and kind not in cleaned:
+                cleaned.append(kind)
+        return cleaned
+
+    def _build_single_garment_tryon_prompt(
+        self,
+        *,
+        person_desc: str,
+        garment_kind: str,
+        garment_text: str,
+        source_worn_types: List[str],
+    ) -> str:
+        source_set = set(source_worn_types or [])
+        has_outer = "outer" in source_set
+
+        def _render_clause() -> str:
+            if garment_kind == "outer":
+                return (
+                    "Render the garment as the outermost layer with accurate construction, silhouette, fit, seam and edge placement, "
+                    "drape, and length based on the reference garment. "
+                    "Preserve the exact garment color, tone, and shading from the reference. "
+                )
+            return (
+                "Render the garment with accurate construction, silhouette, fit, seam and edge placement, drape, "
+                "and length based on the reference garment. "
+                "Preserve the exact garment color, tone, and shading from the reference. "
+            )
+
+        render_clause = _render_clause()
+
+        if garment_kind == "dress":
+            return (
+                f"TRYON {person_desc}. "
+                f"Replace the entire outfit completely with {garment_text} as shown in the reference image. "
+                "Strictly remove other worn garments. "
+                + SINGLE_GARMENT_PRESERVE_TAIL
+            ).strip()
+
+        if source_set == {"dress"}:
+            if garment_kind == "top":
+                return (
+                    f"TRYON {person_desc}. "
+                    f"Layer the top garment {garment_text} over the existing dress as shown in the reference images. "
+                    "Treat the selected top as an overlay worn on top of the dress. "
+                    "Keep the dress unchanged underneath and preserve the existing lower dress section. "
+                    + render_clause
+                    + SINGLE_GARMENT_PRESERVE_TAIL
+                ).strip()
+            if garment_kind == "outer":
+                return (
+                    f"TRYON {person_desc}. "
+                    f"Replace the outer layer with {garment_text} as shown in the reference images. "
+                    "Treat the selected outer garment as the outermost layer over the existing dress. "
+                    "Keep the dress unchanged underneath. "
+                    + render_clause
+                    + SINGLE_GARMENT_PRESERVE_TAIL
+                ).strip()
+            if garment_kind == "bottom":
+                return (
+                    f"TRYON {person_desc}. "
+                    f"Place the bottom garment {garment_text} underneath the existing dress as shown in the reference images. "
+                    "Keep the dress unchanged. "
+                    "Show the bottom only where it would naturally be visible below or through the dress opening. "
+                    "Do not replace the dress with the bottom garment. "
+                    + render_clause
+                    + SINGLE_GARMENT_PRESERVE_TAIL
+                ).strip()
+
+        if source_set in ({"top", "bottom"}, {"top", "bottom", "outer"}):
+            if garment_kind == "top":
+                preserve_outer = (
+                    "Keep the existing outer layer unchanged on top where visible. "
+                    if has_outer
+                    else ""
+                )
+                return (
+                    f"TRYON {person_desc}. "
+                    f"Replace only the upper garment with {garment_text} as shown in the reference images. "
+                    "Keep the bottom garment unchanged. "
+                    + preserve_outer
+                    + render_clause
+                    + SINGLE_GARMENT_PRESERVE_TAIL
+                ).strip()
+            if garment_kind == "bottom":
+                preserve_outer = (
+                    "Keep the existing outer layer unchanged on top where visible. "
+                    if has_outer
+                    else ""
+                )
+                return (
+                    f"TRYON {person_desc}. "
+                    f"Replace only the lower garment with {garment_text} as shown in the reference images. "
+                    "Keep the top garment unchanged. "
+                    + preserve_outer
+                    + render_clause
+                    + SINGLE_GARMENT_PRESERVE_TAIL
+                ).strip()
+            if garment_kind == "outer":
+                return (
+                    f"TRYON {person_desc}. "
+                    f"Replace only the outer layer with {garment_text} as shown in the reference images. "
+                    "Keep the top and bottom garments unchanged underneath. "
+                    + render_clause
+                    + SINGLE_GARMENT_PRESERVE_TAIL
+                ).strip()
+
+        if source_set == {"outer"}:
+            if garment_kind == "outer":
+                return (
+                    f"TRYON {person_desc}. "
+                    f"Replace only the outer layer with {garment_text} as shown in the reference images. "
+                    "Keep the visible underlying non-target garments unchanged. "
+                    + render_clause
+                    + SINGLE_GARMENT_PRESERVE_TAIL
+                ).strip()
+            if garment_kind == "top":
+                return (
+                    f"TRYON {person_desc}. "
+                    f"Replace only the upper garment with {garment_text} as shown in the reference images. "
+                    "Preserve the existing visible non-target garments, including any outer-layer coverage, wherever they are not owned by the selected top. "
+                    + render_clause
+                    + SINGLE_GARMENT_PRESERVE_TAIL
+                ).strip()
+            if garment_kind == "bottom":
+                return (
+                    f"TRYON {person_desc}. "
+                    f"Replace only the lower garment with {garment_text} as shown in the reference images. "
+                    "Preserve the existing visible non-target garments, including any outer-layer coverage, wherever they are not owned by the selected bottom. "
+                    + render_clause
+                    + SINGLE_GARMENT_PRESERVE_TAIL
+                ).strip()
+
+        if garment_kind == "top":
+            return (
+                f"TRYON {person_desc}. "
+                f"Replace the upper garment with {garment_text} as shown in the reference images. "
+                "Keep lower-body clothing unchanged. "
+                + render_clause
+                + SINGLE_GARMENT_PRESERVE_TAIL
+            ).strip()
+
+        if garment_kind == "bottom":
+            return (
+                f"TRYON {person_desc}. "
+                f"Replace the lower garment with {garment_text} as shown in the reference images. "
+                "Keep upper-body clothing unchanged. "
+                + render_clause
+                + SINGLE_GARMENT_PRESERVE_TAIL
+            ).strip()
+
+        if garment_kind == "outer":
+            return (
+                f"TRYON {person_desc}. "
+                f"Replace the outer layer with {garment_text} as shown in the reference images. "
+                "Keep the underlying outfit unchanged where visible. "
+                + render_clause
+                + SINGLE_GARMENT_PRESERVE_TAIL
+            ).strip()
+
+        return ""
 
     async def try_on_legacy_flux(self, request):
         """

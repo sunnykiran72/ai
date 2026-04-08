@@ -31,6 +31,7 @@ class CaseResult:
     user_file: str
     user_input_url: str
     user_prompt: str
+    worn_types: List[str]
     output_url: str
     prompt_used: str
     status: str
@@ -45,6 +46,7 @@ class CaseResult:
             "user_file": self.user_file,
             "user_input_url": self.user_input_url,
             "user_prompt": self.user_prompt,
+            "worn_types": list(self.worn_types or []),
             "output_url": self.output_url,
             "prompt_used": self.prompt_used,
             "status": self.status,
@@ -72,13 +74,38 @@ def _safe_json(resp: requests.Response) -> Dict[str, object]:
     return payload if isinstance(payload, dict) else {"_payload": payload}
 
 
-def _extract_prepare_fields(payload: Dict[str, object]) -> Tuple[str, str]:
+def _normalize_worn_types(values: object) -> List[str]:
+    allowed = {"top", "bottom", "outer", "dress"}
+    normalized: List[str] = []
+    if values is None:
+        return normalized
+    if isinstance(values, list):
+        raw_items = values
+    elif isinstance(values, str):
+        text = values.strip()
+        if not text:
+            return normalized
+        try:
+            raw_items = json.loads(text)
+        except Exception:
+            raw_items = [part.strip() for part in text.split(",")]
+    else:
+        raw_items = [values]
+    for raw in raw_items:
+        token = str(raw or "").strip().lower()
+        if token in allowed and token not in normalized:
+            normalized.append(token)
+    return normalized
+
+
+def _extract_prepare_fields(payload: Dict[str, object]) -> Tuple[str, str, List[str]]:
     data = payload.get("data")
     if not isinstance(data, dict):
         data = payload
     url = str(data.get("url") or data.get("tryonImage") or "").strip()
     prompt = str(data.get("promptDescription") or "").strip()
-    return url, prompt
+    worn_types = _normalize_worn_types(data.get("wornTypes"))
+    return url, prompt, worn_types
 
 
 def _extract_tryon_fields(payload: Dict[str, object]) -> Tuple[str, str, float]:
@@ -128,6 +155,7 @@ def _write_csv(path: Path, rows: List[CaseResult], garment_url: str, garment_pro
         "garment_prompt",
         "garment_type",
         "user_prompt",
+        "worn_types",
         "prompt_used",
         "status",
         "error",
@@ -145,6 +173,7 @@ def _write_csv(path: Path, rows: List[CaseResult], garment_url: str, garment_pro
                     "garment_url": garment_url,
                     "garment_type": garment_type,
                     "garment_prompt": garment_prompt,
+                    "worn_types": json.dumps(list(row.worn_types or []), ensure_ascii=False),
                 }
             )
 
@@ -527,8 +556,8 @@ def _load_existing(jsonl_path: Path) -> Dict[str, Dict[str, object]]:
     return by_file
 
 
-def _load_prepare_cache(jsonl_path: Path) -> Dict[str, Tuple[str, str]]:
-    cache: Dict[str, Tuple[str, str]] = {}
+def _load_prepare_cache(jsonl_path: Path) -> Dict[str, Tuple[str, str, List[str]]]:
+    cache: Dict[str, Tuple[str, str, List[str]]] = {}
     if not jsonl_path.exists():
         return cache
     for line in jsonl_path.read_text(encoding="utf-8").splitlines():
@@ -544,8 +573,26 @@ def _load_prepare_cache(jsonl_path: Path) -> Dict[str, Tuple[str, str]]:
         user_file = str(row.get("user_file") or "").strip()
         user_input_url = str(row.get("user_input_url") or "").strip()
         user_prompt = str(row.get("user_prompt") or "").strip()
+        worn_types = _normalize_worn_types(row.get("worn_types") or row.get("wornTypes"))
         if user_file and user_input_url and user_prompt:
-            cache[user_file] = (user_input_url, user_prompt)
+            cache[user_file] = (user_input_url, user_prompt, worn_types)
+    return cache
+
+
+def _load_prepare_cache_csv(csv_path: Path) -> Dict[str, Tuple[str, str, List[str]]]:
+    cache: Dict[str, Tuple[str, str, List[str]]] = {}
+    if not csv_path.exists():
+        return cache
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        for row in csv.DictReader(handle):
+            if str(row.get("status") or "").strip().lower() != "success":
+                continue
+            user_file = str(row.get("user_file") or "").strip()
+            user_input_url = str(row.get("user_input_url") or "").strip()
+            user_prompt = str(row.get("user_prompt") or "").strip()
+            worn_types = _normalize_worn_types(row.get("worn_types") or row.get("wornTypes"))
+            if user_file and user_input_url and user_prompt:
+                cache[user_file] = (user_input_url, user_prompt, worn_types)
     return cache
 
 
@@ -580,6 +627,7 @@ def run(args: argparse.Namespace) -> int:
                     user_file=str(value.get("user_file") or ""),
                     user_input_url=str(value.get("user_input_url") or ""),
                     user_prompt=str(value.get("user_prompt") or ""),
+                    worn_types=_normalize_worn_types(value.get("worn_types") or value.get("wornTypes")),
                     output_url=str(value.get("output_url") or ""),
                     prompt_used=str(value.get("prompt_used") or ""),
                     status=str(value.get("status") or "error"),
@@ -594,14 +642,33 @@ def run(args: argparse.Namespace) -> int:
     if args.max_cases and args.max_cases > 0:
         files = files[: args.max_cases]
 
-    prepare_cache: Dict[str, Tuple[str, str]] = {}
+    prepare_cache: Dict[str, Tuple[str, str, List[str]]] = {}
     if args.prepare_cache_jsonl:
         cache_path = Path(args.prepare_cache_jsonl).expanduser().resolve()
         if not cache_path.exists():
             print(f"prepare_cache_jsonl does not exist: {cache_path}", file=sys.stderr)
             return 2
-        prepare_cache = _load_prepare_cache(cache_path)
+        prepare_cache.update(_load_prepare_cache(cache_path))
         print(f"prepare_cache_jsonl={cache_path}")
+        print(f"prepare_cache_entries={len(prepare_cache)}")
+    if args.prepare_cache_csv:
+        cache_path = Path(args.prepare_cache_csv).expanduser().resolve()
+        if not cache_path.exists():
+            print(f"prepare_cache_csv does not exist: {cache_path}", file=sys.stderr)
+            return 2
+        csv_cache = _load_prepare_cache_csv(cache_path)
+        for user_file, value in csv_cache.items():
+            if user_file in prepare_cache:
+                existing_url, existing_prompt, existing_worn_types = prepare_cache[user_file]
+                csv_url, csv_prompt, csv_worn_types = value
+                prepare_cache[user_file] = (
+                    existing_url or csv_url,
+                    existing_prompt or csv_prompt,
+                    existing_worn_types or csv_worn_types,
+                )
+            else:
+                prepare_cache[user_file] = value
+        print(f"prepare_cache_csv={cache_path}")
         print(f"prepare_cache_entries={len(prepare_cache)}")
 
     print(f"users_dir={users_dir}")
@@ -627,10 +694,11 @@ def run(args: argparse.Namespace) -> int:
         started = time.time()
         prepare_latency = 0.0
         tryon_latency = 0.0
+        worn_types: List[str] = []
         try:
             cached = prepare_cache.get(key)
             if cached:
-                user_input_url, user_prompt = cached
+                user_input_url, user_prompt, worn_types = cached
             else:
                 if args.prepare_cache_only:
                     raise RuntimeError("prepare_cache_miss")
@@ -650,7 +718,7 @@ def run(args: argparse.Namespace) -> int:
                 if prep_resp.status_code != 200:
                     raise RuntimeError(f"prepare_failed status={prep_resp.status_code} payload={prep_payload}")
 
-                user_input_url, user_prompt = _extract_prepare_fields(prep_payload)
+                user_input_url, user_prompt, worn_types = _extract_prepare_fields(prep_payload)
                 if not user_input_url:
                     raise RuntimeError(f"prepare_missing_url payload={prep_payload}")
 
@@ -673,6 +741,8 @@ def run(args: argparse.Namespace) -> int:
                 "loraScale": float(args.lora_scale),
                 "outputMaxEdge": int(args.output_max_edge),
             }
+            if worn_types:
+                tryon_payload["user_image"]["wornTypes"] = list(worn_types)
 
             def _tryon_call() -> requests.Response:
                 return session.post(tryon_url, json=tryon_payload, timeout=args.tryon_timeout)
@@ -695,6 +765,7 @@ def run(args: argparse.Namespace) -> int:
                 user_file=key,
                 user_input_url=user_input_url,
                 user_prompt=user_prompt,
+                worn_types=list(worn_types),
                 output_url=output_url,
                 prompt_used=prompt_used,
                 status="success",
@@ -709,6 +780,7 @@ def run(args: argparse.Namespace) -> int:
                 user_file=key,
                 user_input_url="",
                 user_prompt="",
+                worn_types=list(worn_types),
                 output_url="",
                 prompt_used="",
                 status="error",
@@ -778,6 +850,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-cases", type=int, default=0, help="0 means all")
     parser.add_argument("--output-dir", default="")
     parser.add_argument("--prepare-cache-jsonl", default="", help="Reuse prepared user_input_url/user_prompt from another run's results.jsonl")
+    parser.add_argument("--prepare-cache-csv", default="", help="Reuse prepared user_input_url/user_prompt/worn_types from a CSV cache")
     parser.add_argument("--prepare-cache-only", action="store_true", help="Fail case when cache entry is missing instead of calling /v1/user-image/prepare")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()

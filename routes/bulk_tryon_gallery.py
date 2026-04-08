@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 
 router = APIRouter()
 
-_DEFAULT_RUN_DIR = "bulk_tryon_seed44_steps12_dress_1280_20260408_cached110"
+_DEFAULT_RUN_DIR = "bulk_tryon_compare_seed44_vs_seed123_1280_20260408_closedvocab_cached110"
 _DEBUG_OUTPUTS_DIR = Path(__file__).resolve().parent.parent / "debug_outputs"
 
 
@@ -26,6 +26,7 @@ def _resolve_report_path(run_dir: str) -> Path:
     return report_path
 
 
+@router.get("/dev/glamify-bulk-tryon-testing")
 @router.get("/dev/flux2/glamify-bulk-tryon-testing")
 async def bulk_tryon_gallery(
     run_dir: str = Query(

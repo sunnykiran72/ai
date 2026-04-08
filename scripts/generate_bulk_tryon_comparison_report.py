@@ -52,21 +52,138 @@ def _summary_chip(label: str, value: str) -> str:
     )
 
 
+def _format_source_worn_types(raw_value: str) -> str:
+    text = str(raw_value or "").strip()
+    if not text:
+        return "Unavailable in this run"
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        parsed = None
+    if isinstance(parsed, list):
+        cleaned = [str(item).strip() for item in parsed if str(item).strip()]
+        return ", ".join(cleaned) if cleaned else "Unavailable in this run"
+    return text
+
+
 def _build_html(
     *,
     title: str,
     labels: List[str],
     rows: List[Tuple[int, str, Dict[str, str], List[Dict[str, str]]]],
     summaries: List[Dict[str, object]],
+    include_prompts: bool,
 ) -> str:
-    avg_tryon_values = [summary.get("latency_avg_tryon_s") for summary in summaries]
-    avg_total_values = [summary.get("latency_avg_total_s") for summary in summaries]
-    settings_list = [summary.get("settings") if isinstance(summary.get("settings"), dict) else {} for summary in summaries]
     image_grid_class = "image-grid-4" if len(labels) >= 3 else "image-grid-3"
+    prompt_css = ""
+    prompt_mobile_css = ""
+    if include_prompts:
+        prompt_css = """
+    .meta-grid {{
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+      margin-bottom: 12px;
+    }}
+    .meta-block {{
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fcfbf8;
+      padding: 12px;
+      min-width: 0;
+    }}
+    .meta-block.wide {{
+      grid-column: 1 / -1;
+    }}
+    .meta-value {{
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 12px;
+      line-height: 1.5;
+      color: #2a2824;
+      font-family: "SFMono-Regular", "Menlo", monospace;
+    }}
+    .prompt-details {{
+      margin-top: 14px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--surface-soft);
+      padding: 12px 14px;
+    }}
+    .prompt-details summary {{
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--ink);
+    }}
+    .prompt-grid {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 12px;
+    }}
+    .prompt-block {{
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #f6f4ef;
+      padding: 12px;
+      min-width: 0;
+    }}
+    .prompt-label {{
+      margin-bottom: 8px;
+      font-size: 12px;
+      line-height: 1.2;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 700;
+    }}
+    .prompt-block pre {{
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 12px;
+      line-height: 1.5;
+      color: #2a2824;
+      max-height: 260px;
+      overflow: auto;
+      font-family: "SFMono-Regular", "Menlo", monospace;
+    }}
+"""
+        prompt_mobile_css = """
+      .meta-grid {{
+        grid-template-columns: 1fr;
+      }}
+      .prompt-grid {{
+        grid-template-columns: 1fr;
+      }}
+"""
+    garment_url = ""
+    garment_type = ""
+    for summary in summaries:
+        settings = summary.get("settings") if isinstance(summary.get("settings"), dict) else {}
+        if not garment_url:
+            garment_url = str(settings.get("garment_url") or "").strip()
+        if not garment_type:
+            garment_type = str(settings.get("garment_type") or "").strip()
+    if not garment_url:
+        for _idx, _user_file, input_row, _output_rows in rows:
+            garment_url = str(input_row.get("garment_url") or "").strip()
+            garment_type = garment_type or str(input_row.get("garment_type") or "").strip()
+            if garment_url:
+                break
 
     cards: List[str] = []
     for idx, user_file, input_row, output_rows in rows:
         input_url = str(input_row.get("user_input_url") or "").strip()
+        source_worn_types = _format_source_worn_types(
+            str(input_row.get("worn_types") or output_rows[0].get("worn_types") or "").strip()
+        )
+        user_prompt = str(input_row.get("user_prompt") or "").strip() or "n/a"
+        garment_prompt = str(input_row.get("garment_prompt") or "").strip() or "n/a"
+        garment_kind = str(input_row.get("garment_type") or "").strip() or "n/a"
         figures = [
             f"""
     <figure>
@@ -77,6 +194,7 @@ def _build_html(
     </figure>
 """
         ]
+        prompt_blocks: List[str] = []
         for label, row in zip(labels, output_rows):
             output_url = str(row.get("output_url") or "").strip()
             figures.append(
@@ -89,6 +207,44 @@ def _build_html(
     </figure>
 """
             )
+            if include_prompts:
+                prompt_used = str(row.get("prompt_used") or "").strip()
+                prompt_blocks.append(
+                    f"""
+      <div class="prompt-block">
+        <div class="prompt-label">{html.escape(label)} Final Prompt</div>
+        <pre>{html.escape(prompt_used or "n/a")}</pre>
+      </div>
+"""
+                )
+        prompt_section = ""
+        if include_prompts:
+            prompt_section = f"""
+  <details class="prompt-details">
+    <summary>View Local Details</summary>
+    <div class="meta-grid">
+      <div class="meta-block">
+        <div class="prompt-label">User Garment Type</div>
+        <pre class="meta-value">{html.escape(source_worn_types)}</pre>
+      </div>
+      <div class="meta-block">
+        <div class="prompt-label">Selected Garment Type</div>
+        <pre class="meta-value">{html.escape(garment_kind)}</pre>
+      </div>
+      <div class="meta-block">
+        <div class="prompt-label">Prepared User Prompt</div>
+        <pre class="meta-value">{html.escape(user_prompt)}</pre>
+      </div>
+      <div class="meta-block wide">
+        <div class="prompt-label">Garment Prompt</div>
+        <pre class="meta-value">{html.escape(garment_prompt)}</pre>
+      </div>
+    </div>
+    <div class="prompt-grid">
+      {''.join(prompt_blocks)}
+    </div>
+  </details>
+"""
         cards.append(
             f"""
 <section class="case-card">
@@ -102,36 +258,30 @@ def _build_html(
   <div class="image-grid {image_grid_class}">
     {''.join(figures)}
   </div>
+  {prompt_section}
 </section>
 """
         )
 
     summary_chips = [_summary_chip("Cases Compared", str(len(rows)))]
     for idx, label in enumerate(labels):
-        avg_tryon = avg_tryon_values[idx]
-        avg_total = avg_total_values[idx]
-        settings = settings_list[idx]
-        summary_chips.append(_summary_chip(f"Label {idx + 1}", label))
-        summary_chips.append(_summary_chip(f"{label} Avg Try-on", f"{float(avg_tryon):.2f}s" if avg_tryon is not None else "n/a"))
-        summary_chips.append(_summary_chip(f"{label} Avg Total", f"{float(avg_total):.2f}s" if avg_total is not None else "n/a"))
-        summary_chips.append(_summary_chip(f"{label} Seed", str(settings.get("seed") or "n/a")))
-
-    output_edge = next((str(settings.get("output_max_edge")) for settings in settings_list if settings.get("output_max_edge") is not None), "n/a")
-    steps = next((str(settings.get("steps")) for settings in settings_list if settings.get("steps") is not None), "n/a")
-    summary_chips.append(_summary_chip("Output Edge", output_edge))
-    summary_chips.append(_summary_chip("Steps", steps))
+        summary = summaries[idx] if idx < len(summaries) else {}
+        cases_completed = summary.get("total_images") or summary.get("count_total") or len(rows)
+        summary_chips.append(_summary_chip(f"Variation {idx + 1}", label))
+        summary_chips.append(_summary_chip(f"{label} Images", str(cases_completed)))
     summary_grid = "\n".join(summary_chips)
-
-    summary_json_blocks = []
-    for label, summary in zip(labels, summaries):
-        summary_json_blocks.append(
-            f"""
-      <details>
-        <summary>{html.escape(label)} Run Summary JSON</summary>
-        <pre class="summary-pre">{html.escape(json.dumps(summary, indent=2))}</pre>
-      </details>
+    garment_panel = ""
+    if garment_url:
+        garment_label = garment_type.title() if garment_type else "Garment"
+        garment_panel = f"""
+        <div class="garment-panel">
+          <div class="garment-eyebrow">Garment</div>
+          <h2>{html.escape(garment_label)}</h2>
+          <a class="garment-link" href="{html.escape(garment_url)}" target="_blank" rel="noopener">
+            <img src="{html.escape(garment_url)}" alt="{html.escape(garment_label)} reference" loading="lazy" />
+          </a>
+        </div>
 """
-        )
 
     return f"""<!doctype html>
 <html lang="en">
@@ -188,6 +338,49 @@ def _build_html(
       line-height: 1.5;
       max-width: 980px;
     }}
+    .hero-top {{
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 18px;
+    }}
+    .hero-copy {{
+      min-width: 0;
+      flex: 1 1 auto;
+    }}
+    .garment-panel {{
+      width: 240px;
+      flex: 0 0 240px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--surface-soft);
+      padding: 14px;
+    }}
+    .garment-eyebrow {{
+      margin-bottom: 6px;
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 700;
+    }}
+    .garment-panel h2 {{
+      margin: 0 0 12px;
+      font-size: 18px;
+      line-height: 1.15;
+    }}
+    .garment-link {{
+      display: block;
+    }}
+    .garment-link img {{
+      width: 100%;
+      height: 280px;
+      object-fit: contain;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      display: block;
+    }}
     .summary-grid {{
       display: grid;
       grid-template-columns: repeat(14, minmax(120px, 1fr));
@@ -216,32 +409,6 @@ def _build_html(
       line-height: 1.1;
       font-weight: 700;
       color: var(--ink);
-    }}
-    details {{
-      margin-top: 16px;
-      border: 1px solid var(--line);
-      border-radius: 18px;
-      background: var(--surface-soft);
-      padding: 12px 14px;
-    }}
-    summary {{
-      cursor: pointer;
-      font-size: 13px;
-      font-weight: 700;
-      color: var(--ink);
-    }}
-    .summary-pre {{
-      margin: 12px 0 0;
-      padding: 16px;
-      border-radius: 14px;
-      background: #f2f1ed;
-      color: #2a2824;
-      font-size: 12px;
-      line-height: 1.45;
-      max-height: 260px;
-      overflow: auto;
-      white-space: pre-wrap;
-      word-break: break-word;
     }}
     .gallery {{
       display: grid;
@@ -287,6 +454,7 @@ def _build_html(
       letter-spacing: 0.08em;
       font-weight: 700;
     }}
+{prompt_css}
     .image-grid {{
       display: grid;
       gap: 12px;
@@ -334,10 +502,18 @@ def _build_html(
       }}
     }}
     @media (max-width: 900px) {{
+      .hero-top {{
+        flex-direction: column;
+      }}
+      .garment-panel {{
+        width: 100%;
+        flex-basis: auto;
+      }}
       .image-grid-3,
       .image-grid-4 {{
         grid-template-columns: 1fr;
       }}
+{prompt_mobile_css}
       .summary-grid {{
         grid-template-columns: repeat(2, minmax(120px, 1fr));
       }}
@@ -359,12 +535,16 @@ def _build_html(
 <body>
   <div class="wrap">
     <section class="hero">
-      <h1>{html.escape(title)}</h1>
-      <p>Side-by-side review of the completed bulk try-on runs using the same input set and garment, with only the seed changed. Each card shows the original input image and all requested seed outputs for direct visual comparison.</p>
+      <div class="hero-top">
+        <div class="hero-copy">
+          <h1>{html.escape(title)}</h1>
+          <p>Side-by-side review of the same input set with seed variations only. Each card shows the original input image and the corresponding outputs for direct visual comparison.</p>
+        </div>
+        {garment_panel}
+      </div>
       <div class="summary-grid">
         {summary_grid}
       </div>
-      {''.join(summary_json_blocks)}
     </section>
     <div class="gallery">
       {''.join(cards)}
@@ -385,6 +565,7 @@ def main() -> int:
     parser.add_argument("--third-label", default="Seed 123")
     parser.add_argument("--title", default="Glamify Bulk Tryon Comparison")
     parser.add_argument("--output-run-dir", required=True, help="Destination directory under debug_outputs")
+    parser.add_argument("--include-prompts", action="store_true", help="Include per-case prompt details in the HTML")
     args = parser.parse_args()
 
     debug_outputs = Path(__file__).resolve().parent.parent / "debug_outputs"
@@ -429,6 +610,7 @@ def main() -> int:
         labels=labels,
         rows=merged_rows,
         summaries=summaries,
+        include_prompts=bool(args.include_prompts),
     )
     (output_dir / "report.html").write_text(html_text, encoding="utf-8")
 
