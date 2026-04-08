@@ -11,8 +11,11 @@ experimentation with 4 fixed garment sections:
 
 from __future__ import annotations
 
+import csv
+import html
 import io
 import logging
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -27,6 +30,8 @@ router = APIRouter()
 
 _VALID_GARMENT_TYPES = {"top", "bottom", "outer", "dress"}
 _SECTION_ORDER: Tuple[str, ...] = ("top", "bottom", "outer", "dress")
+_DEFAULT_SEED44_CSV = Path("debug_outputs/bulk_tryon_seed44_steps12_cache220656_20260407/results.csv")
+_DEFAULT_SEED77_CSV = Path("debug_outputs/bulk_tryon_seed77_steps12_cache220656_20260407/results.csv")
 
 
 def get_tryon_service() -> TryonService:
@@ -83,6 +88,510 @@ def _parse_source_worn_types(raw: str) -> List[str]:
         if kind not in values:
             values.append(kind)
     return values
+
+
+def _read_csv_rows(csv_path: Path) -> List[Dict[str, str]]:
+    if not csv_path.exists():
+        return []
+    with csv_path.open("r", encoding="utf-8", newline="") as handle:
+        return [dict(row) for row in csv.DictReader(handle)]
+
+
+@router.get("/dev/flux2/seed-compare-view", response_class=HTMLResponse)
+async def tryon_seed_compare_view(
+    per_page: int = 10,
+) -> HTMLResponse:
+    """
+    Client-shareable seed comparison page (seed 44 vs seed 77).
+    Shows only file name + images, no prompt text.
+    """
+    per_page = max(5, min(int(per_page or 10), 30))
+    csv_44 = _DEFAULT_SEED44_CSV.expanduser().resolve()
+    csv_77 = _DEFAULT_SEED77_CSV.expanduser().resolve()
+
+    rows_44 = _read_csv_rows(csv_44)
+    rows_77 = _read_csv_rows(csv_77)
+    by_77 = {str(row.get("user_file") or "").strip(): row for row in rows_77}
+
+    # Keep row order anchored to seed 44 run progression.
+    keys = [str(row.get("user_file") or "").strip() for row in rows_44 if str(row.get("user_file") or "").strip()]
+    total_cases = len(keys)
+    total_pages = max(1, (total_cases + per_page - 1) // per_page)
+
+    cards: List[str] = []
+    matched_success = 0
+
+    def _img(url: str, label: str) -> str:
+        cleaned = str(url or "").strip()
+        if not cleaned:
+            return "<div class='missing'>N/A</div>"
+        escaped = html.escape(cleaned)
+        return (
+            f"<img src='{escaped}' loading='lazy' alt='img'/>"
+            f"<div><a href='{escaped}' target='_blank' rel='noopener'>open {label}</a></div>"
+        )
+
+    def _status_class(status: str) -> str:
+        if status == "success":
+            return "ok"
+        if status == "error":
+            return "err"
+        return "na"
+
+    for index, key in enumerate(keys, start=1):
+        row_44 = rows_44[index - 1]
+        row_77 = by_77.get(key, {})
+        user_input = str(row_44.get("user_input_url") or row_77.get("user_input_url") or "").strip()
+        garment = str(row_44.get("garment_url") or row_77.get("garment_url") or "").strip()
+        out_44 = str(row_44.get("output_url") or "").strip()
+        out_77 = str(row_77.get("output_url") or "").strip()
+        status_44 = str(row_44.get("status") or "missing").strip() or "missing"
+        status_77 = str(row_77.get("status") or "missing").strip() or "missing"
+        error_44 = str(row_44.get("error") or "").strip()
+        error_77 = str(row_77.get("error") or "").strip()
+        page = ((index - 1) // per_page) + 1
+
+        if status_44 == "success" and status_77 == "success" and out_44 and out_77:
+            matched_success += 1
+
+        cards.append(
+            f"""
+<section class='card' data-page='{page}' data-index='{index}'>
+  <div class='head'>
+    <div class='case-tag'>Case {index:03d}</div>
+    <div class='chips'>
+      <span class='chip {_status_class(status_44)}'>Seed44: {html.escape(status_44)}</span>
+      <span class='chip {_status_class(status_77)}'>Seed77: {html.escape(status_77)}</span>
+    </div>
+  </div>
+  <div class='file-name'>{html.escape(key)}</div>
+  <div class='grid'>
+    <div class='cell'><h4>Input Person</h4>{_img(user_input, 'input')}</div>
+    <div class='cell'><h4>Try-on (seed44)</h4>{_img(out_44, 'seed44 output')}</div>
+    <div class='cell'><h4>Try-on (seed77)</h4>{_img(out_77, 'seed77 output')}</div>
+    <div class='cell'><h4>Garment</h4>{_img(garment, 'garment')}</div>
+  </div>
+  <div class='errs'>
+    <div><b>seed44 error:</b> {html.escape(error_44)}</div>
+    <div><b>seed77 error:</b> {html.escape(error_77)}</div>
+  </div>
+</section>
+"""
+        )
+
+    page_html = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Try-on Results</title>
+  <style>
+    :root {{
+      --bg: #f4f6fb;
+      --ink: #102135;
+      --muted: #5d6e83;
+      --line: #d5dfeb;
+      --card: #ffffff;
+      --accent: #0f766e;
+      --accent-2: #164e63;
+      --ok-bg: #e8f7ef;
+      --ok-ink: #166534;
+      --err-bg: #fdebec;
+      --err-ink: #9f1239;
+      --na-bg: #eef2f7;
+      --na-ink: #4b5563;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      padding: 16px;
+      font-family: "Space Grotesk", "Manrope", "Avenir Next", Arial, sans-serif;
+      background:
+        radial-gradient(960px 520px at 0% -20%, #dfe9ff 0%, transparent 65%),
+        radial-gradient(920px 500px at 100% -20%, #d9f4ee 0%, transparent 62%),
+        linear-gradient(180deg, #f8fbff, var(--bg));
+      color: var(--ink);
+    }}
+    .top {{
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      background: rgba(255, 255, 255, 0.94);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 12px 30px rgba(15, 25, 45, 0.08);
+      padding: 12px;
+      margin-bottom: 14px;
+    }}
+    .title {{
+      margin: 0;
+      font-size: 24px;
+      letter-spacing: 0.2px;
+    }}
+    .meta {{
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+      margin-top: 6px;
+    }}
+    .meta b {{ color: var(--ink); }}
+    .pills {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }}
+    .pill {{
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 6px 10px;
+      background: #f8fbff;
+      font-size: 12px;
+      color: var(--ink);
+    }}
+    .controls {{
+      margin-top: 10px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }}
+    .pager-btn {{
+      border: 1px solid var(--line);
+      background: #ffffff;
+      color: var(--ink);
+      padding: 7px 11px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 600;
+    }}
+    .pager-btn:hover {{
+      border-color: #b8c6d8;
+      background: #f9fbff;
+    }}
+    .pager-btn:disabled {{
+      opacity: 0.45;
+      cursor: not-allowed;
+    }}
+    .page-btn {{
+      border: 1px solid var(--line);
+      background: #ffffff;
+      color: var(--ink);
+      min-width: 34px;
+      height: 34px;
+      padding: 0 8px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+    }}
+    .page-btn.active {{
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #ffffff;
+    }}
+    .summary-line {{
+      margin-top: 8px;
+      font-size: 12px;
+      color: var(--muted);
+      font-weight: 600;
+    }}
+    .loading-strip {{
+      height: 3px;
+      border-radius: 999px;
+      margin-top: 8px;
+      opacity: 0;
+      background: linear-gradient(90deg, #dbeafe, #14b8a6, #dbeafe);
+      background-size: 220% 100%;
+      transition: opacity 120ms ease-in-out;
+      pointer-events: none;
+    }}
+    .loading-strip.show {{
+      opacity: 1;
+      animation: shimmer 1.05s linear infinite;
+    }}
+    #cards {{
+      position: relative;
+    }}
+    #cards.is-loading .card {{
+      opacity: 0.55;
+      transform: scale(0.998);
+      transition: opacity 120ms ease-in-out, transform 120ms ease-in-out;
+    }}
+    @keyframes shimmer {{
+      0% {{ background-position: 200% 0; }}
+      100% {{ background-position: -20% 0; }}
+    }}
+    .cards {{
+      display: grid;
+      gap: 12px;
+    }}
+    .card {{
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--card);
+      padding: 10px;
+      box-shadow: 0 6px 18px rgba(12, 24, 42, 0.05);
+    }}
+    .head {{
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 8px;
+    }}
+    .case-tag {{
+      font-size: 11px;
+      font-weight: 700;
+      color: #0f3d5f;
+      background: #e7f2fb;
+      border: 1px solid #c8ddf0;
+      border-radius: 999px;
+      padding: 4px 8px;
+      letter-spacing: 0.35px;
+      text-transform: uppercase;
+    }}
+    .chips {{
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }}
+    .chip {{
+      font-size: 11px;
+      font-weight: 700;
+      border-radius: 999px;
+      padding: 4px 8px;
+      border: 1px solid transparent;
+      letter-spacing: 0.2px;
+    }}
+    .chip.ok {{
+      background: var(--ok-bg);
+      color: var(--ok-ink);
+      border-color: #b8e4c7;
+    }}
+    .chip.err {{
+      background: var(--err-bg);
+      color: var(--err-ink);
+      border-color: #f5c7cc;
+    }}
+    .chip.na {{
+      background: var(--na-bg);
+      color: var(--na-ink);
+      border-color: #d7dee7;
+    }}
+    .file-name {{
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--ink);
+      margin-bottom: 8px;
+      word-break: break-word;
+    }}
+    .grid {{
+      display: grid;
+      grid-template-columns: repeat(4, minmax(220px, 1fr));
+      gap: 10px;
+    }}
+    .cell {{
+      background: #ffffff;
+      border: 1px solid #dbe3ee;
+      border-radius: 8px;
+      padding: 8px;
+    }}
+    .cell h4 {{
+      margin: 0 0 6px;
+      font-size: 13px;
+    }}
+    img {{
+      width: 100%;
+      border-radius: 6px;
+    }}
+    a {{
+      color: var(--accent-2);
+      font-size: 12px;
+      text-decoration: none;
+      font-weight: 600;
+    }}
+    a:hover {{
+      text-decoration: underline;
+    }}
+    .missing {{
+      text-align: center;
+      color: #94a3b8;
+      padding: 40px 0;
+    }}
+    .errs {{
+      margin-top: 8px;
+      font-size: 12px;
+      color: #64748b;
+      display: grid;
+      gap: 4px;
+    }}
+    @media (max-width: 1200px) {{
+      .grid {{
+        grid-template-columns: repeat(2, minmax(220px, 1fr));
+      }}
+    }}
+    @media (max-width: 760px) {{
+      body {{
+        padding: 10px;
+      }}
+      .title {{
+        font-size: 20px;
+      }}
+      .grid {{
+        grid-template-columns: 1fr;
+      }}
+      .controls {{
+        gap: 6px;
+      }}
+    }}
+  </style>
+</head>
+<body>
+  <div class="top">
+    <h2 class="title">Try-on Results</h2>
+    <div class="meta">Client view comparison with seed44 and seed77 outputs.</div>
+    <div class="pills">
+      <span class="pill">Total Cases: {total_cases}</span>
+      <span class="pill">Matched Success Pairs: {matched_success}</span>
+      <span class="pill">Per Page: {per_page}</span>
+    </div>
+    <div class="controls">
+      <button class="pager-btn" id="firstBtn" onclick="goFirst()">First</button>
+      <button class="pager-btn" id="prevBtn" onclick="prevPage()">Prev</button>
+      <div id="pageButtons"></div>
+      <button class="pager-btn" id="nextBtn" onclick="nextPage()">Next</button>
+      <button class="pager-btn" id="lastBtn" onclick="goLast()">Last</button>
+      <span id="pageLabel"></span>
+    </div>
+    <div class="summary-line" id="rangeLabel"></div>
+    <div class="loading-strip" id="loadingStrip"></div>
+  </div>
+  <div id="cards" class="cards">
+    {''.join(cards)}
+  </div>
+  <script>
+    let page = 1;
+    const perPage = {per_page};
+    const totalPages = {total_pages};
+    const totalCards = {total_cases};
+    const pageWindow = 7;
+    let loadingTimer = null;
+
+    function renderPageButtons() {{
+      const wrap = document.getElementById('pageButtons');
+      wrap.innerHTML = '';
+      const half = Math.floor(pageWindow / 2);
+      let start = Math.max(1, page - half);
+      let end = Math.min(totalPages, start + pageWindow - 1);
+      if ((end - start + 1) < pageWindow) {{
+        start = Math.max(1, end - pageWindow + 1);
+      }}
+      for (let p = start; p <= end; p += 1) {{
+        const btn = document.createElement('button');
+        btn.className = 'page-btn' + (p === page ? ' active' : '');
+        btn.textContent = String(p);
+        btn.onclick = () => {{
+          switchPage(p);
+        }};
+        wrap.appendChild(btn);
+      }}
+    }}
+
+    function renderSummary() {{
+      const from = totalCards === 0 ? 0 : ((page - 1) * perPage + 1);
+      const to = totalCards === 0 ? 0 : Math.min(page * perPage, totalCards);
+      document.getElementById('pageLabel').textContent = `Page ${{page}} / ${{totalPages}}`;
+      document.getElementById('rangeLabel').textContent = `Showing ${{from}}-${{to}} of ${{totalCards}} cases`;
+      document.getElementById('firstBtn').disabled = page <= 1;
+      document.getElementById('prevBtn').disabled = page <= 1;
+      document.getElementById('nextBtn').disabled = page >= totalPages;
+      document.getElementById('lastBtn').disabled = page >= totalPages;
+    }}
+
+    function renderCards() {{
+      document.querySelectorAll('.card').forEach((card) => {{
+        card.style.display = (Number(card.dataset.page) === page) ? 'block' : 'none';
+      }});
+    }}
+
+    function render() {{
+      renderCards();
+      renderPageButtons();
+      renderSummary();
+    }}
+
+    function setLoading(loading) {{
+      const strip = document.getElementById('loadingStrip');
+      const cards = document.getElementById('cards');
+      if (loading) {{
+        strip.classList.add('show');
+        cards.classList.add('is-loading');
+      }} else {{
+        strip.classList.remove('show');
+        cards.classList.remove('is-loading');
+      }}
+    }}
+
+    function scrollToPageTop() {{
+      try {{
+        window.scrollTo({{ top: 0, left: 0, behavior: 'smooth' }});
+      }} catch (err) {{
+        // Fallback for older browsers
+        window.scrollTo(0, 0);
+      }}
+      document.documentElement.scrollTop = 0;
+      if (document.body) {{
+        document.body.scrollTop = 0;
+      }}
+    }}
+
+    function switchPage(nextPage) {{
+      const clamped = Math.max(1, Math.min(totalPages, Number(nextPage)));
+      if (clamped === page) {{
+        scrollToPageTop();
+        return;
+      }}
+      page = clamped;
+      scrollToPageTop();
+      if (loadingTimer) {{
+        clearTimeout(loadingTimer);
+      }}
+      setLoading(true);
+      loadingTimer = setTimeout(() => {{
+        render();
+        setLoading(false);
+      }}, 160);
+    }}
+
+    function prevPage() {{
+      if (page > 1) {{
+        switchPage(page - 1);
+      }}
+    }}
+    function nextPage() {{
+      if (page < totalPages) {{
+        switchPage(page + 1);
+      }}
+    }}
+    function goFirst() {{
+      if (page !== 1) {{
+        switchPage(1);
+      }}
+    }}
+    function goLast() {{
+      if (page !== totalPages) {{
+        switchPage(totalPages);
+      }}
+    }}
+    render();
+  </script>
+</body>
+</html>
+"""
+    return HTMLResponse(content=page_html)
 
 
 @router.get("/dev/flux2/tryon-lora-multi-lab", response_class=HTMLResponse)

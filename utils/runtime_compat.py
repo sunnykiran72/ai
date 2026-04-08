@@ -3713,6 +3713,15 @@ _USER_PREP_BANNED_CONTEXT_TERMS = (
     "outfit", "clothing", "garment", "dress", "top", "bottom", "outer", "sleeve",
 )
 
+_USER_PREP_HAIR_TOKEN_REPLACEMENTS = (
+    (r"\bshoulder[\s-]*length\b", "medium"),
+)
+
+_USER_PREP_HAIR_TOKEN_REMOVALS = (
+    r"\bsmooth\b",
+    r"\bstraight\b",
+)
+
 
 def _format_user_prepare_reference(fields: Dict[str, str], *, include_outfit: bool) -> str:
     def _clean(value: object) -> str:
@@ -3762,6 +3771,13 @@ def _finalize_user_prepare_brief(text: str, *, max_words: Optional[int] = None) 
         cleaned = re.sub(rf"\b{re.escape(term)}\b", " ", cleaned, flags=re.IGNORECASE)
     for term in _USER_PREP_BANNED_CONTEXT_TERMS:
         cleaned = re.sub(rf"\b{re.escape(term)}\b", " ", cleaned, flags=re.IGNORECASE)
+    for pattern, replacement in _USER_PREP_HAIR_TOKEN_REPLACEMENTS:
+        cleaned = re.sub(pattern, replacement, cleaned, flags=re.IGNORECASE)
+    for pattern in _USER_PREP_HAIR_TOKEN_REMOVALS:
+        cleaned = re.sub(pattern, " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bmedium\s+medium\b", "medium", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bhair\s+hair\b", "hair", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\bwith\s+hair\s+hair\b", "with hair", cleaned, flags=re.IGNORECASE)
 
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,.;:>")
     if not cleaned:

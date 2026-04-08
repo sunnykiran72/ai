@@ -1,0 +1,9 @@
+{
+  "base_url": "http://127.0.0.1:8000",
+  "users_dir": "/workspace/hybrid_vto_v1_latest_v1/tryon_dataset/users_vlossless_le2048_q92_20260408",
+  "cases_total": 111,
+  "cases_success": 110,
+  "cases_error": 1,
+  "latency_avg_prepare_s": 3.7121,
+  "generated_at": "2026-04-08T04:56:54"
+}

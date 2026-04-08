@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bulk Try-on Benchmark</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: #f4f6fb;
+      color: #0f172a;
+    }
+    .wrap {
+      max-width: 1880px;
+      margin: 16px auto;
+      padding: 0 12px 24px;
+    }
+    .card {
+      border: 1px solid #d8e0ea;
+      border-radius: 12px;
+      background: #ffffff;
+      padding: 12px;
+      margin-bottom: 14px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+    }
+    .card.err {
+      border-color: #f5c2c7;
+    }
+    .head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .badge {
+      font-size: 12px;
+      background: #e2e8f0;
+      border-radius: 999px;
+      padding: 4px 10px;
+      text-transform: uppercase;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin: 8px 0 10px;
+    }
+    figure {
+      margin: 0;
+      border: 1px solid #dbe5f0;
+      border-radius: 10px;
+      padding: 8px;
+      background: #f8fbff;
+    }
+    figcaption {
+      font-weight: 700;
+      margin-bottom: 6px;
+      font-size: 13px;
+      color: #334155;
+    }
+    img {
+      width: 100%;
+      height: 640px;
+      object-fit: contain;
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      display: block;
+    }
+    a {
+      display: inline-block;
+      margin-top: 6px;
+      font-size: 12px;
+      color: #0f766e;
+      text-decoration: none;
+      word-break: break-all;
+    }
+    .meta {
+      font-size: 13px;
+      margin-bottom: 6px;
+      word-break: break-word;
+    }
+    pre {
+      margin: 0 0 8px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .summary-card {
+      position: static;
+    }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(110px, 1fr));
+      gap: 8px;
+      margin: 8px 0 10px;
+    }
+    .chip {
+      border: 1px solid #d8e0ea;
+      border-radius: 10px;
+      background: #f8fbff;
+      padding: 8px 10px;
+      font-size: 12px;
+      line-height: 1.25;
+    }
+    .chip .k {
+      font-weight: 700;
+      color: #334155;
+      display: block;
+      margin-bottom: 2px;
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.3px;
+    }
+    .chip .v {
+      font-weight: 700;
+      color: #0f172a;
+      font-size: 14px;
+    }
+    details {
+      border: 1px dashed #c5d1df;
+      border-radius: 10px;
+      padding: 8px 10px;
+      margin: 8px 0;
+      background: #f8fbff;
+    }
+    summary {
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      color: #0f172a;
+    }
+    .summary-pre {
+      max-height: 220px;
+      overflow: auto;
+      margin-top: 8px;
+    }
+    @media (max-width: 1280px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+      .summary-grid {
+        grid-template-columns: repeat(2, minmax(110px, 1fr));
+      }
+      img {
+        height: 460px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="card summary-card">
+      <h1>Bulk Try-on Benchmark Report</h1>
+      <div class="summary-grid">
+        <div class="chip"><span class="k">Total</span><span class="v">3</span></div>
+        <div class="chip"><span class="k">Success</span><span class="v">3</span></div>
+        <div class="chip"><span class="k">Error</span><span class="v">0</span></div>
+        <div class="chip"><span class="k">Avg Prepare</span><span class="v">7.02s</span></div>
+        <div class="chip"><span class="k">Avg Try-on</span><span class="v">7.33s</span></div>
+        <div class="chip"><span class="k">Avg Total</span><span class="v">19.58s</span></div>
+      </div>
+      <div class="meta"><b>Garment URL:</b> <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png</a></div>
+      <div class="meta"><b>Garment Type:</b> dress</div>
+      <details>
+        <summary>Garment Prompt (expand)</summary>
+        <pre class="summary-pre">This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric.</pre>
+      </details>
+      <details>
+        <summary>Run Summary JSON (expand)</summary>
+        <pre class="summary-pre">{
+  &quot;base_url&quot;: &quot;https://1r6ln3rbln3jhh-8000.proxy.runpod.net&quot;,
+  &quot;users_dir&quot;: &quot;/workspace/hybrid_vto_v1_latest_v1/tryon_dataset/users_vlossless_le2048_q92_20260408&quot;,
+  &quot;generated_at&quot;: &quot;2026-04-08T04:29:19.168824&quot;,
+  &quot;cases_total&quot;: 3,
+  &quot;cases_success&quot;: 3,
+  &quot;cases_error&quot;: 0,
+  &quot;settings&quot;: {
+    &quot;steps&quot;: 12,
+    &quot;seed&quot;: 44,
+    &quot;guidance_scale&quot;: 2.5,
+    &quot;lora_scale&quot;: 1.0,
+    &quot;output_max_edge&quot;: 1024,
+    &quot;garment_type&quot;: &quot;dress&quot;,
+    &quot;garment_url&quot;: &quot;https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png&quot;
+  },
+  &quot;latency_avg_prepare_s&quot;: 7.0172,
+  &quot;latency_avg_tryon_s&quot;: 7.3319,
+  &quot;latency_avg_total_s&quot;: 19.5835
+}</pre>
+      </details>
+    </section>
+    
+<section class="card ok">
+  <div class="head">
+    <h3>Case 001</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> d59b4890-cd3b-4863-b7d4-243fbea10610.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/ad67bbd1-2ac5-42b5-b6c9-30b15f41e591.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/ad67bbd1-2ac5-42b5-b6c9-30b15f41e591.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/fcaf3282-a6d4-4868-9079-3c6c392fede8.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/fcaf3282-a6d4-4868-9079-3c6c392fede8.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with blonde shoulder-length wavy hair and curvy body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with blonde shoulder-length wavy hair and curvy body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.08s, tryon=8.08s, total=17.17s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 002</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> image.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/788f8d68-0b71-47af-9f9d-767b24609a86.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/788f8d68-0b71-47af-9f9d-767b24609a86.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/3622a503-48d7-44fd-a0be-cdfc8adbb91b.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/3622a503-48d7-44fd-a0be-cdfc8adbb91b.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON An adult woman with blonde shoulder-length wavy hair and curvy body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> An adult woman with blonde shoulder-length wavy hair and curvy body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=12.52s, tryon=5.82s, total=22.68s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 003</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-2997777-4838042.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/4e5c2806-2538-4327-8af1-655a3b030920.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/4e5c2806-2538-4327-8af1-655a3b030920.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/06e45801-c4ec-4a82-a2c9-370f04c000c4.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/06e45801-c4ec-4a82-a2c9-370f04c000c4.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with blonde long smooth hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with blonde long smooth hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.45s, tryon=8.09s, total=18.90s
+  </div>
+</section>
+
+  </div>
+</body>
+</html>

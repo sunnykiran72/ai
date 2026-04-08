@@ -14,6 +14,7 @@ import logging
 import os
 import re
 import time
+import uuid
 from dataclasses import replace
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple
@@ -48,6 +49,7 @@ from routes import (
     health_router,
     tryon_lab_router,
     tryon_lora_multi_lab_router,
+    bulk_tryon_gallery_router,
 )
 
 # Shared utilities
@@ -131,6 +133,7 @@ app.include_router(extract_router, tags=["extract"])
 app.include_router(user_prep_router, tags=["user-prep"])
 app.include_router(tryon_lab_router, tags=["tryon-lab"])
 app.include_router(tryon_lora_multi_lab_router, tags=["tryon-lora-multi-lab"])
+app.include_router(bulk_tryon_gallery_router, tags=["bulk-tryon-gallery"])
 
 # Dependency injection helpers
 def get_tryon_service() -> TryonService:
@@ -403,7 +406,21 @@ def _remove_user_background_strict(image: Image.Image) -> Tuple[bytes, Dict[str,
 def _upload_or_raise(image_bytes: bytes, *, container: Optional[str] = None, filename: Optional[str] = None) -> str:
     if not isinstance(image_bytes, (bytes, bytearray)):
         raise ValueError("Expected image bytes for upload")
-    return storage.upload_image(bytes(image_bytes), filename=filename, container=container, content_type="image/png")
+    payload = bytes(image_bytes)
+    content_type = "image/png"
+    extension = "png"
+    if payload.startswith(b"\xff\xd8\xff"):
+        content_type = "image/jpeg"
+        extension = "jpg"
+    elif payload.startswith(b"\x89PNG\r\n\x1a\n"):
+        content_type = "image/png"
+        extension = "png"
+    elif len(payload) >= 12 and payload[:4] == b"RIFF" and payload[8:12] == b"WEBP":
+        content_type = "image/webp"
+        extension = "webp"
+
+    resolved_filename = filename or f"{uuid.uuid4()}.{extension}"
+    return storage.upload_image(payload, filename=resolved_filename, container=container, content_type=content_type)
 
 
 def _describe_user_image_for_prepare(image: Image.Image, description_backend: Optional[str] = None) -> str:

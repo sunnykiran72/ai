@@ -26,10 +26,61 @@ except Exception:  # pragma: no cover - face detection is optional in tests
 from utils.validation import validate_image_quality
 
 
-DEFAULT_USER_DESCRIPTION = (
-    "person with visible hairstyle, balanced build, relaxed standing pose, identity cues preserved."
-)
+DEFAULT_USER_DESCRIPTION = "A person with balanced body build."
 ALLOWED_WORN_TYPES = ("top", "bottom", "outer", "dress")
+
+_USER_PROMPT_CLOTHING_TERMS = (
+    "wearing", "wears", "dressed", "outfit", "clothing", "garment", "dress", "gown", "top", "shirt",
+    "blouse", "jacket", "coat", "pants", "trousers", "jeans", "skirt", "shorts", "shoe", "footwear",
+    "sneaker", "heels", "accessory", "bag",
+)
+_USER_PROMPT_POSE_TERMS = (
+    "standing", "sitting", "seated", "kneeling", "lying", "walking", "running", "pose", "posture",
+    "head tilt", "gaze", "looking", "shoulder", "arm", "hand", "leg", "feet",
+)
+_USER_PROMPT_CONTEXT_TERMS = (
+    "background", "scene", "lighting", "camera", "studio", "room", "wall", "floor", "street",
+)
+_USER_PROMPT_DIRECTION_TERMS = (
+    "left", "right", "sideways", "side", "viewer-left", "viewer-right",
+)
+
+_PERSON_TYPE_MAP: Tuple[Tuple[str, str], ...] = (
+    ("young woman", "young woman"),
+    ("young man", "young man"),
+    ("woman", "woman"),
+    ("female", "woman"),
+    ("man", "man"),
+    ("male", "man"),
+    ("girl", "girl"),
+    ("boy", "boy"),
+    ("person", "person"),
+)
+_AGE_BAND_TOKENS = ("young", "adult", "middle-aged", "older", "teen")
+_HAIR_STYLE_TOKENS = (
+    "straight", "wavy", "curly", "coily", "afro", "braided", "braid", "ponytail", "bun", "locs", "dreadlocks",
+)
+_HAIR_LENGTH_TOKENS = ("short", "medium", "shoulder-length", "long", "bald", "shaved")
+_BODY_BUILD_TOKENS = (
+    "slim", "slender", "athletic", "curvy", "petite", "plus-size", "lean", "average", "medium",
+)
+_HAIR_COLOR_TOKENS = (
+    "black", "brown", "blonde", "auburn", "red", "ginger", "gray", "grey", "white", "silver",
+    "dyed", "multi-tone", "multitone", "gradient", "ombre", "highlighted", "streaked", "salt-and-pepper",
+)
+_HEAD_COVERING_TERMS = (
+    "hijab", "headscarf", "scarf", "veil", "niqab", "burqa", "turban", "headwrap", "head wrap",
+    "cap", "hat", "beanie", "hood", "hoodie", "covered", "partially-covered", "fully-covered",
+)
+_PERSON_FIELD_BLOCKED_TOKENS = {
+    "wearing", "wears", "dressed", "outfit", "clothing", "garment", "color", "colours", "colors",
+    "dress", "gown", "top", "shirt", "blouse", "jacket", "coat", "pants", "trousers", "jeans",
+    "skirt", "shorts", "shoe", "footwear", "sneaker", "heels", "accessory", "bag",
+    "standing", "sitting", "seated", "kneeling", "lying", "walking", "running", "pose", "posture",
+    "background", "scene", "lighting", "camera", "studio", "room", "wall", "floor", "street",
+    "left", "right", "side", "sideways", "viewer-left", "viewer-right",
+    "sunglasses", "glasses", "eyewear", "none",
+}
 
 DEFAULT_VERIFICATION_PROMPT = (
     "You are a strict image eligibility validator for a user photo upload. "
@@ -147,6 +198,32 @@ def _extract_user_prepare_prompt_bundle(raw_text: str) -> Tuple[str, List[str]]:
 
     prompt = ""
     worn_types: List[str] = []
+    structured: Dict[str, str] = {}
+
+    def _first_text(obj: Dict[str, Any], keys: Sequence[str]) -> str:
+        for key in keys:
+            value = obj.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    def _extract_structured_fields(obj: Dict[str, Any]) -> Dict[str, str]:
+        root = dict(obj)
+        person_block = obj.get("person")
+        if isinstance(person_block, dict):
+            # person.* can override top-level keys when provided.
+            merged = dict(root)
+            merged.update({str(k): v for k, v in person_block.items()})
+            root = merged
+        return {
+            "person_type": _first_text(root, ("person_type", "person", "subject_type", "gender")),
+            "age_band": _first_text(root, ("age_band", "visible_age_band", "age", "age_group")),
+            "hair_style": _first_text(root, ("hair_style", "hairstyle")),
+            "hair_length": _first_text(root, ("hair_length",)),
+            "hair_color": _first_text(root, ("hair_color", "hair_colour", "hairColor")),
+            "head_covering": _first_text(root, ("head_covering", "headCovering", "head_cover", "hair_visibility")),
+            "body_build": _first_text(root, ("body_build", "body_structure", "body_type", "build", "physique", "frame")),
+        }
     for payload in candidate_payloads:
         try:
             obj = json.loads(payload)
@@ -155,19 +232,207 @@ def _extract_user_prepare_prompt_bundle(raw_text: str) -> Tuple[str, List[str]]:
         if not isinstance(obj, dict):
             continue
         prompt = str(obj.get("prompt") or obj.get("description") or "").strip()
+        structured = _extract_structured_fields(obj)
         worn_types = _sanitize_worn_types_policy(
             _normalize_worn_types(obj.get("garments") or obj.get("wornTypes"))
         )
-        if prompt or worn_types:
+        if prompt or worn_types or any(structured.values()):
             break
 
     if not prompt:
         prompt = text
     worn_types = _sanitize_worn_types_policy(_normalize_worn_types(worn_types))
 
+    built_prompt = _build_user_prepare_prompt(structured)
+    if not built_prompt:
+        built_prompt = _sanitize_user_prepare_prompt(prompt)
+    return built_prompt, worn_types
+
+
+def _sanitize_user_prepare_prompt(raw_text: str) -> str:
+    text = " ".join(str(raw_text or "").split()).strip(" ,.;:")
+    if not text:
+        return DEFAULT_USER_DESCRIPTION
+
+    low = text.lower()
+    for term in (_USER_PROMPT_CLOTHING_TERMS + _USER_PROMPT_POSE_TERMS + _USER_PROMPT_CONTEXT_TERMS + _USER_PROMPT_DIRECTION_TERMS):
+        low = re.sub(rf"\b{re.escape(term)}\b", " ", low)
+    low = re.sub(r"\s{2,}", " ", low).strip(" ,.;:")
+
+    fields = {
+        "person_type": "",
+        "age_band": "",
+        "hair_style": "",
+        "hair_length": "",
+        "hair_color": "",
+        "head_covering": "",
+        "body_build": "",
+    }
+    for key, mapped in _PERSON_TYPE_MAP:
+        if re.search(rf"\b{re.escape(key)}\b", low):
+            fields["person_type"] = mapped
+            break
+    for token in _AGE_BAND_TOKENS:
+        if re.search(rf"\b{re.escape(token)}\b", low):
+            fields["age_band"] = token
+            break
+    for token in _HAIR_STYLE_TOKENS:
+        if re.search(rf"\b{re.escape(token)}\b", low):
+            fields["hair_style"] = token
+            break
+    for token in _HAIR_LENGTH_TOKENS:
+        if re.search(rf"\b{re.escape(token)}\b", low):
+            fields["hair_length"] = token
+            break
+    for token in _BODY_BUILD_TOKENS:
+        if re.search(rf"\b{re.escape(token)}\b", low):
+            fields["body_build"] = token
+            break
+    for token in _HAIR_COLOR_TOKENS:
+        if re.search(rf"\b{re.escape(token)}\b", low):
+            fields["hair_color"] = token
+            break
+    for token in _HEAD_COVERING_TERMS:
+        if re.search(rf"\b{re.escape(token)}\b", low):
+            fields["head_covering"] = token
+            break
+    built = _build_user_prepare_prompt(fields)
+    return built if built else DEFAULT_USER_DESCRIPTION
+
+
+def _clean_field(value: Any) -> str:
+    text = " ".join(str(value or "").split()).strip(" ,.;:")
+    if not text:
+        return ""
+    return re.sub(r"[^a-zA-Z0-9 -]+", " ", text).strip(" ,.;:").lower()
+
+
+def _normalize_person_type(raw: str) -> str:
+    low = _clean_field(raw)
+    if not low:
+        return ""
+    for key, mapped in _PERSON_TYPE_MAP:
+        if re.search(rf"\b{re.escape(key)}\b", low):
+            return mapped
+    return _normalize_free_value(low, max_words=2)
+
+
+def _normalize_free_value(raw: str, *, max_words: int = 3) -> str:
+    low = _clean_field(raw)
+    if not low:
+        return ""
+    words = [w for w in low.split() if w and w not in _PERSON_FIELD_BLOCKED_TOKENS and re.search(r"[a-z]", w)]
+    if not words:
+        return ""
+    return " ".join(words[:max_words]).strip()
+
+
+def _normalize_value_by_tokens(raw: str, allowed_tokens: Sequence[str], *, max_words: int = 3) -> str:
+    low = _clean_field(raw)
+    if not low:
+        return ""
+    for token in allowed_tokens:
+        if re.search(rf"\b{re.escape(token)}\b", low):
+            return token
+    return _normalize_free_value(low, max_words=max_words)
+
+
+def _normalize_hair_color(raw: str) -> str:
+    low = _clean_field(raw)
+    if not low:
+        return ""
+    if re.search(r"\b(salt and pepper|salt-and-pepper)\b", low):
+        return "salt-and-pepper"
+    if re.search(r"\b(multi tone|multi-tone|multitone|two tone|two-tone|gradient|ombre|highlighted|streaked)\b", low):
+        return "multi-tone"
+    return _normalize_value_by_tokens(low, _HAIR_COLOR_TOKENS, max_words=2)
+
+
+def _direct_field_value(value: Any) -> str:
+    text = " ".join(str(value or "").split()).strip(" ,.;:")
+    if not text:
+        return ""
+    text = text.lower()
+    # Defensive cleanup for occasional leakage from model output.
+    text = re.sub(r"\bwearing\b[^,.;:]*", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(sunglasses|glasses|eyewear|none)\b", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s{2,}", " ", text).strip(" ,.;:")
+    return text
+
+
+def _normalize_hair_style_for_prompt(raw: str) -> str:
+    style = _direct_field_value(raw)
+    if not style:
+        return ""
+    # Avoid ambiguity with "stand straight" in downstream try-on prompts.
+    if re.search(r"\bstraight\b", style):
+        style = re.sub(r"\bstraight\b", "smooth", style).strip()
+    return style
+
+
+def _is_hair_hidden(head_covering_raw: str) -> bool:
+    text = _direct_field_value(head_covering_raw)
+    if not text:
+        return False
+    if text in {"uncovered", "unknown"}:
+        return False
+    if text in {"fully-covered", "partially-covered", "covered"}:
+        return True
+    cover_terms = (
+        "hijab", "headscarf", "scarf", "veil", "niqab", "burqa",
+        "turban", "headwrap", "head wrap", "cap", "hat", "beanie", "hood", "hoodie",
+    )
+    return any(re.search(rf"\b{re.escape(term)}\b", text) for term in cover_terms)
+
+
+def _build_user_prepare_prompt(fields: Dict[str, str]) -> str:
+    if not isinstance(fields, dict):
+        return ""
+    # Use MiniCPM structured values directly (minimal cleanup only).
+    person_type = _direct_field_value(fields.get("person_type", ""))
+    age_band = _direct_field_value(fields.get("age_band", ""))
+    hair_style = _normalize_hair_style_for_prompt(fields.get("hair_style", ""))
+    hair_length = _direct_field_value(fields.get("hair_length", ""))
+    hair_color = _direct_field_value(fields.get("hair_color", ""))
+    head_covering = _direct_field_value(fields.get("head_covering", ""))
+    body_build = _direct_field_value(fields.get("body_build", ""))
+
+    # Minimal safety fallback for subject if MiniCPM omits person_type.
+    if not person_type:
+        person_type = _normalize_person_type(fields.get("person_type", ""))
+
+    # If head is covered and hair is not clearly visible, do not infer hidden hair.
+    if _is_hair_hidden(head_covering):
+        hair_style = ""
+        hair_length = ""
+        hair_color = ""
+
+    subject = person_type or "person"
+    if age_band and age_band not in subject:
+        subject = f"{age_band} {subject}"
+
+    hair_bits: List[str] = []
+    for v in (hair_color, hair_length, hair_style):
+        if not v:
+            continue
+        vv = re.sub(r"\bhair\b", "", v).strip()
+        if vv:
+            hair_bits.append(vv)
+    article = "An" if subject[:1].lower() in {"a", "e", "i", "o", "u"} else "A"
+    prompt = f"{article} {subject}"
+    if hair_bits:
+        prompt += f" with {' '.join(hair_bits)} hair"
+    if body_build:
+        prompt += (" and " if hair_bits else " with ") + body_build + " body build"
+    # Final guardrail: avoid straight/hair ambiguity and strip stray leaked tokens.
+    prompt = re.sub(r"\bstraight\b(?=\s+hair\b)", "smooth", prompt, flags=re.IGNORECASE)
+    prompt = re.sub(r"\b(sunglasses|glasses|eyewear|none)\b", " ", prompt, flags=re.IGNORECASE)
+    prompt = re.sub(r"\s{2,}", " ", prompt).strip(" ,.;:")
     if not prompt:
-        prompt = DEFAULT_USER_DESCRIPTION
-    return prompt, worn_types
+        return ""
+    if not prompt.endswith("."):
+        prompt += "."
+    return prompt
 
 
 def _label_matches_any(label: Any, keys: Sequence[str]) -> bool:
@@ -1163,7 +1428,15 @@ def _call_optional_image_text_fn(
 
 def _prepare_image_bytes(image: Image.Image) -> bytes:
     buf = io.BytesIO()
-    image.convert("RGB").save(buf, format="PNG")
+    # Upload prepared user images as high-quality JPEG to keep transfer size low.
+    image.convert("RGB").save(
+        buf,
+        format="JPEG",
+        quality=92,
+        subsampling=0,
+        optimize=True,
+        progressive=True,
+    )
     return buf.getvalue()
 
 

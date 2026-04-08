@@ -158,236 +158,315 @@ def _generate_html(
     garment_type: str,
     summary: Dict[str, object],
 ) -> None:
+    del garment_prompt
+
+    visible_rows = [row for row in rows if row.status == "success" and row.output_url and row.user_input_url]
     cards: List[str] = []
-    for row in rows:
-        status_class = "ok" if row.status == "success" else "err"
+    for row in visible_rows:
         cards.append(
             f"""
-<section class="card {status_class}">
+<section class="case-card">
   <div class="head">
-    <h3>Case {row.index:03d}</h3>
-    <span class="badge">{html.escape(row.status)}</span>
+    <div>
+      <div class="eyebrow">Case {row.index:03d}</div>
+      <h3>{html.escape(row.user_file)}</h3>
+    </div>
+    <span class="badge">Success</span>
   </div>
-  <div class="meta"><b>User File:</b> {html.escape(row.user_file)}</div>
-  <div class="grid">
+  <div class="image-grid">
     <figure>
-      <figcaption>Input User</figcaption>
-      <img src="{html.escape(row.user_input_url)}" alt="input user" />
-      <a href="{html.escape(row.user_input_url)}" target="_blank" rel="noopener">open input url</a>
+      <figcaption>Input</figcaption>
+      <a href="{html.escape(row.user_input_url)}" target="_blank" rel="noopener">
+        <img src="{html.escape(row.user_input_url)}" alt="input user" loading="lazy" />
+      </a>
     </figure>
     <figure>
-      <figcaption>Try-on Output</figcaption>
-      <img src="{html.escape(row.output_url)}" alt="tryon output" />
-      <a href="{html.escape(row.output_url)}" target="_blank" rel="noopener">open output url</a>
+      <figcaption>Try-on</figcaption>
+      <a href="{html.escape(row.output_url)}" target="_blank" rel="noopener">
+        <img src="{html.escape(row.output_url)}" alt="tryon output" loading="lazy" />
+      </a>
     </figure>
-    <figure>
-      <figcaption>Garment ({html.escape(garment_type)})</figcaption>
-      <img src="{html.escape(garment_url)}" alt="garment" />
-      <a href="{html.escape(garment_url)}" target="_blank" rel="noopener">open garment url</a>
-    </figure>
-  </div>
-  <div class="meta"><b>Prompt Used:</b></div>
-  <pre>{html.escape(row.prompt_used or row.user_prompt or "")}</pre>
-  <div class="meta"><b>User Prompt:</b> {html.escape(row.user_prompt)}</div>
-  <div class="meta"><b>Error:</b> {html.escape(row.error)}</div>
-  <div class="meta">
-    <b>Latency:</b> prepare={row.prepare_latency_s:.2f}s, tryon={row.tryon_latency_s:.2f}s, total={row.total_latency_s:.2f}s
   </div>
 </section>
 """
         )
 
     summary_json = html.escape(json.dumps(summary, indent=2))
-    garment_prompt_html = html.escape(garment_prompt)
     cases_total = int(summary.get("cases_total") or 0)
     cases_success = int(summary.get("cases_success") or 0)
     cases_error = int(summary.get("cases_error") or 0)
-    avg_prepare = summary.get("latency_avg_prepare_s")
     avg_tryon = summary.get("latency_avg_tryon_s")
     avg_total = summary.get("latency_avg_total_s")
-    avg_prepare_label = f"{float(avg_prepare):.2f}s" if avg_prepare is not None else "n/a"
     avg_tryon_label = f"{float(avg_tryon):.2f}s" if avg_tryon is not None else "n/a"
     avg_total_label = f"{float(avg_total):.2f}s" if avg_total is not None else "n/a"
+    settings = summary.get("settings") if isinstance(summary.get("settings"), dict) else {}
+    seed_label = html.escape(str(settings.get("seed") or "n/a"))
+    max_edge_label = html.escape(str(settings.get("output_max_edge") or "n/a"))
+    visible_label = len(visible_rows)
     content = f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Bulk Try-on Benchmark</title>
+  <title>Glamify Bulk Tryon Testing</title>
   <style>
+    :root {{
+      --bg: #f7f7f5;
+      --surface: #ffffff;
+      --surface-soft: #fbfbfa;
+      --line: #e7e4df;
+      --ink: #181713;
+      --muted: #6b655c;
+      --accent: #0f766e;
+      --badge-bg: #eef7f5;
+      --shadow: 0 18px 40px rgba(24, 23, 19, 0.06);
+    }}
+    * {{
+      box-sizing: border-box;
+    }}
     body {{
       margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-      background: #f4f6fb;
-      color: #0f172a;
+      font-family: "Instrument Sans", "Manrope", "Avenir Next", sans-serif;
+      background:
+        radial-gradient(circle at top left, #fffdfa 0%, transparent 30%),
+        linear-gradient(180deg, #faf9f6 0%, var(--bg) 100%);
+      color: var(--ink);
     }}
     .wrap {{
-      max-width: 1880px;
-      margin: 16px auto;
-      padding: 0 12px 24px;
+      max-width: 1560px;
+      margin: 0 auto;
+      padding: 24px 18px 48px;
     }}
-    .card {{
-      border: 1px solid #d8e0ea;
-      border-radius: 12px;
-      background: #ffffff;
-      padding: 12px;
-      margin-bottom: 14px;
-      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+    .hero {{
+      border: 1px solid var(--line);
+      border-radius: 28px;
+      background: linear-gradient(180deg, #fff 0%, #fcfcfb 100%);
+      padding: 22px;
+      margin-bottom: 18px;
+      box-shadow: var(--shadow);
     }}
-    .card.err {{
-      border-color: #f5c2c7;
+    .hero-top {{
+      display: grid;
+      grid-template-columns: 1.35fr 300px;
+      gap: 18px;
+      align-items: stretch;
+      margin-bottom: 18px;
+    }}
+    .hero h1 {{
+      margin: 0 0 8px;
+      font-size: 38px;
+      line-height: 1;
+      letter-spacing: -0.04em;
+    }}
+    .hero p {{
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.5;
+      max-width: 880px;
+    }}
+    .garment-panel {{
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--surface-soft);
+      padding: 14px;
+    }}
+    .summary-grid {{
+      display: grid;
+      grid-template-columns: repeat(7, minmax(120px, 1fr));
+      gap: 10px;
+    }}
+    .chip {{
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--surface);
+      padding: 12px 14px;
+    }}
+    .chip .k {{
+      display: block;
+      margin-bottom: 4px;
+      font-size: 11px;
+      line-height: 1.2;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 700;
+    }}
+    .chip .v {{
+      display: block;
+      font-size: 18px;
+      line-height: 1.1;
+      font-weight: 700;
+      color: var(--ink);
+    }}
+    details {{
+      margin-top: 16px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: var(--surface-soft);
+      padding: 12px 14px;
+    }}
+    summary {{
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 700;
+      color: var(--ink);
+    }}
+    .summary-pre {{
+      margin: 12px 0 0;
+      padding: 16px;
+      border-radius: 14px;
+      background: #f2f1ed;
+      color: #2a2824;
+      font-size: 12px;
+      line-height: 1.45;
+      max-height: 260px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }}
+    .gallery {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }}
+    .case-card {{
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      background: var(--surface);
+      padding: 16px;
+      box-shadow: var(--shadow);
     }}
     .head {{
       display: flex;
       align-items: center;
       justify-content: space-between;
-      margin-bottom: 8px;
+      gap: 12px;
+      margin-bottom: 14px;
+    }}
+    .eyebrow {{
+      margin-bottom: 6px;
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 700;
+    }}
+    .case-card h3 {{
+      margin: 0;
+      font-size: 18px;
+      line-height: 1.25;
+      word-break: break-word;
     }}
     .badge {{
-      font-size: 12px;
-      background: #e2e8f0;
+      font-size: 11px;
+      background: var(--badge-bg);
+      color: var(--accent);
+      border: 1px solid rgba(15, 118, 110, 0.18);
       border-radius: 999px;
-      padding: 4px 10px;
+      padding: 6px 10px;
       text-transform: uppercase;
+      letter-spacing: 0.08em;
+      font-weight: 700;
     }}
-    .grid {{
+    .image-grid {{
       display: grid;
-      grid-template-columns: repeat(3, 1fr);
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 12px;
-      margin: 8px 0 10px;
     }}
     figure {{
       margin: 0;
-      border: 1px solid #dbe5f0;
-      border-radius: 10px;
-      padding: 8px;
-      background: #f8fbff;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 10px;
+      background: var(--surface-soft);
     }}
     figcaption {{
       font-weight: 700;
-      margin-bottom: 6px;
-      font-size: 13px;
-      color: #334155;
+      margin-bottom: 8px;
+      font-size: 12px;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
     }}
     img {{
       width: 100%;
-      height: 640px;
+      height: 520px;
       object-fit: contain;
       background: #fff;
-      border: 1px solid #e2e8f0;
-      border-radius: 8px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
       display: block;
     }}
     a {{
-      display: inline-block;
-      margin-top: 6px;
-      font-size: 12px;
-      color: #0f766e;
       text-decoration: none;
-      word-break: break-all;
-    }}
-    .meta {{
-      font-size: 13px;
-      margin-bottom: 6px;
-      word-break: break-word;
-    }}
-    pre {{
-      margin: 0 0 8px;
-      white-space: pre-wrap;
-      word-break: break-word;
-      background: #0f172a;
-      color: #e2e8f0;
-      border-radius: 10px;
-      padding: 10px;
-      font-size: 12px;
-      line-height: 1.35;
-    }}
-    .summary-card {{
-      position: static;
-    }}
-    .summary-grid {{
-      display: grid;
-      grid-template-columns: repeat(6, minmax(110px, 1fr));
-      gap: 8px;
-      margin: 8px 0 10px;
-    }}
-    .chip {{
-      border: 1px solid #d8e0ea;
-      border-radius: 10px;
-      background: #f8fbff;
-      padding: 8px 10px;
-      font-size: 12px;
-      line-height: 1.25;
-    }}
-    .chip .k {{
-      font-weight: 700;
-      color: #334155;
-      display: block;
-      margin-bottom: 2px;
-      text-transform: uppercase;
-      font-size: 11px;
-      letter-spacing: 0.3px;
-    }}
-    .chip .v {{
-      font-weight: 700;
-      color: #0f172a;
-      font-size: 14px;
-    }}
-    details {{
-      border: 1px dashed #c5d1df;
-      border-radius: 10px;
-      padding: 8px 10px;
-      margin: 8px 0;
-      background: #f8fbff;
-    }}
-    summary {{
-      font-size: 13px;
-      font-weight: 700;
-      cursor: pointer;
-      color: #0f172a;
-    }}
-    .summary-pre {{
-      max-height: 220px;
-      overflow: auto;
-      margin-top: 8px;
+      color: inherit;
     }}
     @media (max-width: 1280px) {{
-      .grid {{
+      .hero-top {{
         grid-template-columns: 1fr;
       }}
       .summary-grid {{
-        grid-template-columns: repeat(2, minmax(110px, 1fr));
+        grid-template-columns: repeat(3, minmax(120px, 1fr));
+      }}
+      .gallery {{
+        grid-template-columns: 1fr;
       }}
       img {{
-        height: 460px;
+        height: 420px;
+      }}
+    }}
+    @media (max-width: 780px) {{
+      .wrap {{
+        padding: 16px 12px 32px;
+      }}
+      .hero h1 {{
+        font-size: 30px;
+      }}
+      .summary-grid {{
+        grid-template-columns: repeat(2, minmax(120px, 1fr));
+      }}
+      .image-grid {{
+        grid-template-columns: 1fr;
       }}
     }}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <section class="card summary-card">
-      <h1>Bulk Try-on Benchmark Report</h1>
+    <section class="hero">
+      <div class="hero-top">
+        <div>
+          <h1>Glamify Bulk Tryon Testing</h1>
+          <p>
+            Presentation gallery for the bulk try-on run. This page shows successful outputs only,
+            so reviewing the dataset stays fast and visually clean.
+          </p>
+        </div>
+        <aside class="garment-panel">
+          <div class="eyebrow">Garment Reference</div>
+          <a href="{html.escape(garment_url)}" target="_blank" rel="noopener">
+            <img src="{html.escape(garment_url)}" alt="garment reference" />
+          </a>
+        </aside>
+      </div>
       <div class="summary-grid">
         <div class="chip"><span class="k">Total</span><span class="v">{cases_total}</span></div>
         <div class="chip"><span class="k">Success</span><span class="v">{cases_success}</span></div>
         <div class="chip"><span class="k">Error</span><span class="v">{cases_error}</span></div>
-        <div class="chip"><span class="k">Avg Prepare</span><span class="v">{avg_prepare_label}</span></div>
+        <div class="chip"><span class="k">Visible</span><span class="v">{visible_label}</span></div>
+        <div class="chip"><span class="k">Seed</span><span class="v">{seed_label}</span></div>
+        <div class="chip"><span class="k">Max Edge</span><span class="v">{max_edge_label}</span></div>
         <div class="chip"><span class="k">Avg Try-on</span><span class="v">{avg_tryon_label}</span></div>
-        <div class="chip"><span class="k">Avg Total</span><span class="v">{avg_total_label}</span></div>
       </div>
-      <div class="meta"><b>Garment URL:</b> <a href="{html.escape(garment_url)}" target="_blank" rel="noopener">{html.escape(garment_url)}</a></div>
-      <div class="meta"><b>Garment Type:</b> {html.escape(garment_type)}</div>
       <details>
-        <summary>Garment Prompt (expand)</summary>
-        <pre class="summary-pre">{garment_prompt_html}</pre>
-      </details>
-      <details>
-        <summary>Run Summary JSON (expand)</summary>
+        <summary>Run Summary JSON</summary>
         <pre class="summary-pre">{summary_json}</pre>
       </details>
     </section>
-    {''.join(cards)}
+    <section class="gallery">
+      {''.join(cards)}
+    </section>
   </div>
 </body>
 </html>
@@ -448,6 +527,28 @@ def _load_existing(jsonl_path: Path) -> Dict[str, Dict[str, object]]:
     return by_file
 
 
+def _load_prepare_cache(jsonl_path: Path) -> Dict[str, Tuple[str, str]]:
+    cache: Dict[str, Tuple[str, str]] = {}
+    if not jsonl_path.exists():
+        return cache
+    for line in jsonl_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except Exception:
+            continue
+        if str(row.get("status") or "").strip().lower() != "success":
+            continue
+        user_file = str(row.get("user_file") or "").strip()
+        user_input_url = str(row.get("user_input_url") or "").strip()
+        user_prompt = str(row.get("user_prompt") or "").strip()
+        if user_file and user_input_url and user_prompt:
+            cache[user_file] = (user_input_url, user_prompt)
+    return cache
+
+
 def run(args: argparse.Namespace) -> int:
     users_dir = Path(args.users_dir).expanduser().resolve()
     if not users_dir.exists():
@@ -493,6 +594,16 @@ def run(args: argparse.Namespace) -> int:
     if args.max_cases and args.max_cases > 0:
         files = files[: args.max_cases]
 
+    prepare_cache: Dict[str, Tuple[str, str]] = {}
+    if args.prepare_cache_jsonl:
+        cache_path = Path(args.prepare_cache_jsonl).expanduser().resolve()
+        if not cache_path.exists():
+            print(f"prepare_cache_jsonl does not exist: {cache_path}", file=sys.stderr)
+            return 2
+        prepare_cache = _load_prepare_cache(cache_path)
+        print(f"prepare_cache_jsonl={cache_path}")
+        print(f"prepare_cache_entries={len(prepare_cache)}")
+
     print(f"users_dir={users_dir}")
     print(f"cases_total={len(files)}")
     print(f"output_dir={out_dir}")
@@ -517,25 +628,31 @@ def run(args: argparse.Namespace) -> int:
         prepare_latency = 0.0
         tryon_latency = 0.0
         try:
-            with user_path.open("rb") as handle:
-                def _prep_call() -> requests.Response:
-                    return session.post(
-                        prep_url,
-                        files={"file": (user_path.name, handle, "application/octet-stream")},
-                        timeout=args.prepare_timeout,
-                    )
+            cached = prepare_cache.get(key)
+            if cached:
+                user_input_url, user_prompt = cached
+            else:
+                if args.prepare_cache_only:
+                    raise RuntimeError("prepare_cache_miss")
+                with user_path.open("rb") as handle:
+                    def _prep_call() -> requests.Response:
+                        return session.post(
+                            prep_url,
+                            files={"file": (user_path.name, handle, "application/octet-stream")},
+                            timeout=args.prepare_timeout,
+                        )
 
-                prep_t0 = time.time()
-                prep_resp = _request_with_retry(_prep_call, attempts=args.retries)
-                prepare_latency = time.time() - prep_t0
+                    prep_t0 = time.time()
+                    prep_resp = _request_with_retry(_prep_call, attempts=args.retries)
+                    prepare_latency = time.time() - prep_t0
 
-            prep_payload = _safe_json(prep_resp)
-            if prep_resp.status_code != 200:
-                raise RuntimeError(f"prepare_failed status={prep_resp.status_code} payload={prep_payload}")
+                prep_payload = _safe_json(prep_resp)
+                if prep_resp.status_code != 200:
+                    raise RuntimeError(f"prepare_failed status={prep_resp.status_code} payload={prep_payload}")
 
-            user_input_url, user_prompt = _extract_prepare_fields(prep_payload)
-            if not user_input_url:
-                raise RuntimeError(f"prepare_missing_url payload={prep_payload}")
+                user_input_url, user_prompt = _extract_prepare_fields(prep_payload)
+                if not user_input_url:
+                    raise RuntimeError(f"prepare_missing_url payload={prep_payload}")
 
             tryon_payload = {
                 "products": [
@@ -660,6 +777,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tryon-timeout", type=float, default=420.0)
     parser.add_argument("--max-cases", type=int, default=0, help="0 means all")
     parser.add_argument("--output-dir", default="")
+    parser.add_argument("--prepare-cache-jsonl", default="", help="Reuse prepared user_input_url/user_prompt from another run's results.jsonl")
+    parser.add_argument("--prepare-cache-only", action="store_true", help="Fail case when cache entry is missing instead of calling /v1/user-image/prepare")
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     if not args.garment_prompt and not args.garment_prompt_file:

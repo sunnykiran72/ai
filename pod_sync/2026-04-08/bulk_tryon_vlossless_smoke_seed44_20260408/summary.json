@@ -1,0 +1,20 @@
+{
+  "base_url": "https://1r6ln3rbln3jhh-8000.proxy.runpod.net",
+  "users_dir": "/workspace/hybrid_vto_v1_latest_v1/tryon_dataset/users_vlossless_le2048_q92_20260408",
+  "generated_at": "2026-04-08T04:29:19.168824",
+  "cases_total": 3,
+  "cases_success": 3,
+  "cases_error": 0,
+  "settings": {
+    "steps": 12,
+    "seed": 44,
+    "guidance_scale": 2.5,
+    "lora_scale": 1.0,
+    "output_max_edge": 1024,
+    "garment_type": "dress",
+    "garment_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png"
+  },
+  "latency_avg_prepare_s": 7.0172,
+  "latency_avg_tryon_s": 7.3319,
+  "latency_avg_total_s": 19.5835
+}

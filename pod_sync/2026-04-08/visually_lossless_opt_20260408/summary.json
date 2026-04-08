@@ -1,0 +1,25 @@
+{
+  "generated_at": "2026-04-08T04:25:53.807750Z",
+  "src_dir": "/workspace/hybrid_vto_v1_latest_v1/tryon_dataset/users",
+  "out_dir": "/workspace/hybrid_vto_v1_latest_v1/tryon_dataset/users_vlossless_le2048_q92_20260408",
+  "file_count_ok": 111,
+  "file_count_error": 1,
+  "resized_count": 108,
+  "src_total_bytes": 211730801,
+  "out_total_bytes": 81786867,
+  "saved_total_bytes": 129943934,
+  "saved_total_mb": 123.92,
+  "saved_total_pct": 61.37,
+  "psnr_db_avg": 43.026,
+  "psnr_db_min": 37.353,
+  "psnr_db_p50": 42.45,
+  "psnr_db_p90": 45.429,
+  "settings": {
+    "max_long_edge": 2048,
+    "jpeg_quality": 92,
+    "jpeg_subsampling": "4:4:4",
+    "no_crop": true,
+    "keep_aspect_ratio": true,
+    "auto_orient_exif": true
+  }
+}

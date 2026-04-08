@@ -30,6 +30,7 @@ from .user_prep import router as user_prep_router
 from .health import router as health_router
 from .tryon_lab import router as tryon_lab_router
 from .tryon_lora_multi_lab import router as tryon_lora_multi_lab_router
+from .bulk_tryon_gallery import router as bulk_tryon_gallery_router
 
 __all__ = [
     "tryon_router",
@@ -39,4 +40,5 @@ __all__ = [
     "health_router",
     "tryon_lab_router",
     "tryon_lora_multi_lab_router",
+    "bulk_tryon_gallery_router",
 ]

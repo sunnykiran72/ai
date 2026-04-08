@@ -1,0 +1,9 @@
+{
+  "users_dir": "/workspace/hybrid_vto_v1_latest_v1/tryon_dataset/users_vlossless_le2048_q92_20260408",
+  "prompt_cache": "/workspace/hybrid_vto_v1_latest_v1/debug_outputs/new_dataset_prepare_only_20260408/results.jsonl",
+  "cases_total": 111,
+  "cases_success": 110,
+  "cases_error": 1,
+  "output_jsonl": "/workspace/hybrid_vto_v1_latest_v1/debug_outputs/new_dataset_direct_image_cache_20260408/results.jsonl",
+  "output_csv": "/workspace/hybrid_vto_v1_latest_v1/debug_outputs/new_dataset_direct_image_cache_20260408/results.csv"
+}

@@ -1,0 +1,1482 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Bulk Try-on Benchmark</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: #f4f6fb;
+      color: #0f172a;
+    }
+    .wrap {
+      max-width: 1880px;
+      margin: 16px auto;
+      padding: 0 12px 24px;
+    }
+    .card {
+      border: 1px solid #d8e0ea;
+      border-radius: 12px;
+      background: #ffffff;
+      padding: 12px;
+      margin-bottom: 14px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+    }
+    .card.err {
+      border-color: #f5c2c7;
+    }
+    .head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .badge {
+      font-size: 12px;
+      background: #e2e8f0;
+      border-radius: 999px;
+      padding: 4px 10px;
+      text-transform: uppercase;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin: 8px 0 10px;
+    }
+    figure {
+      margin: 0;
+      border: 1px solid #dbe5f0;
+      border-radius: 10px;
+      padding: 8px;
+      background: #f8fbff;
+    }
+    figcaption {
+      font-weight: 700;
+      margin-bottom: 6px;
+      font-size: 13px;
+      color: #334155;
+    }
+    img {
+      width: 100%;
+      height: 640px;
+      object-fit: contain;
+      background: #fff;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      display: block;
+    }
+    a {
+      display: inline-block;
+      margin-top: 6px;
+      font-size: 12px;
+      color: #0f766e;
+      text-decoration: none;
+      word-break: break-all;
+    }
+    .meta {
+      font-size: 13px;
+      margin-bottom: 6px;
+      word-break: break-word;
+    }
+    pre {
+      margin: 0 0 8px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .summary-card {
+      position: static;
+    }
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(110px, 1fr));
+      gap: 8px;
+      margin: 8px 0 10px;
+    }
+    .chip {
+      border: 1px solid #d8e0ea;
+      border-radius: 10px;
+      background: #f8fbff;
+      padding: 8px 10px;
+      font-size: 12px;
+      line-height: 1.25;
+    }
+    .chip .k {
+      font-weight: 700;
+      color: #334155;
+      display: block;
+      margin-bottom: 2px;
+      text-transform: uppercase;
+      font-size: 11px;
+      letter-spacing: 0.3px;
+    }
+    .chip .v {
+      font-weight: 700;
+      color: #0f172a;
+      font-size: 14px;
+    }
+    details {
+      border: 1px dashed #c5d1df;
+      border-radius: 10px;
+      padding: 8px 10px;
+      margin: 8px 0;
+      background: #f8fbff;
+    }
+    summary {
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      color: #0f172a;
+    }
+    .summary-pre {
+      max-height: 220px;
+      overflow: auto;
+      margin-top: 8px;
+    }
+    @media (max-width: 1280px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+      .summary-grid {
+        grid-template-columns: repeat(2, minmax(110px, 1fr));
+      }
+      img {
+        height: 460px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="card summary-card">
+      <h1>Bulk Try-on Benchmark Report</h1>
+      <div class="summary-grid">
+        <div class="chip"><span class="k">Total</span><span class="v">40</span></div>
+        <div class="chip"><span class="k">Success</span><span class="v">40</span></div>
+        <div class="chip"><span class="k">Error</span><span class="v">0</span></div>
+        <div class="chip"><span class="k">Avg Prepare</span><span class="v">4.56s</span></div>
+        <div class="chip"><span class="k">Avg Try-on</span><span class="v">8.08s</span></div>
+        <div class="chip"><span class="k">Avg Total</span><span class="v">18.82s</span></div>
+      </div>
+      <div class="meta"><b>Garment URL:</b> <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png</a></div>
+      <div class="meta"><b>Garment Type:</b> dress</div>
+      <details>
+        <summary>Garment Prompt (expand)</summary>
+        <pre class="summary-pre">This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric.</pre>
+      </details>
+      <details>
+        <summary>Run Summary JSON (expand)</summary>
+        <pre class="summary-pre">{
+  &quot;base_url&quot;: &quot;https://1r6ln3rbln3jhh-8000.proxy.runpod.net&quot;,
+  &quot;users_dir&quot;: &quot;/workspace/hybrid_vto_v1_latest_v1/tryon_dataset/users_vlossless_le2048_q92_20260408&quot;,
+  &quot;generated_at&quot;: &quot;2026-04-08T04:42:12.175286&quot;,
+  &quot;cases_total&quot;: 40,
+  &quot;cases_success&quot;: 40,
+  &quot;cases_error&quot;: 0,
+  &quot;settings&quot;: {
+    &quot;steps&quot;: 12,
+    &quot;seed&quot;: 44,
+    &quot;guidance_scale&quot;: 2.5,
+    &quot;lora_scale&quot;: 1.0,
+    &quot;output_max_edge&quot;: 1024,
+    &quot;garment_type&quot;: &quot;dress&quot;,
+    &quot;garment_url&quot;: &quot;https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png&quot;
+  },
+  &quot;latency_avg_prepare_s&quot;: 4.5557,
+  &quot;latency_avg_tryon_s&quot;: 8.0758,
+  &quot;latency_avg_total_s&quot;: 18.8209
+}</pre>
+      </details>
+    </section>
+    
+<section class="card ok">
+  <div class="head">
+    <h3>Case 001</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> d59b4890-cd3b-4863-b7d4-243fbea10610.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/5f1aa5bf-2a1c-49a6-a57c-2ab60311a149.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/5f1aa5bf-2a1c-49a6-a57c-2ab60311a149.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/522e6871-556e-4705-8fd2-adc5bfbfdd5b.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/522e6871-556e-4705-8fd2-adc5bfbfdd5b.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with blonde shoulder-length wavy hair and curvy body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with blonde shoulder-length wavy hair and curvy body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=3.94s, tryon=8.08s, total=16.99s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 002</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> image.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/54755d7f-ee72-470f-ac35-f64b874a2282.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/54755d7f-ee72-470f-ac35-f64b874a2282.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/8076df40-1063-4171-85cf-df4c415c4682.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/8076df40-1063-4171-85cf-df4c415c4682.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON An adult woman with blonde shoulder-length wavy hair and curvy body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> An adult woman with blonde shoulder-length wavy hair and curvy body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=12.68s, tryon=5.84s, total=23.30s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 003</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-2997777-4838042.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/895b2490-2175-4e77-9f80-23b13137bb0e.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/895b2490-2175-4e77-9f80-23b13137bb0e.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/b6c53362-cd86-4eb3-990a-cb93c4a0e645.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/b6c53362-cd86-4eb3-990a-cb93c4a0e645.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with blonde long smooth hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with blonde long smooth hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.45s, tryon=8.09s, total=18.30s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 004</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-38711587-7208431.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/36f8c73c-8ff3-48a3-9e00-c2cc10e56a59.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/36f8c73c-8ff3-48a3-9e00-c2cc10e56a59.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/eb250dcd-4849-48de-a31a-db72772b61e8.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/eb250dcd-4849-48de-a31a-db72772b61e8.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with black long smooth hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with black long smooth hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=3.88s, tryon=8.09s, total=17.79s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 005</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-48518676-7572653.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/7482c898-e23d-48b2-be3f-56638ecebd26.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/7482c898-e23d-48b2-be3f-56638ecebd26.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/7615c4ed-0585-454d-9e5e-dfe312f29d55.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/7615c4ed-0585-454d-9e5e-dfe312f29d55.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON An adult woman with black long curly hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> An adult woman with black long curly hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=3.97s, tryon=8.17s, total=18.04s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 006</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-_ofarias-g-530112232-16986947.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/be4e7ad2-b9a1-4d72-b336-a129ee447963.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/be4e7ad2-b9a1-4d72-b336-a129ee447963.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/b2b284f5-3491-480e-b6b1-301862b8c61f.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/b2b284f5-3491-480e-b6b1-301862b8c61f.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with brown long smooth hair and curvy body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with brown long smooth hair and curvy body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.11s, tryon=8.09s, total=18.03s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 007</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-adhen-wijaya-kusuma-229756871-12493913.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/65d3286a-ec31-4f77-bfd6-d56cc3a224a2.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/65d3286a-ec31-4f77-bfd6-d56cc3a224a2.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/b61b11d2-89bd-4eba-b08c-145b722a7f7e.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/b61b11d2-89bd-4eba-b08c-145b722a7f7e.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with dark long wavy hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with dark long wavy hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.15s, tryon=8.09s, total=19.22s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 008</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-alan-garzon-180446366-11201615.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/b01fd76d-5632-4bce-8777-92cb1358f985.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/b01fd76d-5632-4bce-8777-92cb1358f985.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/aa251944-3e4d-4cef-8d6f-a04d3092f564.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/aa251944-3e4d-4cef-8d6f-a04d3092f564.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with brown medium wavy hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with brown medium wavy hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=5.46s, tryon=8.09s, total=20.76s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 009</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-alan-garzon-180446366-11201618.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/803a7211-7c56-477f-83ad-5e3bf0dcfca7.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/803a7211-7c56-477f-83ad-5e3bf0dcfca7.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/9e6640d8-b1ab-4333-86d3-89772dafb409.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/9e6640d8-b1ab-4333-86d3-89772dafb409.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young girl with brown medium wavy hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young girl with brown medium wavy hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=5.35s, tryon=8.09s, total=19.97s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 010</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-alan-garzon-180446366-11201761.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/a316bede-3dad-4634-8599-0be0c0f59cae.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/a316bede-3dad-4634-8599-0be0c0f59cae.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/d9cbcfdd-332f-4956-9338-3b20422811c2.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/d9cbcfdd-332f-4956-9338-3b20422811c2.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young girl with brown medium curly hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young girl with brown medium curly hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.75s, tryon=8.10s, total=18.74s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 011</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-aminnaderloei-31897926.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/0b285e78-7e57-44ce-bd9b-53bf694d4c6a.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/0b285e78-7e57-44ce-bd9b-53bf694d4c6a.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/85244b39-0657-4fa4-bae7-9fce2b26984b.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/85244b39-0657-4fa4-bae7-9fce2b26984b.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with black long smooth hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with black long smooth hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.10s, tryon=8.09s, total=17.69s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 012</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-amit-chowdhury-2402860-11796004.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/b53d0f4a-6617-4e26-b985-9e3efb2c091e.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/b53d0f4a-6617-4e26-b985-9e3efb2c091e.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/5d3dc5cb-b0fe-45a4-9c2f-ddd765c4e3ca.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/5d3dc5cb-b0fe-45a4-9c2f-ddd765c4e3ca.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with dark long wavy hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with dark long wavy hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.36s, tryon=8.09s, total=19.27s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 013</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-andrea-musto-135941147-23995927.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/8c6cc5d9-e5b8-4646-9652-0b553cc9acce.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/8c6cc5d9-e5b8-4646-9652-0b553cc9acce.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/5472dfa2-bc73-4300-9811-486ed3315ce7.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/5472dfa2-bc73-4300-9811-486ed3315ce7.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with black long smooth hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with black long smooth hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=3.93s, tryon=8.09s, total=17.50s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 014</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-angela-chacon-140940805-15536313.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/6d60eabe-ab3f-4001-b33c-0f0794a189e6.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/6d60eabe-ab3f-4001-b33c-0f0794a189e6.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/d5258893-b98a-4566-97df-e719649dc3e7.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/d5258893-b98a-4566-97df-e719649dc3e7.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON An adult woman with brown medium smooth hair and average body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> An adult woman with brown medium smooth hair and average body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.63s, tryon=8.10s, total=19.04s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 015</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-asio-9688592.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/cc622c7a-b193-48ef-87db-b1f1a3fec86f.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/cc622c7a-b193-48ef-87db-b1f1a3fec86f.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/130f59a0-c380-4e8e-9810-b6ef695f471a.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/130f59a0-c380-4e8e-9810-b6ef695f471a.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with black long smooth hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with black long smooth hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.19s, tryon=8.09s, total=17.90s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 016</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-bartosz-olzewski-298756944-13312741.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/0d89ab93-e5db-4e33-a1cb-3021a862756a.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/0d89ab93-e5db-4e33-a1cb-3021a862756a.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/b7b8f779-c4ba-46c3-b60e-90ce96486b6a.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/b7b8f779-c4ba-46c3-b60e-90ce96486b6a.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with dark brown shoulder-length smooth hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with dark brown shoulder-length smooth hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.45s, tryon=8.66s, total=20.25s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 017</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-bgcortez-17834302.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/c7be6510-5613-4c8c-97cf-e7221f189d7b.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/c7be6510-5613-4c8c-97cf-e7221f189d7b.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/546b15d6-6217-4d2c-b90f-53c88aff4bd1.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/546b15d6-6217-4d2c-b90f-53c88aff4bd1.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with blonde long ponytail hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with blonde long ponytail hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.33s, tryon=8.09s, total=19.07s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 018</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-breno-cardoso-149064345-13684160.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/abdbaf90-2453-43c1-a38b-11c47370ef28.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/abdbaf90-2453-43c1-a38b-11c47370ef28.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/e3a67bbf-2b93-4f30-8d2d-c1c5d462ec17.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/e3a67bbf-2b93-4f30-8d2d-c1c5d462ec17.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with blonde long wavy hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with blonde long wavy hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.48s, tryon=8.09s, total=19.51s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 019</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-breno-cardoso-149064345-15728306.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/cbed6c94-d0e0-4ee2-a0cc-52cfc6ac5f24.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/cbed6c94-d0e0-4ee2-a0cc-52cfc6ac5f24.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/a284c6bd-2add-4a82-b28d-900785240700.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/a284c6bd-2add-4a82-b28d-900785240700.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with black long smooth hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with black long smooth hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.27s, tryon=8.09s, total=18.46s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 020</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-breno-cardoso-149064345-17110661.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/e259c96f-1e16-47c1-a2ce-873076e704f6.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/e259c96f-1e16-47c1-a2ce-873076e704f6.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/6408ad14-4525-461e-8572-8e932265f418.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/6408ad14-4525-461e-8572-8e932265f418.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young girl with brown long wavy hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young girl with brown long wavy hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.25s, tryon=8.09s, total=18.39s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 021</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-bruno-arbigaus-gritten-2155171268-34216114.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/6a6bf213-0c27-486c-a5ed-3286404e750a.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/6a6bf213-0c27-486c-a5ed-3286404e750a.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/5d976a7f-357c-4e57-af80-d794d06e3621.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/5d976a7f-357c-4e57-af80-d794d06e3621.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young girl with brown long smooth hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young girl with brown long smooth hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.29s, tryon=8.09s, total=18.88s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 022</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-caio-mantovani-97605853-13919886.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/8befba67-94b2-4b9d-ad4c-1daef3fdbbd3.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/8befba67-94b2-4b9d-ad4c-1daef3fdbbd3.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1083eb83-f0ab-4c13-b7ed-f208c1a36fa2.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1083eb83-f0ab-4c13-b7ed-f208c1a36fa2.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young girl with brown long smooth hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young girl with brown long smooth hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.19s, tryon=8.09s, total=18.44s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 023</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-caio-mantovani-97605853-14097802.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/374394e8-2ba0-464b-a633-25fb35419329.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/374394e8-2ba0-464b-a633-25fb35419329.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/6f3bd365-49e4-441b-a08e-198c357e1908.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/6f3bd365-49e4-441b-a08e-198c357e1908.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with multi-tone shoulder-length smooth hair and average body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with multi-tone shoulder-length smooth hair and average body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.49s, tryon=8.09s, total=18.82s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 024</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-carolina-101603542-9412244.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/722f00e0-70c0-40a0-93a4-52841a301a65.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/722f00e0-70c0-40a0-93a4-52841a301a65.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/a62a064e-513b-45c5-9852-3ddaf6c8e46b.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/a62a064e-513b-45c5-9852-3ddaf6c8e46b.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young girl with brown long smooth hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young girl with brown long smooth hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.42s, tryon=8.09s, total=18.52s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 025</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-cesar-o-neill-26650613-33463134.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/52862c22-1730-46da-b3e4-5451c022e8b8.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/52862c22-1730-46da-b3e4-5451c022e8b8.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/489f4552-5399-4ab2-926d-62f841fb58ab.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/489f4552-5399-4ab2-926d-62f841fb58ab.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with blonde long wavy hair and average body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with blonde long wavy hair and average body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.58s, tryon=8.09s, total=19.36s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 026</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-cesar-o-neill-26650613-33800253.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/58bed7e2-0c5d-490b-b2d7-3efffc575d1b.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/58bed7e2-0c5d-490b-b2d7-3efffc575d1b.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/961fa273-0c2a-422d-ab71-2d4b667a1eeb.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/961fa273-0c2a-422d-ab71-2d4b667a1eeb.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with brown medium wavy hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with brown medium wavy hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.40s, tryon=8.10s, total=19.20s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 027</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-colordragon-24813292.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/d46ee665-2a3b-47d2-a38f-c19b8971e487.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/d46ee665-2a3b-47d2-a38f-c19b8971e487.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/aeda1e8f-982d-4c57-82d5-9434c46a6b7d.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/aeda1e8f-982d-4c57-82d5-9434c46a6b7d.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young girl with dark brown long smooth hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young girl with dark brown long smooth hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.41s, tryon=8.10s, total=19.10s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 028</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-colordragon-24813296.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/f4057964-e35d-4cea-82cc-4c0193467e69.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/f4057964-e35d-4cea-82cc-4c0193467e69.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/f8fe7ca6-f007-49fd-8019-4e19b6ffc424.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/f8fe7ca6-f007-49fd-8019-4e19b6ffc424.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young girl with dark long smooth hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young girl with dark long smooth hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.40s, tryon=8.09s, total=19.37s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 029</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-conejodepapel-17392599.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1487617a-4a66-45c2-b56c-a12f45b45934.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1487617a-4a66-45c2-b56c-a12f45b45934.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/90bf0bff-346b-4140-b119-f1308f33dcad.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/90bf0bff-346b-4140-b119-f1308f33dcad.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young girl with multi-tone long smooth hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young girl with multi-tone long smooth hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.20s, tryon=8.09s, total=18.35s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 030</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-cristian-rojas-10041266.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/15faa783-0d9e-4f7b-8f94-fe3be950cfc5.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/15faa783-0d9e-4f7b-8f94-fe3be950cfc5.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/a58dc105-a971-49bd-bf82-b6db626ef442.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/a58dc105-a971-49bd-bf82-b6db626ef442.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON An adult woman with brown long smooth hair and average body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> An adult woman with brown long smooth hair and average body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=3.92s, tryon=8.17s, total=17.67s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 031</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-cristian-rojas-7535460.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/0546c937-97ac-4229-baa6-1f3c1f1bdc25.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/0546c937-97ac-4229-baa6-1f3c1f1bdc25.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/49e502db-6067-415a-84df-4254eb277982.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/49e502db-6067-415a-84df-4254eb277982.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON An adult woman with brown long smooth hair and curvy body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> An adult woman with brown long smooth hair and curvy body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.73s, tryon=8.17s, total=19.16s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 032</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-dan-borges-1755177.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/76c665c9-154f-4a17-8a49-7f718d567982.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/76c665c9-154f-4a17-8a49-7f718d567982.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/56005963-53de-4eed-be2c-a9871fd57379.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/56005963-53de-4eed-be2c-a9871fd57379.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with brown long smooth hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with brown long smooth hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.20s, tryon=8.09s, total=19.14s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 033</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-daniel-duarte-270529097-13098732.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/518b78e5-6d99-4ffa-b1fd-e24e25a172b7.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/518b78e5-6d99-4ffa-b1fd-e24e25a172b7.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/ab6e0a9b-dcec-4621-8154-344a16910143.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/ab6e0a9b-dcec-4621-8154-344a16910143.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with dark brown long wavy hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with dark brown long wavy hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.42s, tryon=8.86s, total=18.86s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 034</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-davincidelasfotos-28480020.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/c1e001bf-7a85-479a-a9ac-587a1dc342d7.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/c1e001bf-7a85-479a-a9ac-587a1dc342d7.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/206eef6e-4c31-49d1-af6b-de2d2f2bf9d4.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/206eef6e-4c31-49d1-af6b-de2d2f2bf9d4.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with brown shoulder-length smooth hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with brown shoulder-length smooth hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.30s, tryon=8.11s, total=18.52s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 035</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-davincidelasfotos-28714398.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/9131440c-2c23-4c0f-bf2f-9665866b1c60.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/9131440c-2c23-4c0f-bf2f-9665866b1c60.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/e930e6e2-510a-4442-9b29-f23e52a54d52.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/e930e6e2-510a-4442-9b29-f23e52a54d52.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with black long smooth hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with black long smooth hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.04s, tryon=8.09s, total=18.16s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 036</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-davincidelasfotos-28714525.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1162be60-98e8-4342-8ede-5b72e6ba6764.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1162be60-98e8-4342-8ede-5b72e6ba6764.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/cbe80670-db1d-4282-b641-0cbb96b0f71f.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/cbe80670-db1d-4282-b641-0cbb96b0f71f.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with black long smooth hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with black long smooth hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.21s, tryon=8.10s, total=18.35s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 037</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-diana-reyes-227887231-34035163.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/536c4ed3-d877-4bc1-9437-7fd9c9252aef.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/536c4ed3-d877-4bc1-9437-7fd9c9252aef.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/23d62494-397c-45c1-86b0-4a8115b4e376.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/23d62494-397c-45c1-86b0-4a8115b4e376.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.24s, tryon=8.09s, total=18.29s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 038</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-dinielle-de-veyra-2610843-4195089.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/5ca3f909-5842-4c72-9762-135bbeb2cb20.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/5ca3f909-5842-4c72-9762-135bbeb2cb20.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/8a1cc583-cde6-4048-b126-616779f498e4.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/8a1cc583-cde6-4048-b126-616779f498e4.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with blonde long wavy hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with blonde long wavy hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.25s, tryon=8.09s, total=18.19s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 039</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-el-gringo-photo-116752370-10675485.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/7172546e-9773-49ab-b7a5-94a37bf44be4.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/7172546e-9773-49ab-b7a5-94a37bf44be4.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/30ba483b-c33c-43d5-82db-0e6e72d09091.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/30ba483b-c33c-43d5-82db-0e6e72d09091.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with brown long wavy hair and slim body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with brown long wavy hair and slim body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.36s, tryon=8.09s, total=19.28s
+  </div>
+</section>
+
+<section class="card ok">
+  <div class="head">
+    <h3>Case 040</h3>
+    <span class="badge">success</span>
+  </div>
+  <div class="meta"><b>User File:</b> pexels-elchinoportrait-20471162.jpg</div>
+  <div class="grid">
+    <figure>
+      <figcaption>Input User</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/4ae74ef0-b064-4078-9142-23d2c4b2e942.png" alt="input user" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/4ae74ef0-b064-4078-9142-23d2c4b2e942.png" target="_blank" rel="noopener">open input url</a>
+    </figure>
+    <figure>
+      <figcaption>Try-on Output</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/4879fa5f-dbee-4af8-86c1-0913cb1ee52d.png" alt="tryon output" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/4879fa5f-dbee-4af8-86c1-0913cb1ee52d.png" target="_blank" rel="noopener">open output url</a>
+    </figure>
+    <figure>
+      <figcaption>Garment (dress)</figcaption>
+      <img src="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" alt="garment" />
+      <a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/1e1009b9-21cf-42aa-8ec5-d65e65622acb.png" target="_blank" rel="noopener">open garment url</a>
+    </figure>
+  </div>
+  <div class="meta"><b>Prompt Used:</b></div>
+  <pre>TRYON A young woman with dark brown shoulder-length smooth hair and average body build. Replace the entire outfit completely with This garment is a fitted, short-sleeved dress with a structured bodice and a short skirt. The bodice features a sweetheart neckline with a central vertical seam that extends down the front, flanked by two angled seams converging at the waist, creating a corset-like silhouette. The front closure consists of five large, round, gold-toned buttons arranged vertically along the central seam. The sleeves are short and capped, with a slight flare at the hem, and are attached to the bodice with shoulder seams that extend from the neckline to the sleeve cap. The shoulder layout includes a square neckline with a straight upper edge, bordered by a narrow band of fabric that forms a slight V-shape at the center front. The waist transition is defined by a series of vertical seams that contour the torso, enhancing the fitted shape. The skirt is constructed from the same material as the bodice, with a smooth, continuous flow from the waist to the hem, which ends above the knee. The fabric exhibits a textured pattern resembling reptile skin, with visible grain lines running vertically along the bodice and skirt. The dress appears to be made from a structured, possibly leather-like material with a slight sheen. There are no visible boning, lining, or additional trims beyond the buttons and the subtle texture of the fabric. as shown in the reference image. Strictly keep the same face, body measurements, hair color, eye directions, exact foot wear, same accessories and preserve strict body pose. Preserve the exact subject scale and framing from the original image; do not zoom, crop, or change camera distance. Generate a hyper realistic virtual tryon. The final image is a full body shot.</pre>
+  <div class="meta"><b>User Prompt:</b> A young woman with dark brown shoulder-length smooth hair and average body build.</div>
+  <div class="meta"><b>Error:</b> </div>
+  <div class="meta">
+    <b>Latency:</b> prepare=4.42s, tryon=8.09s, total=18.95s
+  </div>
+</section>
+
+  </div>
+</body>
+</html>

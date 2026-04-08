@@ -175,6 +175,10 @@ class TryonService:
         clean_user = " ".join(str(user_description or "").split()).strip()
         # Avoid duplicate punctuation like ".." when user description already ends with a period.
         person_desc = clean_user.rstrip(" .!?").strip() or "same person"
+        framing_lock_clause = (
+            "Preserve the exact subject scale and framing from the original image; "
+            "do not zoom, crop, or change camera distance."
+        )
 
         item_count = max(len(target_types or []), len(garment_descriptions or []))
         if item_count <= 0:
@@ -217,7 +221,9 @@ class TryonService:
 
             common_tail = (
                 "Keep face identity, hair, body proportions, pose, hands, camera framing, background, "
-                "and lighting unchanged. The final image is a full body shot."
+                "and lighting unchanged. "
+                + framing_lock_clause
+                + " The final image is a full body shot."
             )
 
             if kind == "top":
@@ -256,12 +262,12 @@ class TryonService:
             if kind == "dress":
                 return (
                     f"TRYON {person_desc}. "
-                    f"Replace the entire outfit completely with {garment_text} as shown in the reference images. "
-                    "Render one continuous dress across upper and lower clothing regions from top edge to hem with accurate construction, silhouette, fit, seam and edge placement, "
-                    "drape, and length based on the reference garment. "
-                    "Preserve the exact garment color, tone, and shading from the reference. "
-                    "Present a full one-piece dress appearance without separate upper and lower garment splits. "
-                    + common_tail
+                    f"Replace the entire outfit completely with {garment_text} as shown in the reference image. "
+                    "Strictly remove other worn garments. "
+                    "Keep the same face, body measurements, hair color, eye directions, exact footwear, same accessories, "
+                    "and preserve the strict body pose. "
+                    "The final image should read as one coherent, anatomically correct full-body fashion photograph of the same person in the same scene. "
+                    "The final image is a full body shot."
                 ).strip()
 
         # Multi-garment prompts (v1): one active garment per category.
@@ -273,7 +279,9 @@ class TryonService:
             kind_set = set(unique_kinds)
             common_multi_tail = (
                 "Keep face identity, hair, body proportions, pose, hands, camera framing, background, "
-                "and lighting unchanged. The final image is a full body shot."
+                "and lighting unchanged. "
+                + framing_lock_clause
+                + " The final image is a full body shot."
             )
 
             # 1) top + bottom
@@ -341,6 +349,8 @@ class TryonService:
             "Render all garments with accurate construction, silhouette, fit, seam and edge placement, drape, and length "
             "based on the reference garments. Preserve the exact garment color, tone, and shading from the references. "
             "Keep face identity, hair, body proportions, pose, hands, camera framing, background, and lighting unchanged. "
+            + framing_lock_clause
+            + " "
             "The final image is a full body shot."
         ).strip()
 

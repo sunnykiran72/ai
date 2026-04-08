@@ -35,7 +35,7 @@ MINICPM_GARMENT_DESCRIPTION_BY_TYPE = {
 MINICPM_GARMENT_DESCRIPTION_PROMPT = MINICPM_GARMENT_DESCRIPTION_COMMON
 
 MINICPM_PERSON_OUTFIT_DESCRIPTION_PROMPT = """Analyze the image for user-image preparation and return JSON only with this exact schema:
-{"garments":["top","bottom","outer","dress"],"prompt":"<single sentence>"}
+{"garments":["top","bottom","outer","dress"],"person_type":"","age_band":"","hair_style":"","hair_length":"","hair_color":"","head_covering":"","body_build":""}
 Rules:
 - garments: include only garment categories worn on the main body of the dominant person.
 - Allowed garment values: top, bottom, outer, dress.
@@ -52,13 +52,22 @@ Rules:
   - Do not output dress together with top or bottom for the same worn outfit.
   - outer may appear with either base-outfit form.
 - Do not include side objects, hand-held items, nearby garments, or background apparel.
-- prompt: exactly one clean sentence with 30 to 45 words.
-- prompt must include: person type, visible age band, hair style, hair length, body build, facial expression, head tilt, gaze style, overall posture, shoulder posture, arm and hand pose, hand-to-hand relationship using exactly one term (touching/clasped/separate/overlapping), hand contact target (ground/lap/knee/object when visible), lower-body posture, leg pose, and feet stance.
-- Include only these fields and nothing else: person type, visible age band, hair style, hair length, body build, facial expression, head tilt, gaze style, overall posture, shoulder posture, arm/hand pose, hand-to-hand relationship, hand contact target, lower-body posture, leg pose, feet stance.
-- Strictly never mention clothing, garment type, colors, footwear, accessories, background, lighting, camera, or scene details.
-- Do not mention left, right, side, viewer-left, viewer-right, or directional wording.
-- Do not describe background, lighting, camera, mood, or aesthetics.
-- If uncertain, omit that detail instead of guessing.
+- person_type: person label only (for example woman, man, person, girl, boy, etc.). These are examples for idea, not an exhaustive list. No clothing words.
+- age_band: short age hint only (for example young, adult, middle-aged, older, etc.). These are examples for idea, not an exhaustive list. Empty string if unclear.
+- hair_style: choose exactly one value from this closed list only: wavy, curly, coily, braided, locs, bun, ponytail, updo, afro. Do not generate any other value. Do not use smooth or straight. If none of these labels clearly fits, return empty string.
+- hair_length: choose exactly one value from this closed list only: bald/shaved, very short, short, medium, long, very long. Do not generate any other value. Do not use shoulder-length. If the visible length is around the shoulder area, use medium. If unclear, return empty string.
+- hair_color: short hair-color phrase only (for example black, brown, blonde, auburn, gray, white, dyed, multi-tone, gradient, etc.). These are examples for idea, not an exhaustive list. If gradient/highlights/ombre are visible, return a short phrase such as multi-tone or gradient (optionally with one dominant color). Empty string if unclear.
+- head_covering: short visibility state only (for example uncovered, partially-covered, fully-covered, unknown). Empty string if unclear.
+- If hair is covered by hijab, scarf, headscarf, veil, cap, hat, hoodie, or any head covering and hair is not clearly visible, set hair_style="", hair_length="", and hair_color="". Do not infer hidden hair.
+- If hair is clearly visible, do not leave hair_style or hair_length empty.
+- body_build: short body-build phrase only (for example slim, athletic, curvy, average, petite, plus-size, etc.). These are examples for idea, not an exhaustive list. Empty string if unclear.
+- Do not include pose/posture terms (standing, sitting, kneeling, etc.).
+- Do not include clothing details, colors, background, lighting, camera, mood, or aesthetics in person fields.
+- Do not mention left, right, side, viewer-left, viewer-right, or directional wording in person fields.
+- Never include these tokens in person fields: wearing, sunglasses, glasses, eyewear, none, smooth, straight, shoulder-length.
+- You may use any other visible cues in the image internally (etc.) to infer these fields more accurately, but do not output those extra cues.
+- Output only the schema fields above. Do not add prompt, description, notes, explanations, or any extra keys.
+- If uncertain, return empty string for that field.
 - Return only valid JSON, no markdown, no extra keys."""
 
 # ═══════════════════════════════════════════════════════════════════════════════
