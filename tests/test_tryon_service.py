@@ -1,4 +1,5 @@
 import importlib.util
+import asyncio
 from pathlib import Path
 import sys
 import types
@@ -181,6 +182,39 @@ class TryonServiceCanvasTests(unittest.TestCase):
 
         self.assertEqual(target_types[0], "bottom")
 
+    @patch("services.tryon_service.download_image")
+    def test_try_on_defaults_output_max_edge_to_1280(self, mock_download_image):
+        person_image = Image.new("RGB", (64, 96), "white")
+        garment_image = Image.new("RGB", (32, 32), "black")
+        mock_download_image.side_effect = [person_image, garment_image]
+
+        engine = Mock()
+        engine.flux2 = Mock()
+        engine.flux2.run_tryon.return_value = {
+            "image": Image.new("RGB", (64, 96), "white"),
+            "latency": 1.23,
+            "metadata": {},
+        }
+
+        service = TryonService(engine=engine, config=Mock())
+
+        result = asyncio.run(
+            service.try_on(
+                user_image_url="https://example.com/user.jpg",
+                garment_image_url="https://example.com/garment.png",
+                garment_type="top",
+                prompt_description="structured cropped top",
+                steps=12,
+                seed=123,
+                guidance_scale=2.5,
+                lora_scale=1.0,
+            )
+        )
+
+        self.assertEqual(result["metadata"]["output_size"], [64, 96])
+        engine.flux2.run_tryon.assert_called_once()
+        self.assertEqual(engine.flux2.run_tryon.call_args.kwargs["output_max_edge"], 1280)
+
 
 class TryonServicePromptBuilderTests(unittest.TestCase):
     def setUp(self):
@@ -197,23 +231,25 @@ class TryonServicePromptBuilderTests(unittest.TestCase):
         )
 
     def test_single_top_without_worn_types_uses_fallback_prompt(self):
-        prompt = self._prompt("top", "structured cropped top")
+        prompt = self._prompt("top", "structured cropped top.")
 
-        self.assertIn("Replace the upper garment with structured cropped top", prompt)
-        self.assertIn("Keep lower-body clothing unchanged.", prompt)
-        self.assertIn(SINGLE_GARMENT_PRESERVE_TAIL, prompt)
+        self.assertIn("TRYON same person description. Replace entire upper garment with structured cropped top as shown in the reference images.", prompt)
+        self.assertIn("Keep the bottom garment unchanged.", prompt)
+        self.assertIn("Preserve the exact garment structure from the reference, including the front opening shape, closure placement, hem length, exposed torso areas, sleeve construction, edge finish and fabric pattern layout.", prompt)
+        self.assertIn("Preserve any intentionally open or cutout areas exactly as part of the garment design", prompt)
+        self.assertIn("Strictly Keep the same face, body measurements, hair color, eye directions, exact footwear, same accessories and preserve the body pose.", prompt)
+        self.assertNotIn("top.", prompt)
 
     def test_single_top_over_dress_uses_overlay_prompt(self):
         prompt = self._prompt("top", "structured cropped top", ["dress"])
 
-        self.assertIn("Layer the top garment structured cropped top over the existing dress", prompt)
-        self.assertIn("Treat the selected top as an overlay worn on top of the dress.", prompt)
-        self.assertIn("Keep the dress unchanged underneath", prompt)
+        self.assertIn("Replace entire upper garment with structured cropped top as shown in the reference images.", prompt)
+        self.assertIn("Keep the bottom garment unchanged.", prompt)
 
     def test_worn_types_normalization_dedupes_and_drops_invalid_values(self):
         prompt = self._prompt("top", "structured cropped top", ["Dress", "dress", "invalid-value"])
 
-        self.assertIn("Layer the top garment structured cropped top over the existing dress", prompt)
+        self.assertIn("Replace entire upper garment with structured cropped top as shown in the reference images.", prompt)
         self.assertNotIn("invalid-value", prompt)
 
     def test_single_outer_over_dress_uses_outermost_layer_prompt(self):
@@ -228,32 +264,35 @@ class TryonServicePromptBuilderTests(unittest.TestCase):
         self.assertIn("Place the bottom garment straight-leg trousers underneath the existing dress", prompt)
         self.assertIn("Show the bottom only where it would naturally be visible", prompt)
         self.assertIn("Do not replace the dress with the bottom garment.", prompt)
+        self.assertIn("The final image is a full body shot.", prompt)
 
     def test_single_top_over_top_bottom_replaces_only_top(self):
         prompt = self._prompt("top", "structured cropped top", ["top", "bottom"])
 
-        self.assertIn("Replace only the upper garment with structured cropped top", prompt)
+        self.assertIn("Replace entire upper garment with structured cropped top as shown in the reference images.", prompt)
         self.assertIn("Keep the bottom garment unchanged.", prompt)
+        self.assertIn("Preserve the exact garment structure from the reference, including the front opening shape, closure placement, hem length, exposed torso areas, sleeve construction, edge finish and fabric pattern layout.", prompt)
 
     def test_single_bottom_over_top_bottom_replaces_only_bottom(self):
         prompt = self._prompt("bottom", "straight-leg trousers", ["top", "bottom"])
 
-        self.assertIn("Replace only the lower garment with straight-leg trousers", prompt)
+        self.assertIn("Replace entire lower garment with straight-leg trousers as shown in the reference images.", prompt)
         self.assertIn("Keep the top garment unchanged.", prompt)
+        self.assertIn("Strictly Keep the same face, body measurements, hair color, eye directions, exact footwear, same accessories and preserve the body pose.", prompt)
 
     def test_single_top_over_top_bottom_outer_preserves_outer(self):
         prompt = self._prompt("top", "structured cropped top", ["top", "bottom", "outer"])
 
-        self.assertIn("Replace only the upper garment with structured cropped top", prompt)
+        self.assertIn("Replace entire upper garment with structured cropped top as shown in the reference images.", prompt)
         self.assertIn("Keep the bottom garment unchanged.", prompt)
-        self.assertIn("Keep the existing outer layer unchanged on top where visible.", prompt)
+        self.assertNotIn("Keep the existing outer layer unchanged on top where visible.", prompt)
 
     def test_single_bottom_over_top_bottom_outer_preserves_outer(self):
         prompt = self._prompt("bottom", "straight-leg trousers", ["top", "bottom", "outer"])
 
-        self.assertIn("Replace only the lower garment with straight-leg trousers", prompt)
+        self.assertIn("Replace entire lower garment with straight-leg trousers as shown in the reference images.", prompt)
         self.assertIn("Keep the top garment unchanged.", prompt)
-        self.assertIn("Keep the existing outer layer unchanged on top where visible.", prompt)
+        self.assertNotIn("Keep the existing outer layer unchanged on top where visible.", prompt)
 
     def test_single_outer_over_top_bottom_outer_replaces_only_outer(self):
         prompt = self._prompt("outer", "tailored blazer", ["top", "bottom", "outer"])
@@ -264,12 +303,13 @@ class TryonServicePromptBuilderTests(unittest.TestCase):
     def test_single_top_with_outer_only_preserves_visible_non_target_garments(self):
         prompt = self._prompt("top", "structured cropped top", ["outer"])
 
-        self.assertIn("Preserve the existing visible non-target garments, including any outer-layer coverage", prompt)
+        self.assertIn("Replace entire upper garment with structured cropped top as shown in the reference images.", prompt)
 
     def test_single_bottom_with_outer_only_preserves_visible_non_target_garments(self):
         prompt = self._prompt("bottom", "straight-leg trousers", ["outer"])
 
-        self.assertIn("Preserve the existing visible non-target garments, including any outer-layer coverage", prompt)
+        self.assertIn("Replace entire lower garment with straight-leg trousers as shown in the reference images.", prompt)
+        self.assertIn("Keep the top garment unchanged.", prompt)
 
     def test_single_outer_with_outer_only_replaces_only_outer(self):
         prompt = self._prompt("outer", "tailored blazer", ["outer"])
@@ -280,8 +320,8 @@ class TryonServicePromptBuilderTests(unittest.TestCase):
     def test_ambiguous_worn_types_fall_back_to_existing_single_prompt(self):
         prompt = self._prompt("top", "structured cropped top", ["dress", "top"])
 
-        self.assertIn("Replace the upper garment with structured cropped top", prompt)
-        self.assertIn("Keep lower-body clothing unchanged.", prompt)
+        self.assertIn("Replace entire upper garment with structured cropped top as shown in the reference images.", prompt)
+        self.assertIn("Keep the bottom garment unchanged.", prompt)
 
     def test_selected_dress_prompt_remains_unchanged_by_worn_types(self):
         prompt = self._prompt("dress", "structured mini dress", ["top", "bottom", "outer"])
@@ -290,7 +330,7 @@ class TryonServicePromptBuilderTests(unittest.TestCase):
         self.assertIn("Strictly remove other worn garments.", prompt)
         self.assertIn(SINGLE_GARMENT_PRESERVE_TAIL, prompt)
 
-    def test_multi_garment_prompt_branch_remains_unchanged(self):
+    def test_multi_top_bottom_uses_approved_prompt(self):
         prompt = self.service._build_tryon_lora_prompt(
             user_description=self.user_desc,
             garment_descriptions=["structured cropped top", "straight-leg trousers"],
@@ -299,8 +339,77 @@ class TryonServicePromptBuilderTests(unittest.TestCase):
             source_worn_types=["dress"],
         )
 
-        self.assertIn("Replace the upper garment with structured cropped top and replace the lower garment with straight-leg trousers", prompt)
-        self.assertIn("Assign region ownership explicitly: upper-body clothing region is owned by the top garment and lower-body clothing region is owned by the bottom garment.", prompt)
+        self.assertIn("TRYON same person description. Replace the entire outfit with structured cropped top and straight-leg trousers as shown in the reference images.", prompt)
+        self.assertIn("Preserve the exact garment structure from the reference, including the front opening shape, closure placement, hem length, exposed torso areas, sleeve construction, edge finish and fabric pattern layout.", prompt)
+        self.assertIn("Preserve any intentionally open or cutout areas exactly as part of the garment design", prompt)
+        self.assertIn("Strictly Keep the same face, body measurements, hair color, eye directions, exact footwear, same accessories and preserve the body pose.", prompt)
+        self.assertTrue(prompt.endswith("The final image is a full body shot."))
+
+    def test_multi_dress_top_uses_approved_prompt(self):
+        prompt = self.service._build_tryon_lora_prompt(
+            user_description=self.user_desc,
+            garment_descriptions=["structured mini dress", "structured cropped top"],
+            target_types=["dress", "top"],
+            board_mode="multi",
+            source_worn_types=["top", "bottom"],
+        )
+
+        self.assertIn("Replace the entire outfit with structured mini dress and structured cropped top as shown in the reference images.", prompt)
+        self.assertIn("Use the dress as the base garment and apply the top garment as the upper-region overlay layer.", prompt)
+        self.assertIn("Keep the lower dress structure visible where it is not covered by the top layer.", prompt)
+        self.assertIn("Render both garments with accurate construction, silhouette, fit, seam and edge placement, drape, and length based on their references.", prompt)
+
+    def test_multi_top_dress_order_is_irrelevant(self):
+        prompt = self.service._build_tryon_lora_prompt(
+            user_description=self.user_desc + ".",
+            garment_descriptions=["structured cropped top.", "structured mini dress."],
+            target_types=["top", "dress"],
+            board_mode="multi",
+            source_worn_types=["outer"],
+        )
+
+        self.assertIn("TRYON same person description. Replace the entire outfit with structured mini dress and structured cropped top as shown in the reference images.", prompt)
+        self.assertNotIn("description..", prompt)
+        self.assertNotIn("top..", prompt)
+        self.assertNotIn("dress..", prompt)
+
+    def test_multi_dress_bottom_uses_approved_prompt(self):
+        prompt = self.service._build_tryon_lora_prompt(
+            user_description=self.user_desc,
+            garment_descriptions=["structured mini dress", "straight-leg trousers"],
+            target_types=["dress", "bottom"],
+            board_mode="multi",
+            source_worn_types=["dress"],
+        )
+
+        self.assertIn("Replace the entire outfit with structured mini dress and straight-leg trousers as shown in the reference images.", prompt)
+        self.assertIn("Use the dress as the base garment for the upper-body and dress structure, and assign the lower-body clothing region to the bottom garment.", prompt)
+        self.assertIn("Preserve the exact garment color, tone, shading, and visible pattern placement from their references.", prompt)
+
+    def test_multi_dress_top_bottom_uses_approved_prompt(self):
+        prompt = self.service._build_tryon_lora_prompt(
+            user_description=self.user_desc,
+            garment_descriptions=["structured mini dress", "structured cropped top", "straight-leg trousers"],
+            target_types=["dress", "top", "bottom"],
+            board_mode="multi",
+            source_worn_types=["top", "bottom"],
+        )
+
+        self.assertIn("Replace the outfit with structured mini dress, structured cropped top, and straight-leg trousers as shown in the reference images.", prompt)
+        self.assertIn("Use the dress as the base garment, apply the top garment as the upper-region overlay layer, and assign the lower-body clothing region to the bottom garment.", prompt)
+        self.assertIn("Keep edits confined to their owned regions and layers.", prompt)
+
+    def test_multi_dress_outer_now_falls_back_to_generic_prompt(self):
+        prompt = self.service._build_tryon_lora_prompt(
+            user_description=self.user_desc,
+            garment_descriptions=["structured mini dress", "tailored blazer"],
+            target_types=["dress", "outer"],
+            board_mode="multi",
+            source_worn_types=["dress"],
+        )
+
+        self.assertIn("Replace the entire outfit with structured mini dress, tailored blazer as shown in the reference images.", prompt)
+        self.assertIn("Render all garments with accurate construction, silhouette, fit, seam and edge placement, drape, and length based on the reference garments.", prompt)
         self.assertIn("Keep face identity, hair, body proportions, pose, hands, camera framing, background, and lighting unchanged.", prompt)
 
 

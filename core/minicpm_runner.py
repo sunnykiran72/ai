@@ -10,6 +10,14 @@ from transformers import AutoModel, AutoTokenizer
 logger = logging.getLogger("glamify-ai")
 
 
+def _env_value(*names: str, default: str) -> str:
+    for name in names:
+        value = os.getenv(name)
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return default
+
+
 class MiniCPMVRunner:
     """
     MiniCPM-V descriptor runner for garment and person prompt descriptions.
@@ -36,15 +44,21 @@ class MiniCPMVRunner:
         else:
             self.torch_dtype = torch.bfloat16
 
-        self.max_new_tokens = max(64, int(os.getenv("MINICPM_MAX_NEW_TOKENS", "384")))
-        self.garment_max_new_tokens = max(
-            48,
-            int(os.getenv("MINICPM_GARMENT_MAX_NEW_TOKENS", "640")),
+        self.max_new_tokens = max(
+            64,
+            int(_env_value("MINICPM_MAX_NEW_TOKENS", "MINICPM_SERVICE_MAX_NEW_TOKENS", default="192")),
         )
-        self.garment_min_words = max(4, int(os.getenv("MINICPM_GARMENT_MIN_WORDS", "200")))
+        self.garment_max_new_tokens = max(
+            96,
+            int(_env_value("MINICPM_GARMENT_MAX_NEW_TOKENS", "MINICPM_SERVICE_GARMENT_MAX_NEW_TOKENS", default="192")),
+        )
+        self.garment_min_words = max(
+            12,
+            int(_env_value("MINICPM_GARMENT_MIN_WORDS", "MINICPM_SERVICE_GARMENT_MIN_WORDS", default="40")),
+        )
         self.user_max_new_tokens = max(
             64,
-            int(os.getenv("MINICPM_USER_MAX_NEW_TOKENS", "200")),
+            int(_env_value("MINICPM_USER_MAX_NEW_TOKENS", "MINICPM_SERVICE_PERSON_MAX_NEW_TOKENS", default="200")),
         )
         # MiniCPM-V 4.5 officially uses sdpa in recent transformers runtimes.
         self.attn_implementation = os.getenv("MINICPM_ATTN_IMPLEMENTATION", "sdpa").strip().lower()
@@ -189,8 +203,9 @@ class MiniCPMVRunner:
 
         retry_instruction = (
             f"{instruction} "
-            f"Your previous answer was too short. Rewrite it as one detailed garment paragraph of at least {self.garment_min_words} words and 8-10 complete sentences. "
-            "Keep only visible garment facts. Expand the garment structure, seams, panel shapes, neckline, shoulder layout, sleeve or strap geometry, hem, closures, trims, and construction details until the description is sufficiently long."
+            f"Your previous answer was too short. Rewrite it as one compact garment-construction paragraph of {self.garment_min_words} to 90 words and 3 to 5 complete sentences. "
+            "Keep only visible garment facts. Prioritize the garment category, key edges, strap or sleeve layout, panel structure, closure, and hem or visible length. "
+            "Do not add filler, repeated phrases, fit opinions, styling language, or inferred details."
         ).strip()
         retry_response = self._run_prompt(
             image=image,

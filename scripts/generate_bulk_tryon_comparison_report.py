@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate a side-by-side HTML comparison report for two or three completed bulk try-on runs.
+Generate a side-by-side HTML comparison report for two to four completed bulk try-on runs.
 """
 
 from __future__ import annotations
@@ -74,7 +74,11 @@ def _build_html(
     summaries: List[Dict[str, object]],
     include_prompts: bool,
 ) -> str:
-    image_grid_class = "image-grid-4" if len(labels) >= 3 else "image-grid-3"
+    image_grid_class = {
+        2: "image-grid-3",
+        3: "image-grid-4",
+        4: "image-grid-5",
+    }.get(len(labels), "image-grid-3")
     prompt_css = ""
     prompt_mobile_css = ""
     if include_prompts:
@@ -224,7 +228,7 @@ def _build_html(
     <summary>View Local Details</summary>
     <div class="meta-grid">
       <div class="meta-block">
-        <div class="prompt-label">User Garment Type</div>
+        <div class="prompt-label">Prepared Source Garment Types</div>
         <pre class="meta-value">{html.escape(source_worn_types)}</pre>
       </div>
       <div class="meta-block">
@@ -238,6 +242,10 @@ def _build_html(
       <div class="meta-block wide">
         <div class="prompt-label">Garment Prompt</div>
         <pre class="meta-value">{html.escape(garment_prompt)}</pre>
+      </div>
+      <div class="meta-block wide">
+        <div class="prompt-label">Prepared User Image URL</div>
+        <pre class="meta-value">{html.escape(input_url or "n/a")}</pre>
       </div>
     </div>
     <div class="prompt-grid">
@@ -465,6 +473,9 @@ def _build_html(
     .image-grid-4 {{
       grid-template-columns: repeat(4, minmax(0, 1fr));
     }}
+    .image-grid-5 {{
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+    }}
     figure {{
       margin: 0;
       border: 1px solid var(--line);
@@ -510,7 +521,8 @@ def _build_html(
         flex-basis: auto;
       }}
       .image-grid-3,
-      .image-grid-4 {{
+      .image-grid-4,
+      .image-grid-5 {{
         grid-template-columns: 1fr;
       }}
 {prompt_mobile_css}
@@ -556,13 +568,15 @@ def _build_html(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Generate side-by-side comparison HTML for two or three bulk try-on runs.")
+    parser = argparse.ArgumentParser(description="Generate side-by-side comparison HTML for two to four bulk try-on runs.")
     parser.add_argument("--left-run-dir", required=True, help="Directory under debug_outputs for the left run")
     parser.add_argument("--right-run-dir", required=True, help="Directory under debug_outputs for the right run")
     parser.add_argument("--third-run-dir", default="", help="Optional third directory under debug_outputs")
+    parser.add_argument("--fourth-run-dir", default="", help="Optional fourth directory under debug_outputs")
     parser.add_argument("--left-label", default="Seed 44")
     parser.add_argument("--right-label", default="Seed 77")
     parser.add_argument("--third-label", default="Seed 123")
+    parser.add_argument("--fourth-label", default="Seed 123 New")
     parser.add_argument("--title", default="Glamify Bulk Tryon Comparison")
     parser.add_argument("--output-run-dir", required=True, help="Destination directory under debug_outputs")
     parser.add_argument("--include-prompts", action="store_true", help="Include per-case prompt details in the HTML")
@@ -574,10 +588,14 @@ def main() -> int:
     output_dir = (debug_outputs / str(args.output_run_dir).strip()).resolve()
     third_run_dir = str(args.third_run_dir or "").strip()
     third_dir: Optional[Path] = (debug_outputs / third_run_dir).resolve() if third_run_dir else None
+    fourth_run_dir = str(args.fourth_run_dir or "").strip()
+    fourth_dir: Optional[Path] = (debug_outputs / fourth_run_dir).resolve() if fourth_run_dir else None
 
     candidates = [left_dir, right_dir, output_dir]
     if third_dir is not None:
         candidates.append(third_dir)
+    if fourth_dir is not None:
+        candidates.append(fourth_dir)
     for candidate in candidates:
         try:
             candidate.relative_to(debug_outputs.resolve())
@@ -598,6 +616,10 @@ def main() -> int:
         run_maps.append(_success_map(_read_rows(third_dir / "results.csv")))
         labels.append(str(args.third_label))
         summaries.append(_read_summary(third_dir / "summary.json"))
+    if fourth_dir is not None:
+        run_maps.append(_success_map(_read_rows(fourth_dir / "results.csv")))
+        labels.append(str(args.fourth_label))
+        summaries.append(_read_summary(fourth_dir / "summary.json"))
 
     shared_files = sorted(set.intersection(*(set(run_map) for run_map in run_maps)))
     merged_rows: List[Tuple[int, str, Dict[str, str], List[Dict[str, str]]]] = []
@@ -619,9 +641,11 @@ def main() -> int:
         "left_run_dir": args.left_run_dir,
         "right_run_dir": args.right_run_dir,
         "third_run_dir": third_run_dir,
+        "fourth_run_dir": fourth_run_dir,
         "left_label": args.left_label,
         "right_label": args.right_label,
         "third_label": args.third_label if third_run_dir else "",
+        "fourth_label": args.fourth_label if fourth_run_dir else "",
         "cases_compared": len(merged_rows),
     }
     (output_dir / "comparison_summary.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")

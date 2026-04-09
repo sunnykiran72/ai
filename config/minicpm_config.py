@@ -48,7 +48,7 @@ class MiniCPMConfig(BaseModel):
     
     # Token limits
     garment_max_new_tokens: int = Field(
-        default=640,
+        default=192,
         ge=64,
         description="Maximum new tokens for garment descriptions"
     )
@@ -87,7 +87,7 @@ class MiniCPMConfig(BaseModel):
     
     # Prompts
     garment_min_words: int = Field(
-        default=200,
+        default=40,
         ge=4,
         description="Minimum word count for garment descriptions"
     )
@@ -165,7 +165,7 @@ class MiniCPMConfig(BaseModel):
         # Token limits - affected by low latency mode
         garment_max_new_tokens = max(64, env_int(
             "MINICPM_SERVICE_GARMENT_MAX_NEW_TOKENS",
-            512 if low_latency_mode else 640
+            160 if low_latency_mode else 192
         ))
         person_max_new_tokens = max(32, env_int(
             "MINICPM_SERVICE_PERSON_MAX_NEW_TOKENS",
@@ -224,7 +224,7 @@ class MiniCPMConfig(BaseModel):
             local_file_first=env_bool("MINICPM_SERVICE_LOCAL_FILE_FIRST", "1"),
             
             # Prompts
-            garment_min_words=max(4, env_int("MINICPM_SERVICE_GARMENT_MIN_WORDS", 200)),
+            garment_min_words=max(12, env_int("MINICPM_SERVICE_GARMENT_MIN_WORDS", 40)),
             garment_prompt=garment_prompt,
             person_prompt=person_prompt,
             

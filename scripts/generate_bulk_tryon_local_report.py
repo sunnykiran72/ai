@@ -97,7 +97,7 @@ def _build_html(*, title: str, rows: List[Dict[str, str]], summary: Dict[str, ob
     <summary>View Local Details</summary>
     <div class="meta-grid">
       <div class="meta-block">
-        <div class="label">User Garment Type</div>
+        <div class="label">Prepared Source Garment Types</div>
         <pre>{html.escape(source_worn_types)}</pre>
       </div>
       <div class="meta-block">
@@ -113,8 +113,16 @@ def _build_html(*, title: str, rows: List[Dict[str, str]], summary: Dict[str, ob
         <pre>{html.escape(garment_prompt)}</pre>
       </div>
       <div class="meta-block wide">
-        <div class="label">Final Prompt</div>
+        <div class="label">Prepared User Image URL</div>
+        <pre>{html.escape(input_url or "n/a")}</pre>
+      </div>
+      <div class="meta-block wide">
+        <div class="label">Actual Try-On Prompt Used</div>
         <pre>{html.escape(prompt_used)}</pre>
+      </div>
+      <div class="meta-block wide">
+        <div class="label">Output URL</div>
+        <pre>{html.escape(output_url or "n/a")}</pre>
       </div>
     </div>
   </details>

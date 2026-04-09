@@ -604,11 +604,11 @@ class TestGarmentPromptNatural:
         prompt = get_minicpm_garment_prompt().lower()
 
         assert "requested garment type" in prompt
-        assert "50 to 80 words" in prompt
+        assert "40 to 90 words" in prompt
         assert "do not add fluff" in prompt
         assert "never infer hidden length" in prompt
         assert "not fully visible" in prompt
-        assert "feature-rich way" in prompt
+        assert "use direct factual wording" in prompt
         assert "do not mention colors" in prompt
 
     def test_minicpm_top_prompt_includes_top_only_structure_fields(self):

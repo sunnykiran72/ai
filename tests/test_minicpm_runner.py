@@ -11,8 +11,8 @@ from core.minicpm_runner import MiniCPMVRunner
 
 class _StubRunner(MiniCPMVRunner):
     def __init__(self):
-        self.garment_max_new_tokens = 640
-        self.garment_min_words = 200
+        self.garment_max_new_tokens = 192
+        self.garment_min_words = 3
         self.calls = []
 
     def _run_prompt(self, image, instruction, max_new_tokens):

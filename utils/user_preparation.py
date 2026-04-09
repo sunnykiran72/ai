@@ -57,10 +57,52 @@ _PERSON_TYPE_MAP: Tuple[Tuple[str, str], ...] = (
     ("person", "person"),
 )
 _AGE_BAND_TOKENS = ("young", "adult", "middle-aged", "older", "teen")
-_HAIR_STYLE_TOKENS = (
-    "straight", "wavy", "curly", "coily", "afro", "braided", "braid", "ponytail", "bun", "locs", "dreadlocks",
+_CANONICAL_HAIR_STYLE_VALUES = (
+    "loose",
+    "wavy",
+    "curly",
+    "coily",
+    "braided",
+    "twists",
+    "locs",
+    "bun",
+    "ponytail",
+    "pigtails",
+    "half-up",
+    "updo",
+    "afro",
 )
-_HAIR_LENGTH_TOKENS = ("short", "medium", "shoulder-length", "long", "bald", "shaved")
+_CANONICAL_HAIR_LENGTH_VALUES = (
+    "bald/shaved",
+    "very short",
+    "short",
+    "medium",
+    "long",
+    "very long",
+)
+_HAIR_STYLE_ALIASES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("half-up", ("half-up", "half up", "half tied", "half tied-up", "half tied up", "half ponytail")),
+    ("pigtails", ("pigtails", "pig tails", "pigtail", "pig tail", "two ponytails", "double ponytails")),
+    ("ponytail", ("ponytail", "pony tail", "tied-back", "tied back")),
+    ("bun", ("bun", "top knot", "topknot", "chignon")),
+    ("updo", ("updo", "up-do", "formal updo")),
+    ("braided", ("braided", "braid", "braids", "plait", "plaits")),
+    ("twists", ("twists", "twist", "rope twists", "flat twists")),
+    ("locs", ("locs", "dreadlocks", "dread locks", "locks")),
+    ("afro", ("afro",)),
+    ("coily", ("coily", "tight coils")),
+    ("curly", ("curly", "curls")),
+    ("wavy", ("wavy", "waves")),
+    ("loose", ("loose", "open", "down", "untied", "free-flowing", "free flowing")),
+)
+_HAIR_LENGTH_ALIASES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    ("bald/shaved", ("bald/shaved", "bald", "shaved", "buzzed", "closely shaved")),
+    ("very short", ("very short", "cropped", "crop", "pixie", "ear-length", "ear length")),
+    ("short", ("short", "chin-length", "chin length", "bob", "short bob")),
+    ("medium", ("medium", "shoulder-length", "shoulder length", "collarbone-length", "collarbone length", "mid-length", "mid length")),
+    ("long", ("long", "below-shoulder", "below shoulder", "chest-length", "chest length")),
+    ("very long", ("very long", "waist-length", "waist length", "hip-length", "hip length")),
+)
 _BODY_BUILD_TOKENS = (
     "slim", "slender", "athletic", "curvy", "petite", "plus-size", "lean", "average", "medium",
 )
@@ -276,14 +318,8 @@ def _sanitize_user_prepare_prompt(raw_text: str) -> str:
         if re.search(rf"\b{re.escape(token)}\b", low):
             fields["age_band"] = token
             break
-    for token in _HAIR_STYLE_TOKENS:
-        if re.search(rf"\b{re.escape(token)}\b", low):
-            fields["hair_style"] = token
-            break
-    for token in _HAIR_LENGTH_TOKENS:
-        if re.search(rf"\b{re.escape(token)}\b", low):
-            fields["hair_length"] = token
-            break
+    fields["hair_style"] = _normalize_hair_style(low)
+    fields["hair_length"] = _normalize_hair_length(low)
     for token in _BODY_BUILD_TOKENS:
         if re.search(rf"\b{re.escape(token)}\b", low):
             fields["body_build"] = token
@@ -348,6 +384,37 @@ def _normalize_hair_color(raw: str) -> str:
     return _normalize_value_by_tokens(low, _HAIR_COLOR_TOKENS, max_words=2)
 
 
+def _normalize_for_alias_matching(raw: str) -> str:
+    return re.sub(r"\s{2,}", " ", re.sub(r"[_/]+", " ", _direct_field_value(raw))).strip()
+
+
+def _match_alias_value(
+    raw: str,
+    alias_groups: Sequence[Tuple[str, Sequence[str]]],
+) -> str:
+    normalized = _normalize_for_alias_matching(raw)
+    if not normalized:
+        return ""
+    for canonical, aliases in alias_groups:
+        for alias in aliases:
+            if re.search(rf"\b{re.escape(alias)}\b", normalized):
+                return canonical
+    return ""
+
+
+def _normalize_hair_style(raw: str) -> str:
+    normalized = _normalize_for_alias_matching(raw)
+    if not normalized:
+        return ""
+    if re.search(r"\b(straight|smooth)\b", normalized):
+        return ""
+    return _match_alias_value(normalized, _HAIR_STYLE_ALIASES)
+
+
+def _normalize_hair_length(raw: str) -> str:
+    return _match_alias_value(raw, _HAIR_LENGTH_ALIASES)
+
+
 def _direct_field_value(value: Any) -> str:
     text = " ".join(str(value or "").split()).strip(" ,.;:")
     if not text:
@@ -358,16 +425,6 @@ def _direct_field_value(value: Any) -> str:
     text = re.sub(r"\b(sunglasses|glasses|eyewear|none)\b", " ", text, flags=re.IGNORECASE)
     text = re.sub(r"\s{2,}", " ", text).strip(" ,.;:")
     return text
-
-
-def _normalize_hair_style_for_prompt(raw: str) -> str:
-    style = _direct_field_value(raw)
-    if not style:
-        return ""
-    # Avoid ambiguity with "stand straight" in downstream try-on prompts.
-    if re.search(r"\bstraight\b", style):
-        style = re.sub(r"\bstraight\b", "smooth", style).strip()
-    return style
 
 
 def _is_hair_hidden(head_covering_raw: str) -> bool:
@@ -391,8 +448,8 @@ def _build_user_prepare_prompt(fields: Dict[str, str]) -> str:
     # Use MiniCPM structured values directly (minimal cleanup only).
     person_type = _direct_field_value(fields.get("person_type", ""))
     age_band = _direct_field_value(fields.get("age_band", ""))
-    hair_style = _normalize_hair_style_for_prompt(fields.get("hair_style", ""))
-    hair_length = _direct_field_value(fields.get("hair_length", ""))
+    hair_style = _normalize_hair_style(fields.get("hair_style", ""))
+    hair_length = _normalize_hair_length(fields.get("hair_length", ""))
     hair_color = _direct_field_value(fields.get("hair_color", ""))
     head_covering = _direct_field_value(fields.get("head_covering", ""))
     body_build = _direct_field_value(fields.get("body_build", ""))
@@ -416,7 +473,7 @@ def _build_user_prepare_prompt(fields: Dict[str, str]) -> str:
         if not v:
             continue
         vv = re.sub(r"\bhair\b", "", v).strip()
-        if vv:
+        if vv and vv not in hair_bits:
             hair_bits.append(vv)
     article = "An" if subject[:1].lower() in {"a", "e", "i", "o", "u"} else "A"
     prompt = f"{article} {subject}"
@@ -424,8 +481,8 @@ def _build_user_prepare_prompt(fields: Dict[str, str]) -> str:
         prompt += f" with {' '.join(hair_bits)} hair"
     if body_build:
         prompt += (" and " if hair_bits else " with ") + body_build + " body build"
-    # Final guardrail: avoid straight/hair ambiguity and strip stray leaked tokens.
-    prompt = re.sub(r"\bstraight\b(?=\s+hair\b)", "smooth", prompt, flags=re.IGNORECASE)
+    # Final guardrail: strip stray leaked tokens and avoid legacy hair labels.
+    prompt = re.sub(r"\b(smooth|straight|shoulder-length)\b(?=\s+hair\b)", " ", prompt, flags=re.IGNORECASE)
     prompt = re.sub(r"\b(sunglasses|glasses|eyewear|none)\b", " ", prompt, flags=re.IGNORECASE)
     prompt = re.sub(r"\s{2,}", " ", prompt).strip(" ,.;:")
     if not prompt:

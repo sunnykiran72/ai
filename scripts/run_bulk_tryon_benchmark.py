@@ -192,6 +192,28 @@ def _generate_html(
     visible_rows = [row for row in rows if row.status == "success" and row.output_url and row.user_input_url]
     cards: List[str] = []
     for row in visible_rows:
+        worn_types_label = ", ".join(row.worn_types or []) or "n/a"
+        prompt_block = ""
+        if row.prompt_used or row.user_prompt or worn_types_label != "n/a":
+            prompt_block = f"""
+  <details class="prompt-details">
+    <summary>View Prompt</summary>
+    <div class="prompt-grid">
+      <div class="prompt-item">
+        <div class="prompt-label">User Prompt</div>
+        <pre>{html.escape(row.user_prompt or "n/a")}</pre>
+      </div>
+      <div class="prompt-item">
+        <div class="prompt-label">Prepared Worn Types</div>
+        <pre>{html.escape(worn_types_label)}</pre>
+      </div>
+      <div class="prompt-item prompt-item-wide">
+        <div class="prompt-label">Final Try-on Prompt</div>
+        <pre>{html.escape(row.prompt_used or "n/a")}</pre>
+      </div>
+    </div>
+  </details>
+"""
         cards.append(
             f"""
 <section class="case-card">
@@ -216,6 +238,7 @@ def _generate_html(
       </a>
     </figure>
   </div>
+  {prompt_block}
 </section>
 """
         )
@@ -431,6 +454,44 @@ def _generate_html(
       text-decoration: none;
       color: inherit;
     }}
+    .prompt-details {{
+      margin-top: 12px;
+      border-radius: 18px;
+      background: var(--surface-soft);
+    }}
+    .prompt-grid {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }}
+    .prompt-item {{
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--surface);
+      padding: 10px;
+    }}
+    .prompt-item-wide {{
+      grid-column: 1 / -1;
+    }}
+    .prompt-label {{
+      margin-bottom: 6px;
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: 700;
+    }}
+    .prompt-item pre {{
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 12px;
+      line-height: 1.45;
+      color: #2a2824;
+      max-height: 240px;
+      overflow: auto;
+    }}
     @media (max-width: 1280px) {{
       .hero-top {{
         grid-template-columns: 1fr;
@@ -443,6 +504,12 @@ def _generate_html(
       }}
       img {{
         height: 420px;
+      }}
+      .prompt-grid {{
+        grid-template-columns: 1fr;
+      }}
+      .prompt-item-wide {{
+        grid-column: auto;
       }}
     }}
     @media (max-width: 780px) {{

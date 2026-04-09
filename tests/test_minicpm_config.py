@@ -34,8 +34,8 @@ class TestMiniCPMConfigDefaults(unittest.TestCase):
             self.assertEqual(config.connect_timeout_s, 10.0)
             
             # Token limits
-            self.assertEqual(config.garment_max_new_tokens, 640)
-            self.assertEqual(config.person_max_new_tokens, 140)
+            self.assertEqual(config.garment_max_new_tokens, 192)
+            self.assertEqual(config.person_max_new_tokens, 200)
             
             # Caching
             self.assertTrue(config.cache_enabled)
@@ -47,13 +47,13 @@ class TestMiniCPMConfigDefaults(unittest.TestCase):
             self.assertTrue(config.local_file_first)
             
             # Prompts
-            self.assertEqual(config.garment_min_words, 200)
+            self.assertEqual(config.garment_min_words, 40)
             self.assertEqual(config.garment_prompt, get_minicpm_garment_prompt())
             garment_prompt = config.garment_prompt.lower()
             self.assertIn("requested garment type", garment_prompt)
             self.assertIn("never infer hidden length", garment_prompt)
             self.assertIn("not fully visible", garment_prompt)
-            self.assertIn("structured, feature-rich way", garment_prompt)
+            self.assertIn("use direct factual wording", garment_prompt)
             self.assertIn("Describe only the human subject", config.person_prompt)
             self.assertIn("face=<facial expression", config.person_prompt)
             self.assertIn("lower_body_pose=<lower-body stance", config.person_prompt)
@@ -118,8 +118,8 @@ class TestMiniCPMConfigEnvironmentVariables(unittest.TestCase):
         """Test that low latency mode affects token limit defaults."""
         with patch.dict(os.environ, {"FLUX2_LOW_LATENCY_MODE": "1"}):
             config = MiniCPMConfig.from_env()
-            self.assertEqual(config.garment_max_new_tokens, 512)
-            self.assertEqual(config.person_max_new_tokens, 96)
+            self.assertEqual(config.garment_max_new_tokens, 160)
+            self.assertEqual(config.person_max_new_tokens, 128)
     
     def test_caching_from_env(self):
         """Test caching configuration from environment."""
@@ -172,16 +172,16 @@ class TestMiniCPMConfigEnvironmentVariables(unittest.TestCase):
 
         self.assertIn("top-only guidance", top_prompt)
         self.assertIn("shoulder layout", top_prompt)
-        self.assertIn("lower-body features", top_prompt)
+        self.assertIn("lower-body garments", top_prompt)
         self.assertIn("not fully visible", top_prompt)
 
         self.assertIn("bottom-only guidance", bottom_prompt)
         self.assertIn("waistband", bottom_prompt)
-        self.assertIn("upper-body features", bottom_prompt)
+        self.assertIn("upper-body garments", bottom_prompt)
         self.assertIn("not fully visible", bottom_prompt)
 
         self.assertIn("dress-only guidance", dress_prompt)
-        self.assertIn("bodice", dress_prompt)
+        self.assertIn("waist transition", dress_prompt)
         self.assertIn("two pieces", dress_prompt)
         self.assertIn("not fully visible", dress_prompt)
 
@@ -250,7 +250,7 @@ class TestMiniCPMConfigValidation(unittest.TestCase):
             "MINICPM_SERVICE_GARMENT_MIN_WORDS": "2",
         }):
             config = MiniCPMConfig.from_env()
-            self.assertEqual(config.garment_min_words, 4)  # Min 4
+            self.assertEqual(config.garment_min_words, 12)  # Min 12
     
     def test_image_sizing_minimum_values(self):
         """Test that image sizing parameters have minimum values enforced."""

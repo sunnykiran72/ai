@@ -185,10 +185,10 @@ class Flux2TryonRequest(BaseModel):
         description="Try-on LoRA scale override (defaults to 1.0 in tryon-lora mode)",
     )
     outputMaxEdge: Optional[int] = Field(
-        default=None,
+        default=1280,
         ge=512,
         le=2048,
-        description="Optional output max edge in pixels (longest side) for try-on generation",
+        description="Output max edge in pixels (longest side) for try-on generation; defaults to 1280",
     )
 
     @field_validator("mode")
