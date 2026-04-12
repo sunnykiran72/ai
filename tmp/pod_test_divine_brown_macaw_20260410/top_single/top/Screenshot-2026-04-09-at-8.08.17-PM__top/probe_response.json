@@ -1,0 +1,147 @@
+{
+  "status": 400,
+  "data": {
+    "result": "REJECTED",
+    "title": "Selection Required",
+    "description": "We found multiple garments. Please select one item to continue.",
+    "reason_codes": [
+      "MULTI_ITEM_SELECTION_REQUIRED"
+    ],
+    "selection_required": true,
+    "total_garments_found": 2,
+    "selection_hint": {
+      "expected_field": "type",
+      "allowed_types": [
+        "top",
+        "bottom",
+        "dress",
+        "outer"
+      ]
+    },
+    "item_breakdown": [
+      {
+        "garment_id": 0,
+        "type": "top",
+        "garment_type": "top",
+        "type_source": "detector",
+        "detection_source": "fashion_object_detection",
+        "promptDescription": "Detected top garment.",
+        "description": "Detected top garment.",
+        "style": "sports top",
+        "category_key": "sports_tops",
+        "primary_category_key": "tops",
+        "url": null,
+        "bbox": [
+          454,
+          319,
+          837,
+          764
+        ],
+        "crop": {
+          "width": 383,
+          "height": 445,
+          "area_ratio": 0.1041842410905312
+        },
+        "confidence": {
+          "yolo": 0.5939198136329651,
+          "detector": 0.5939198136329651
+        },
+        "detector_label": "top",
+        "detector_metrics": {
+          "width": 383.0,
+          "height": 445.0,
+          "aspect_ratio": 0.8606741573033708,
+          "area_ratio": 0.1041842410905312,
+          "center_x_ratio": 0.6147619047619047,
+          "center_y_ratio": 0.3475609756097561,
+          "height_ratio": 0.28562259306803595,
+          "width_ratio": 0.3647619047619048
+        },
+        "tighten_reason": "pair_boundary_top",
+        "selection_index": 0,
+        "rank": 1,
+        "preview_crop_bbox": [
+          454,
+          319,
+          837,
+          764
+        ],
+        "preview_geometry_source": "detector_bbox"
+      },
+      {
+        "garment_id": 1,
+        "type": "bottom",
+        "garment_type": "bottom",
+        "type_source": "detector",
+        "detection_source": "fashion_object_detection",
+        "promptDescription": "Detected bottom garment.",
+        "description": "Detected bottom garment.",
+        "style": "pants",
+        "category_key": "pants",
+        "primary_category_key": "bottoms",
+        "url": null,
+        "bbox": [
+          360,
+          1007,
+          895,
+          1550
+        ],
+        "crop": {
+          "width": 535,
+          "height": 543,
+          "area_ratio": 0.17758114799193106
+        },
+        "confidence": {
+          "yolo": 0.3720291256904602,
+          "detector": 0.3720291256904602
+        },
+        "detector_label": "bottom",
+        "detector_metrics": {
+          "width": 535.0,
+          "height": 543.0,
+          "aspect_ratio": 0.9852670349907919,
+          "area_ratio": 0.17758114799193106,
+          "center_x_ratio": 0.5976190476190476,
+          "center_y_ratio": 0.8206033376123235,
+          "height_ratio": 0.3485237483953787,
+          "width_ratio": 0.5095238095238095
+        },
+        "tighten_reason": "pair_boundary_bottom",
+        "selection_index": 1,
+        "rank": 2,
+        "preview_crop_bbox": [
+          360,
+          1007,
+          895,
+          1550
+        ],
+        "preview_geometry_source": "detector_bbox"
+      }
+    ],
+    "multipart_data": {
+      "format": "multipart-data",
+      "parts": [
+        {
+          "part_name": "item_1",
+          "kind": "crop",
+          "rank": 1,
+          "mime_type": "image/png",
+          "type": "top"
+        },
+        {
+          "part_name": "item_2",
+          "kind": "crop",
+          "rank": 2,
+          "mime_type": "image/png",
+          "type": "bottom"
+        }
+      ]
+    },
+    "latencies": {
+      "total": 0.6011,
+      "gpu_queue_wait": 0.0001
+    },
+    "processing_time_ms": 601
+  },
+  "message": ""
+}

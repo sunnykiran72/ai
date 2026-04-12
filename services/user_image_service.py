@@ -50,6 +50,7 @@ class UserImageService:
 
         minicpm_runner = getattr(self.engine, "minicpm", None)
         grounding_dino = getattr(self.engine, "grounding_dino", None)
+        realesrgan = getattr(self.engine, "realesrgan", None)
 
         def _grounding_detector_fn(image, prompts):
             if grounding_dino is None:
@@ -72,12 +73,21 @@ class UserImageService:
             except Exception:
                 return ""
 
+        def _prepared_image_fn(image):
+            if realesrgan is None or not bool(self.config.app.user_prep_upscale_enabled):
+                return image
+            target_max_edge = max(512, int(self.config.app.user_prep_upscale_target_max_edge))
+            if max(image.size) >= target_max_edge:
+                return image
+            return realesrgan.upscale(image, target_max_edge=target_max_edge)
+
         return await prepare_user_image_pipeline(
             upload,
             grounding_detector_fn=_grounding_detector_fn,
             verifier_fn=_verification_fn,
             description_fn=_description_fn,
             fallback_description_fn=lambda image: main_mod._describe_user_image_for_prepare(image, description_backend=None),
+            prepared_image_fn=_prepared_image_fn,
             upload_fn=main_mod._upload_or_raise,
             blur_check_enabled=bool(self.config.analyze.blur_check_enabled),
             blur_min_focus_score=float(self.config.analyze.blur_min_focus_score),

@@ -1,0 +1,393 @@
+{
+  "status": 200,
+  "data": {
+    "result": "ACCEPTED",
+    "title": "Added To Wardrobe",
+    "description": "Garment extracted successfully.",
+    "reason_codes": [
+      "SINGLE_ITEM",
+      "TYPE_FORCED_EXTRACT",
+      "TYPE_FORCED_VTON"
+    ],
+    "selection_required": false,
+    "clothing_type": "day dress",
+    "category_key": "day_dresses",
+    "primary_category_key": "dresses",
+    "style": "day dress",
+    "selected_type": "dress",
+    "selected_item": {
+      "garment_id": 0,
+      "type": "dress",
+      "garment_type": "dress",
+      "type_source": "requested_type_match",
+      "detection_source": "fashion_object_detection",
+      "promptDescription": "This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette",
+      "description": "This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette",
+      "style": "day dress",
+      "category_key": "day_dresses",
+      "primary_category_key": "dresses",
+      "url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/71377ad4-bb2e-42eb-9ca6-10a156dcc0ac.png",
+      "bbox": [
+        239,
+        97,
+        1063,
+        1555
+      ],
+      "crop": {
+        "width": 824,
+        "height": 1279,
+        "area_ratio": 0.5965093401978298
+      },
+      "confidence": {
+        "yolo": 0.7799410223960876,
+        "detector": 0.7799410223960876
+      },
+      "detector_label": "dress",
+      "detector_metrics": {
+        "width": 824.0,
+        "height": 1279.0,
+        "aspect_ratio": 0.6442533229085223,
+        "area_ratio": 0.5965093401978298,
+        "center_x_ratio": 0.5740740740740741,
+        "center_y_ratio": 0.5876123234916559,
+        "height_ratio": 0.8209242618741976,
+        "width_ratio": 0.7266313932980599
+      },
+      "minicpm_description": "This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the leg, adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette.",
+      "joycaption_description": "",
+      "baseGarmentPrompt": "A single dress garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. Preserve the garment's original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Dress-only: no separate top, no separate skirt, no two-piece outfit look, and no added waistband between bodice and skirt. Keep the dress as one continuous garment from bodice to hem with the original waist transition preserved in a single piece. Do not split it into a separate top and skirt or split the dress into bodice and skirt as if they were separate garments. Keep the bodice and skirt flow smooth, flat, and cloth-like rather than body-shaped. This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette",
+      "extractionAvoidClause": "",
+      "promptDescriptionSource": "minicpm_direct_prompt",
+      "garmentMetadata": {
+        "schema_version": "garment_metadata.v1",
+        "prompt": {
+          "base_garment_prompt": "coverage=full body.",
+          "prompt_description": "This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette",
+          "extraction_avoid_clause": "",
+          "prompt_sections_raw": "",
+          "descriptor_raw_text": "This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the leg, adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette.",
+          "source": "minicpm_direct_prompt"
+        },
+        "classification": {
+          "target_type": "dress",
+          "backend_target_type": "dress",
+          "style": "day dress",
+          "primary_category_key": "dresses",
+          "category_key": "day_dresses"
+        },
+        "color": {
+          "dominant_hexes": [],
+          "accent_hexes": [],
+          "color_hints": [],
+          "profile": {},
+          "mask_source": "",
+          "resolved_source": "pixel",
+          "signal_confidence": 0.48,
+          "signal_strength": "low",
+          "fashion_basecolour": {},
+          "primary_color_label": "",
+          "primary_color_family": "",
+          "secondary_color_label": "",
+          "secondary_color_family": "",
+          "primary_color_descriptor": "",
+          "secondary_color_descriptor": "",
+          "brightness": "unknown",
+          "saturation": "unknown",
+          "undertone": "unknown",
+          "descriptor_source": "profile_composition",
+          "sampling_mask": {}
+        },
+        "details": {
+          "coverage": "full body"
+        }
+      },
+      "detector_bbox": [
+        239,
+        276,
+        1063,
+        1555
+      ],
+      "bbox_geometry_source": "detector_bbox_dress_top_recovery",
+      "extract_crop_bbox": [
+        116,
+        0,
+        1134,
+        1558
+      ],
+      "extract_crop_mode": "garment_bbox_expanded",
+      "output_image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/71377ad4-bb2e-42eb-9ca6-10a156dcc0ac.png",
+      "output_image_source": "flux2_extraction",
+      "raw_image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/71377ad4-bb2e-42eb-9ca6-10a156dcc0ac.png",
+      "raw_image_source": "flux2_extraction",
+      "extraction": {
+        "pipeline": "flux2_extraction",
+        "steps": 10,
+        "seed": 23,
+        "guidance_scale": 3.5,
+        "resolution": [
+          512,
+          768
+        ],
+        "request_total_seconds": 11.959575891494751,
+        "base_garment_prompt": "A single dress garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. Preserve the garment's original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Dress-only: no separate top, no separate skirt, no two-piece outfit look, and no added waistband between bodice and skirt. Keep the dress as one continuous garment from bodice to hem with the original waist transition preserved in a single piece. Do not split it into a separate top and skirt or split the dress into bodice and skirt as if they were separate garments. Keep the bodice and skirt flow smooth, flat, and cloth-like rather than body-shaped. This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette",
+        "prompt_description": "This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette",
+        "lora_enabled": false,
+        "startup_metrics": {
+          "pipeline_init_total_seconds": 97.04002046585083,
+          "pipeline_model_load_seconds": 76.55591368675232,
+          "pipeline_lora_load_seconds": 1.976440191268921,
+          "lora_enabled": true,
+          "lora_required": true,
+          "lora_loaded": true,
+          "lora_mode": "tryon",
+          "lora_path": "/workspace/models/flux2-lora/fal-virtual-tryon",
+          "bfs_lora_path": "/workspace/models/flux2-lora/bfs-best-face-swap",
+          "lora_source_resolved": "/workspace/models/flux2-lora/fal-virtual-tryon",
+          "lora_sources_resolved": [
+            "/workspace/models/flux2-lora/fal-virtual-tryon"
+          ],
+          "lora_weight_loaded": "flux-klein-tryon.safetensors",
+          "lora_weights_loaded": [
+            "flux-klein-tryon.safetensors"
+          ],
+          "lora_adapters_loaded": [
+            "fal_tryon"
+          ],
+          "lora_scales_loaded": [
+            0.7
+          ],
+          "lora_auto_download": true,
+          "lora_downloaded": false,
+          "pipeline_optimize_seconds": 0.008476495742797852,
+          "compile_mode": "none",
+          "compile_status": "disabled",
+          "compile_vae_decode": false,
+          "channels_last": true,
+          "fuse_lora": false,
+          "runtime_lora_toggle": true,
+          "tf32_enabled": true,
+          "torch_version": "2.10.0+cu128",
+          "device": "cuda",
+          "dtype": "torch.bfloat16",
+          "pipeline_class": "Flux2KleinPipeline"
+        },
+        "path": "flux2_extraction",
+        "extraction_avoid_clause": "",
+        "prompt_sections_raw": "",
+        "descriptor_raw_text": "This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the leg, adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette.",
+        "negative_prompt_mode": "none"
+      },
+      "cloth_verified": true,
+      "cloth_verification_source": "flux2_extraction",
+      "promptSectionsRaw": "",
+      "promptDescriptionRaw": "This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette",
+      "extract_type_forced": "dress",
+      "wardrobe_progress_id": "ba8d239f-aec3-49f6-b2df-01df16ced25b",
+      "progress_sync": {
+        "enabled": true,
+        "synced": false,
+        "status_code": 401,
+        "id": "ba8d239f-aec3-49f6-b2df-01df16ced25b",
+        "response": {
+          "message": "Invalid token",
+          "status": 401
+        }
+      },
+      "metadata": {
+        "garmentExtractionMeta": {
+          "pipeline": "flux2_extraction",
+          "steps": 10,
+          "seed": 23,
+          "guidance_scale": 3.5,
+          "resolution": [
+            512,
+            768
+          ],
+          "request_total_seconds": 11.959575891494751,
+          "base_garment_prompt": "A single dress garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. Preserve the garment's original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Dress-only: no separate top, no separate skirt, no two-piece outfit look, and no added waistband between bodice and skirt. Keep the dress as one continuous garment from bodice to hem with the original waist transition preserved in a single piece. Do not split it into a separate top and skirt or split the dress into bodice and skirt as if they were separate garments. Keep the bodice and skirt flow smooth, flat, and cloth-like rather than body-shaped. This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette",
+          "prompt_description": "This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette",
+          "lora_enabled": false,
+          "startup_metrics": {
+            "pipeline_init_total_seconds": 97.04002046585083,
+            "pipeline_model_load_seconds": 76.55591368675232,
+            "pipeline_lora_load_seconds": 1.976440191268921,
+            "lora_enabled": true,
+            "lora_required": true,
+            "lora_loaded": true,
+            "lora_mode": "tryon",
+            "lora_path": "/workspace/models/flux2-lora/fal-virtual-tryon",
+            "bfs_lora_path": "/workspace/models/flux2-lora/bfs-best-face-swap",
+            "lora_source_resolved": "/workspace/models/flux2-lora/fal-virtual-tryon",
+            "lora_sources_resolved": [
+              "/workspace/models/flux2-lora/fal-virtual-tryon"
+            ],
+            "lora_weight_loaded": "flux-klein-tryon.safetensors",
+            "lora_weights_loaded": [
+              "flux-klein-tryon.safetensors"
+            ],
+            "lora_adapters_loaded": [
+              "fal_tryon"
+            ],
+            "lora_scales_loaded": [
+              0.7
+            ],
+            "lora_auto_download": true,
+            "lora_downloaded": false,
+            "pipeline_optimize_seconds": 0.008476495742797852,
+            "compile_mode": "none",
+            "compile_status": "disabled",
+            "compile_vae_decode": false,
+            "channels_last": true,
+            "fuse_lora": false,
+            "runtime_lora_toggle": true,
+            "tf32_enabled": true,
+            "torch_version": "2.10.0+cu128",
+            "device": "cuda",
+            "dtype": "torch.bfloat16",
+            "pipeline_class": "Flux2KleinPipeline"
+          },
+          "path": "flux2_extraction",
+          "extraction_avoid_clause": "",
+          "prompt_sections_raw": "",
+          "descriptor_raw_text": "This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the leg, adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette.",
+          "negative_prompt_mode": "none"
+        },
+        "garmentMetadata": {
+          "schema_version": "garment_metadata.v1",
+          "prompt": {
+            "base_garment_prompt": "coverage=full body.",
+            "prompt_description": "This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette",
+            "extraction_avoid_clause": "",
+            "prompt_sections_raw": "",
+            "descriptor_raw_text": "This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the leg, adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette.",
+            "source": "minicpm_direct_prompt"
+          },
+          "classification": {
+            "target_type": "dress",
+            "backend_target_type": "dress",
+            "style": "day dress",
+            "primary_category_key": "dresses",
+            "category_key": "day_dresses"
+          },
+          "color": {
+            "dominant_hexes": [],
+            "accent_hexes": [],
+            "color_hints": [],
+            "profile": {},
+            "mask_source": "",
+            "resolved_source": "pixel",
+            "signal_confidence": 0.48,
+            "signal_strength": "low",
+            "fashion_basecolour": {},
+            "primary_color_label": "",
+            "primary_color_family": "",
+            "secondary_color_label": "",
+            "secondary_color_family": "",
+            "primary_color_descriptor": "",
+            "secondary_color_descriptor": "",
+            "brightness": "unknown",
+            "saturation": "unknown",
+            "undertone": "unknown",
+            "descriptor_source": "profile_composition",
+            "sampling_mask": {}
+          },
+          "details": {
+            "coverage": "full body"
+          }
+        },
+        "progressSync": {
+          "enabled": true,
+          "synced": false,
+          "status_code": 401,
+          "id": "ba8d239f-aec3-49f6-b2df-01df16ced25b",
+          "response": {
+            "message": "Invalid token",
+            "status": 401
+          }
+        }
+      },
+      "imageUrl": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/71377ad4-bb2e-42eb-9ca6-10a156dcc0ac.png",
+      "outputImage": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/71377ad4-bb2e-42eb-9ca6-10a156dcc0ac.png"
+    },
+    "garmentMetadata": {
+      "schema_version": "garment_metadata.v1",
+      "prompt": {
+        "base_garment_prompt": "coverage=full body.",
+        "prompt_description": "This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette",
+        "extraction_avoid_clause": "",
+        "prompt_sections_raw": "",
+        "descriptor_raw_text": "This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the leg, adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette.",
+        "source": "minicpm_direct_prompt"
+      },
+      "classification": {
+        "target_type": "dress",
+        "backend_target_type": "dress",
+        "style": "day dress",
+        "primary_category_key": "dresses",
+        "category_key": "day_dresses"
+      },
+      "color": {
+        "dominant_hexes": [],
+        "accent_hexes": [],
+        "color_hints": [],
+        "profile": {},
+        "mask_source": "",
+        "resolved_source": "pixel",
+        "signal_confidence": 0.48,
+        "signal_strength": "low",
+        "fashion_basecolour": {},
+        "primary_color_label": "",
+        "primary_color_family": "",
+        "secondary_color_label": "",
+        "secondary_color_family": "",
+        "primary_color_descriptor": "",
+        "secondary_color_descriptor": "",
+        "brightness": "unknown",
+        "saturation": "unknown",
+        "undertone": "unknown",
+        "descriptor_source": "profile_composition",
+        "sampling_mask": {}
+      },
+      "details": {
+        "coverage": "full body"
+      }
+    },
+    "cloth_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/71377ad4-bb2e-42eb-9ca6-10a156dcc0ac.png",
+    "output_image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/71377ad4-bb2e-42eb-9ca6-10a156dcc0ac.png",
+    "extraction_path": "flux2_extraction",
+    "promptDescription": "This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette",
+    "wardrobe_progress_id": "ba8d239f-aec3-49f6-b2df-01df16ced25b",
+    "multipart_data": {
+      "format": "multipart-data",
+      "parts": [
+        {
+          "part_name": "extracted_cloth",
+          "kind": "cloth",
+          "mime_type": "image/png",
+          "image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/71377ad4-bb2e-42eb-9ca6-10a156dcc0ac.png"
+        }
+      ]
+    },
+    "total_garments_found": 1,
+    "latencies": {
+      "total": 25.4029,
+      "gpu_queue_wait": 0.0001,
+      "stages": {
+        "read_input_s": 0.0007,
+        "blur_check_s": 0.0,
+        "yolo_detect_s": 0.0352,
+        "yolo_crop_s": 0.0,
+        "caption_total_s": 0.0,
+        "primary_type_total_s": 0.0,
+        "extract_total_s": 12.9342,
+        "progress_sync_s": 0.963,
+        "minicpm_s": 11.3613,
+        "joycaption_s": 0.0
+      }
+    },
+    "processing_time_ms": 25402,
+    "imageUrl": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/71377ad4-bb2e-42eb-9ca6-10a156dcc0ac.png",
+    "progressId": "ba8d239f-aec3-49f6-b2df-01df16ced25b"
+  },
+  "message": ""
+}

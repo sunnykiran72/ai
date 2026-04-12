@@ -91,6 +91,36 @@ class AppConfig(BaseModel):
         description="Include input image in progress sync payloads"
     )
     
+    # User image prepare upscaling
+    user_prep_upscale_enabled: bool = Field(
+        default=False,
+        description="Enable RealESRGAN-based upscaling for undersized user-image/prepare uploads"
+    )
+    user_prep_upscale_target_max_edge: int = Field(
+        default=1024,
+        description="Target max edge for upscaled prepare images"
+    )
+    user_prep_upscale_model_name: str = Field(
+        default="RealESRGAN_x2plus",
+        description="RealESRGAN model name used for user-image/prepare upscaling"
+    )
+    user_prep_upscale_model_path: str = Field(
+        default="",
+        description="Optional local model path override for prepare-image upscaling"
+    )
+    user_prep_upscale_tile: int = Field(
+        default=0,
+        description="Tile size for RealESRGAN user-image/prepare upscaling"
+    )
+    user_prep_upscale_tile_pad: int = Field(
+        default=10,
+        description="Tile padding for RealESRGAN user-image/prepare upscaling"
+    )
+    user_prep_upscale_pre_pad: int = Field(
+        default=0,
+        description="Pre-padding for RealESRGAN user-image/prepare upscaling"
+    )
+    
     @classmethod
     def from_env(cls) -> "AppConfig":
         """
@@ -112,6 +142,13 @@ class AppConfig(BaseModel):
         - WARDROBE_PROGRESS_API_BASE_URL: Base URL for progress API
         - WARDROBE_PROGRESS_SYNC_TIMEOUT_S: Progress sync timeout (default: 20)
         - WARDROBE_PROGRESS_INCLUDE_INPUT_IMAGE: Set to "1" to include input (default: "0")
+        - USER_PREP_UPSCALE_ENABLED: Set to "1" to enable RealESRGAN upscaling for undersized prepare uploads
+        - USER_PREP_UPSCALE_TARGET_MAX_EDGE: Target max edge for prepared uploads (default: 1024)
+        - USER_PREP_UPSCALE_MODEL_NAME: RealESRGAN model name (default: RealESRGAN_x2plus)
+        - USER_PREP_UPSCALE_MODEL_PATH: Optional local model path override
+        - USER_PREP_UPSCALE_TILE: Tile size for RealESRGAN inference (default: 0)
+        - USER_PREP_UPSCALE_TILE_PAD: Tile padding for RealESRGAN inference (default: 10)
+        - USER_PREP_UPSCALE_PRE_PAD: Pre-padding for RealESRGAN inference (default: 0)
         
         Returns:
             AppConfig instance populated from environment variables
@@ -141,4 +178,11 @@ class AppConfig(BaseModel):
             wardrobe_progress_api_base_url=os.getenv("WARDROBE_PROGRESS_API_BASE_URL", "").strip(),
             wardrobe_progress_sync_timeout_s=max(5, env_int("WARDROBE_PROGRESS_SYNC_TIMEOUT_S", 20)),
             wardrobe_progress_include_input_image=env_bool("WARDROBE_PROGRESS_INCLUDE_INPUT_IMAGE", "0"),
+            user_prep_upscale_enabled=env_bool("USER_PREP_UPSCALE_ENABLED", "0"),
+            user_prep_upscale_target_max_edge=max(512, env_int("USER_PREP_UPSCALE_TARGET_MAX_EDGE", 1024)),
+            user_prep_upscale_model_name=os.getenv("USER_PREP_UPSCALE_MODEL_NAME", "RealESRGAN_x2plus").strip() or "RealESRGAN_x2plus",
+            user_prep_upscale_model_path=os.getenv("USER_PREP_UPSCALE_MODEL_PATH", "").strip(),
+            user_prep_upscale_tile=max(0, env_int("USER_PREP_UPSCALE_TILE", 0)),
+            user_prep_upscale_tile_pad=max(0, env_int("USER_PREP_UPSCALE_TILE_PAD", 10)),
+            user_prep_upscale_pre_pad=max(0, env_int("USER_PREP_UPSCALE_PRE_PAD", 0)),
         )

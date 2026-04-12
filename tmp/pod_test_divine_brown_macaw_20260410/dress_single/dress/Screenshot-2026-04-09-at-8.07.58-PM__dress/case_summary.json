@@ -1,0 +1,21 @@
+{
+  "summary": {
+    "case_id": "Screenshot-2026-04-09-at-8.07.58-PM__dress",
+    "target_type": "dress",
+    "source_image": "/workspace/codex_dress_case/Screenshot 2026-04-09 at 8.07.58\u202fPM.png",
+    "probe_status_code": 200,
+    "probe_selection_required": false,
+    "final_status_code": 200,
+    "final_selection_required": false,
+    "selected_type": "dress",
+    "prompt_description": "This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette",
+    "output_image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/72183f70-6e48-422c-b7aa-b8e2dd882ef2.png",
+    "probe_latency_s": 25.4173,
+    "final_latency_s": 25.478
+  },
+  "source_image": "/workspace/codex_dress_case/Screenshot 2026-04-09 at 8.07.58\u202fPM.png",
+  "working_input": "/workspace/codex_dress_case/Screenshot 2026-04-09 at 8.07.58\u202fPM.png",
+  "chosen_probe_item": null,
+  "probe_response_path": "/workspace/analyze_batch_results_20260410/dress_single/dress/Screenshot-2026-04-09-at-8.07.58-PM__dress/probe_response.json",
+  "final_response_path": "/workspace/analyze_batch_results_20260410/dress_single/dress/Screenshot-2026-04-09-at-8.07.58-PM__dress/final_response.json"
+}

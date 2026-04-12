@@ -1,0 +1,515 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Analyze Full Batch Report</title>
+  <style>
+    :root { --bg:#f3efe7; --card:#fffdf8; --ink:#181512; --muted:#6f655c; --line:#dfd6ca; --accent:#8f3d28; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family: Georgia, 'Iowan Old Style', serif; color:var(--ink); background: radial-gradient(circle at top left, rgba(143,61,40,0.08), transparent 28%), linear-gradient(180deg, #f8f3ec 0%, var(--bg) 100%); }
+    .page { width:min(1550px, calc(100vw - 32px)); margin:24px auto 48px; }
+    .hero { padding:28px 30px; border:1px solid var(--line); background:linear-gradient(135deg, rgba(255,255,255,0.95), rgba(255,248,241,0.92)); border-radius:22px; box-shadow:0 18px 50px rgba(60,39,24,0.08); margin-bottom:22px; }
+    .secondary { padding-top:22px; }
+    h1, h2 { margin:0 0 8px; line-height:1.08; letter-spacing:-0.03em; }
+    h1 { font-size:34px; }
+    h2 { font-size:24px; }
+    p, li { color:var(--muted); }
+    .counts { margin:10px 0 0; padding-left:20px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:22px; padding:22px; margin-bottom:20px; box-shadow:0 14px 36px rgba(28,19,12,0.06); }
+    .card-header { display:flex; justify-content:space-between; gap:16px; align-items:baseline; flex-wrap:wrap; margin-bottom:16px; }
+    .meta { display:flex; gap:10px; flex-wrap:wrap; color:var(--muted); font-size:13px; text-transform:uppercase; letter-spacing:0.08em; }
+    .grid { display:grid; gap:16px; }
+    .images { grid-template-columns:repeat(auto-fit, minmax(240px,1fr)); margin-bottom:18px; }
+    .text { grid-template-columns:repeat(auto-fit, minmax(320px,1fr)); }
+    .panel { border:1px solid var(--line); border-radius:16px; background:rgba(255,255,255,0.75); padding:14px; }
+    .label { font-size:12px; text-transform:uppercase; letter-spacing:0.09em; color:var(--accent); margin-bottom:10px; font-weight:700; }
+    img { display:block; width:100%; height:auto; border-radius:10px; border:1px solid rgba(0,0,0,0.05); background:white; }
+    pre { margin:0; white-space:pre-wrap; word-break:break-word; font:13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color:#2c241d; }
+    a { color:var(--accent); }
+    .link-row { margin:0 0 16px; font-size:14px; }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <h1>Analyze Full Batch Report</h1>
+      <p>Whole-folder pod run from divine_brown_macaw on April 10, 2026. Auto-detected garment types were used so each image was only rerun against the supported types detected in its probe response.</p>
+      <ul class="counts">
+        <li><strong>Completed cases</strong>: 11</li>
+        <li><strong>Error cases</strong>: 1</li>
+        <li><strong>dress</strong>: 10</li><li><strong>top</strong>: 1</li>
+      </ul>
+    </header>
+    
+    <section class="hero secondary">
+      <h2>Error Cases</h2>
+      <div class="grid text"><section class="panel"><div class="label">Whisk_f658c7da5274d838a724581cb8945c78dr__outer</div><pre>{&quot;error&quot;: &quot;Empty error file&quot;}</pre></section></div>
+    </section>
+    
+    
+    <article class="card">
+      <header class="card-header">
+        <h2>473Wx593H-700969347-multi-MODEL__dress</h2>
+        <div class="meta">
+          <span>target: dress</span>
+          <span>selected: dress</span>
+        </div>
+      </header>
+      <div class="grid images">
+        <figure class="panel image"><div class="label">Source Image</div><img src="assets/dress_473Wx593H-700969347-multi-MODEL__dress_source.png" alt="Source Image"></figure>
+        <figure class="panel image"><div class="label">Input Crop</div><img src="assets/dress_473Wx593H-700969347-multi-MODEL__dress_crop.png" alt="Input Crop"></figure>
+        <figure class="panel image"><div class="label">Extracted Output</div><img src="assets/dress_473Wx593H-700969347-multi-MODEL__dress_output.png" alt="Extracted Output"></figure>
+      </div>
+      <p class="link-row"><a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/63def5b9-bde1-4021-ae0c-aa18dc0f12fc.png">Output image URL</a></p>
+      <div class="grid text">
+        <section class="panel text"><div class="label">Prompt Description</div><pre>This garment is a strapless dress with a fitted bodice transitioning into a voluminous skirt. The upper edge features a wide, gathered neckline with a slight pleat detail at the center front. Thin, adjustable shoulder straps are attached to the bodice, providing support. The bodice is structured with vertical seams and a drawstring closure at the waist, creating a cinched silhouette. The skirt is gathered from the waistband, forming a full, flared shape that extends to mid-calf length. The hemline is straight and even, with no visible slits or cutouts. The dress is constructed from a single piece of fabric, with the bodice and skirt seamlessly integrated. The fabric exhibits a tie-dye pattern, adding visual interest to the construction. The overall design emphasizes a continuous flow from the bodice to the skirt, with the gathered elements contributing to the dress&#x27;s fullness and shape</pre></section>
+        <section class="panel text"><div class="label">MiniCPM Description</div><pre>This garment is a strapless dress with a fitted bodice transitioning into a voluminous skirt. The upper edge features a wide, gathered neckline with a slight pleat detail at the center front. Thin, adjustable shoulder straps are attached to the bodice, providing support. The bodice is structured with vertical seams and a drawstring closure at the waist, creating a cinched silhouette. The skirt is gathered from the waistband, forming a full, flared shape that extends to mid-calf length. The hemline is straight and even, with no visible slits or cutouts. The dress is constructed from a single piece of fabric, with the bodice and skirt seamlessly integrated. The fabric exhibits a tie-dye pattern, adding visual interest to the construction. The overall design emphasizes a continuous flow from the bodice to the skirt, with the gathered elements contributing to the dress&#x27;s fullness and shape.</pre></section>
+        <section class="panel text"><div class="label">Base Garment Prompt</div><pre>A single dress garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. Preserve the garment&#x27;s original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Dress-only: no separate top, no separate skirt, no two-piece outfit look, and no added waistband between bodice and skirt. Keep the dress as one continuous garment from bodice to hem with the original waist transition preserved in a single piece. Do not split it into a separate top and skirt or split the dress into bodice and skirt as if they were separate garments. Keep the bodice and skirt flow smooth, flat, and cloth-like rather than body-shaped. This garment is a strapless dress with a fitted bodice transitioning into a voluminous skirt. The upper edge features a wide, gathered neckline with a slight pleat detail at the center front. Thin, adjustable shoulder straps are attached to the bodice, providing support. The bodice is structured with vertical seams and a drawstring closure at the waist, creating a cinched silhouette. The skirt is gathered from the waistband, forming a full, flared shape that extends to mid-calf length. The hemline is straight and even, with no visible slits or cutouts. The dress is constructed from a single piece of fabric, with the bodice and skirt seamlessly integrated. The fabric exhibits a tie-dye pattern, adding visual interest to the construction. The overall design emphasizes a continuous flow from the bodice to the skirt, with the gathered elements contributing to the dress&#x27;s fullness and shape</pre></section>
+        <section class="panel text"><div class="label">Case Summary</div><pre>{
+  &quot;summary&quot;: {
+    &quot;case_id&quot;: &quot;473Wx593H-700969347-multi-MODEL__dress&quot;,
+    &quot;target_type&quot;: &quot;dress&quot;,
+    &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/-473Wx593H-700969347-multi-MODEL.png&quot;,
+    &quot;probe_status_code&quot;: 200,
+    &quot;probe_selection_required&quot;: false,
+    &quot;final_status_code&quot;: 200,
+    &quot;final_selection_required&quot;: false,
+    &quot;selected_type&quot;: &quot;dress&quot;,
+    &quot;prompt_description&quot;: &quot;This garment is a strapless dress with a fitted bodice transitioning into a voluminous skirt. The upper edge features a wide, gathered neckline with a slight pleat detail at the center front. Thin, adjustable shoulder straps are attached to the bodice, providing support. The bodice is structured with vertical seams and a drawstring closure at the waist, creating a cinched silhouette. The skirt is gathered from the waistband, forming a full, flared shape that extends to mid-calf length. The hemline is straight and even, with no visible slits or cutouts. The dress is constructed from a single piece of fabric, with the bodice and skirt seamlessly integrated. The fabric exhibits a tie-dye pattern, adding visual interest to the construction. The overall design emphasizes a continuous flow from the bodice to the skirt, with the gathered elements contributing to the dress&#x27;s fullness and shape&quot;,
+    &quot;output_image_url&quot;: &quot;https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/63def5b9-bde1-4021-ae0c-aa18dc0f12fc.png&quot;,
+    &quot;probe_latency_s&quot;: 16.9981,
+    &quot;final_latency_s&quot;: 16.2868
+  },
+  &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/-473Wx593H-700969347-multi-MODEL.png&quot;,
+  &quot;working_input&quot;: &quot;/workspace/codex_test_garments_full_20260410/-473Wx593H-700969347-multi-MODEL.png&quot;,
+  &quot;chosen_probe_item&quot;: null,
+  &quot;probe_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/dress/473Wx593H-700969347-multi-MODEL__dress/probe_response.json&quot;,
+  &quot;final_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/dress/473Wx593H-700969347-multi-MODEL__dress/final_response.json&quot;
+}</pre></section>
+      </div>
+    </article>
+    
+    <article class="card">
+      <header class="card-header">
+        <h2>6c7d501b08c20e437f661fcf7a11bde5__dress</h2>
+        <div class="meta">
+          <span>target: dress</span>
+          <span>selected: dress</span>
+        </div>
+      </header>
+      <div class="grid images">
+        <figure class="panel image"><div class="label">Source Image</div><img src="assets/dress_6c7d501b08c20e437f661fcf7a11bde5__dress_source.png" alt="Source Image"></figure>
+        <figure class="panel image"><div class="label">Input Crop</div><img src="assets/dress_6c7d501b08c20e437f661fcf7a11bde5__dress_crop.png" alt="Input Crop"></figure>
+        <figure class="panel image"><div class="label">Extracted Output</div><img src="assets/dress_6c7d501b08c20e437f661fcf7a11bde5__dress_output.png" alt="Extracted Output"></figure>
+      </div>
+      <p class="link-row"><a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/5a9295b3-71fb-4008-a331-8c4591e9147c.png">Output image URL</a></p>
+      <div class="grid text">
+        <section class="panel text"><div class="label">Prompt Description</div><pre>This garment is a sleeveless, multi-tiered maxi dress with a continuous bodice-to-skirt transition. The upper edge features a gathered, elasticized neckline with thin shoulder straps forming a halter style. The bodice transitions into a tiered skirt composed of seven distinct horizontal panels, each with a ruffled hemline. Each tier is a separate panel, creating a cascading effect from the waist to the hem. The skirt panels are arranged in a vertical sequence, with each panel slightly wider than the one above it, contributing to a full, voluminous silhouette. The hemline is asymmetrical, with the right side appearing slightly longer than the left, creating a subtle high-low effect. The fabric appears lightweight and slightly textured, with visible seam lines separating each tier. The dress lacks visible closures at the front or back, suggesting a pull-on style or hidden fastenings. The overall construction emphasizes a layered, ruffled aesthetic through its tiered panel design and ruffled hems</pre></section>
+        <section class="panel text"><div class="label">MiniCPM Description</div><pre>This garment is a sleeveless, multi-tiered maxi dress with a continuous bodice-to-skirt transition. The upper edge features a gathered, elasticized neckline with thin shoulder straps forming a halter style. The bodice transitions into a tiered skirt composed of seven distinct horizontal panels, each with a ruffled hemline. Each tier is a separate panel, creating a cascading effect from the waist to the hem. The skirt panels are arranged in a vertical sequence, with each panel slightly wider than the one above it, contributing to a full, voluminous silhouette. The hemline is asymmetrical, with the right side appearing slightly longer than the left, creating a subtle high-low effect. The fabric appears lightweight and slightly textured, with visible seam lines separating each tier. The dress lacks visible closures at the front or back, suggesting a pull-on style or hidden fastenings. The overall construction emphasizes a layered, ruffled aesthetic through its tiered panel design and ruffled hems.</pre></section>
+        <section class="panel text"><div class="label">Base Garment Prompt</div><pre>A single dress garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. Preserve the garment&#x27;s original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Dress-only: no separate top, no separate skirt, no two-piece outfit look, and no added waistband between bodice and skirt. Keep the dress as one continuous garment from bodice to hem with the original waist transition preserved in a single piece. Do not split it into a separate top and skirt or split the dress into bodice and skirt as if they were separate garments. Keep the bodice and skirt flow smooth, flat, and cloth-like rather than body-shaped. This garment is a sleeveless, multi-tiered maxi dress with a continuous bodice-to-skirt transition. The upper edge features a gathered, elasticized neckline with thin shoulder straps forming a halter style. The bodice transitions into a tiered skirt composed of seven distinct horizontal panels, each with a ruffled hemline. Each tier is a separate panel, creating a cascading effect from the waist to the hem. The skirt panels are arranged in a vertical sequence, with each panel slightly wider than the one above it, contributing to a full, voluminous silhouette. The hemline is asymmetrical, with the right side appearing slightly longer than the left, creating a subtle high-low effect. The fabric appears lightweight and slightly textured, with visible seam lines separating each tier. The dress lacks visible closures at the front or back, suggesting a pull-on style or hidden fastenings. The overall construction emphasizes a layered, ruffled aesthetic through its tiered panel design and ruffled hems</pre></section>
+        <section class="panel text"><div class="label">Case Summary</div><pre>{
+  &quot;summary&quot;: {
+    &quot;case_id&quot;: &quot;6c7d501b08c20e437f661fcf7a11bde5__dress&quot;,
+    &quot;target_type&quot;: &quot;dress&quot;,
+    &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/6c7d501b08c20e437f661fcf7a11bde5.jpg&quot;,
+    &quot;probe_status_code&quot;: 200,
+    &quot;probe_selection_required&quot;: false,
+    &quot;final_status_code&quot;: 200,
+    &quot;final_selection_required&quot;: false,
+    &quot;selected_type&quot;: &quot;dress&quot;,
+    &quot;prompt_description&quot;: &quot;This garment is a sleeveless, multi-tiered maxi dress with a continuous bodice-to-skirt transition. The upper edge features a gathered, elasticized neckline with thin shoulder straps forming a halter style. The bodice transitions into a tiered skirt composed of seven distinct horizontal panels, each with a ruffled hemline. Each tier is a separate panel, creating a cascading effect from the waist to the hem. The skirt panels are arranged in a vertical sequence, with each panel slightly wider than the one above it, contributing to a full, voluminous silhouette. The hemline is asymmetrical, with the right side appearing slightly longer than the left, creating a subtle high-low effect. The fabric appears lightweight and slightly textured, with visible seam lines separating each tier. The dress lacks visible closures at the front or back, suggesting a pull-on style or hidden fastenings. The overall construction emphasizes a layered, ruffled aesthetic through its tiered panel design and ruffled hems&quot;,
+    &quot;output_image_url&quot;: &quot;https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/5a9295b3-71fb-4008-a331-8c4591e9147c.png&quot;,
+    &quot;probe_latency_s&quot;: 21.1116,
+    &quot;final_latency_s&quot;: 21.1447
+  },
+  &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/6c7d501b08c20e437f661fcf7a11bde5.jpg&quot;,
+  &quot;working_input&quot;: &quot;/workspace/codex_test_garments_full_20260410/6c7d501b08c20e437f661fcf7a11bde5.jpg&quot;,
+  &quot;chosen_probe_item&quot;: null,
+  &quot;probe_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/dress/6c7d501b08c20e437f661fcf7a11bde5__dress/probe_response.json&quot;,
+  &quot;final_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/dress/6c7d501b08c20e437f661fcf7a11bde5__dress/final_response.json&quot;
+}</pre></section>
+      </div>
+    </article>
+    
+    <article class="card">
+      <header class="card-header">
+        <h2>Screenshot-2026-04-09-at-8.07.58-PM__dress</h2>
+        <div class="meta">
+          <span>target: dress</span>
+          <span>selected: dress</span>
+        </div>
+      </header>
+      <div class="grid images">
+        <figure class="panel image"><div class="label">Source Image</div><img src="assets/dress_Screenshot-2026-04-09-at-8.07.58-PM__dress_source.png" alt="Source Image"></figure>
+        <figure class="panel image"><div class="label">Input Crop</div><img src="assets/dress_Screenshot-2026-04-09-at-8.07.58-PM__dress_crop.png" alt="Input Crop"></figure>
+        <figure class="panel image"><div class="label">Extracted Output</div><img src="assets/dress_Screenshot-2026-04-09-at-8.07.58-PM__dress_output.png" alt="Extracted Output"></figure>
+      </div>
+      <p class="link-row"><a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/71377ad4-bb2e-42eb-9ca6-10a156dcc0ac.png">Output image URL</a></p>
+      <div class="grid text">
+        <section class="panel text"><div class="label">Prompt Description</div><pre>This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment&#x27;s dramatic silhouette</pre></section>
+        <section class="panel text"><div class="label">MiniCPM Description</div><pre>This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the leg, adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment&#x27;s dramatic silhouette.</pre></section>
+        <section class="panel text"><div class="label">Base Garment Prompt</div><pre>A single dress garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. Preserve the garment&#x27;s original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Dress-only: no separate top, no separate skirt, no two-piece outfit look, and no added waistband between bodice and skirt. Keep the dress as one continuous garment from bodice to hem with the original waist transition preserved in a single piece. Do not split it into a separate top and skirt or split the dress into bodice and skirt as if they were separate garments. Keep the bodice and skirt flow smooth, flat, and cloth-like rather than body-shaped. This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment&#x27;s dramatic silhouette</pre></section>
+        <section class="panel text"><div class="label">Case Summary</div><pre>{
+  &quot;summary&quot;: {
+    &quot;case_id&quot;: &quot;Screenshot-2026-04-09-at-8.07.58-PM__dress&quot;,
+    &quot;target_type&quot;: &quot;dress&quot;,
+    &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/Screenshot 2026-04-09 at 8.07.58\u202fPM.png&quot;,
+    &quot;probe_status_code&quot;: 200,
+    &quot;probe_selection_required&quot;: false,
+    &quot;final_status_code&quot;: 200,
+    &quot;final_selection_required&quot;: false,
+    &quot;selected_type&quot;: &quot;dress&quot;,
+    &quot;prompt_description&quot;: &quot;This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment&#x27;s dramatic silhouette&quot;,
+    &quot;output_image_url&quot;: &quot;https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/71377ad4-bb2e-42eb-9ca6-10a156dcc0ac.png&quot;,
+    &quot;probe_latency_s&quot;: 25.4009,
+    &quot;final_latency_s&quot;: 25.4543
+  },
+  &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/Screenshot 2026-04-09 at 8.07.58\u202fPM.png&quot;,
+  &quot;working_input&quot;: &quot;/workspace/codex_test_garments_full_20260410/Screenshot 2026-04-09 at 8.07.58\u202fPM.png&quot;,
+  &quot;chosen_probe_item&quot;: null,
+  &quot;probe_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/dress/Screenshot-2026-04-09-at-8.07.58-PM__dress/probe_response.json&quot;,
+  &quot;final_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/dress/Screenshot-2026-04-09-at-8.07.58-PM__dress/final_response.json&quot;
+}</pre></section>
+      </div>
+    </article>
+    
+    <article class="card">
+      <header class="card-header">
+        <h2>Screenshot-2026-04-09-at-8.15.16-PM__dress</h2>
+        <div class="meta">
+          <span>target: dress</span>
+          <span>selected: dress</span>
+        </div>
+      </header>
+      <div class="grid images">
+        <figure class="panel image"><div class="label">Source Image</div><img src="assets/dress_Screenshot-2026-04-09-at-8.15.16-PM__dress_source.png" alt="Source Image"></figure>
+        <figure class="panel image"><div class="label">Input Crop</div><img src="assets/dress_Screenshot-2026-04-09-at-8.15.16-PM__dress_crop.png" alt="Input Crop"></figure>
+        <figure class="panel image"><div class="label">Extracted Output</div><img src="assets/dress_Screenshot-2026-04-09-at-8.15.16-PM__dress_output.png" alt="Extracted Output"></figure>
+      </div>
+      <p class="link-row"><a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/4da85a6d-6397-4f57-8f61-f8be715f1cd4.png">Output image URL</a></p>
+      <div class="grid text">
+        <section class="panel text"><div class="label">Prompt Description</div><pre>This garment is a high-neck, long-sleeved dress with a fitted bodice that transitions into a flared skirt. The upper edge features a high, turtleneck-style neckline with a diagonal cross-over seam detail at the front, creating an X-shaped pattern. The shoulders are structured with pronounced, angular shoulder pads that extend outward, giving a dramatic silhouette. The sleeves are long and fitted, extending to the wrists without visible cuffs. The bodice is form-fitting and extends seamlessly into the skirt, which begins at the natural waistline with a diagonal seam that runs from the lower right side of the bust to the left hip, creating a ruched, gathered effect along the diagonal panel. The skirt flares outward from the hips, forming a wide, bell-shaped silhouette that reaches the floor. The hem is a full-length, straight cut with a slight flare at the bottom. There are no visible closures or openings on the front of the dress. The fabric appears to have a , velvety texture, contributing to the gathered and ruched detailing along the diagonal panel and the lower skirt. The overall construction is a single, continuous piece with a structured bodice and a voluminous, ruched skirt</pre></section>
+        <section class="panel text"><div class="label">MiniCPM Description</div><pre>This garment is a high-neck, long-sleeved dress with a fitted bodice that transitions into a flared skirt. The upper edge features a high, turtleneck-style neckline with a diagonal cross-over seam detail at the front, creating an X-shaped pattern. The shoulders are structured with pronounced, angular shoulder pads that extend outward, giving a dramatic silhouette. The sleeves are long and fitted, extending to the wrists without visible cuffs. The bodice is form-fitting and extends seamlessly into the skirt, which begins at the natural waistline with a diagonal seam that runs from the lower right side of the bust to the left hip, creating a ruched, gathered effect along the diagonal panel. The skirt flares outward from the hips, forming a wide, bell-shaped silhouette that reaches the floor. The hem is a full-length, straight cut with a slight flare at the bottom. There are no visible closures or openings on the front of the dress. The fabric appears to have a soft, velvety texture, contributing to the gathered and ruched detailing along the diagonal panel and the lower skirt. The overall construction is a single, continuous piece with a structured bodice and a voluminous, ruched skirt.</pre></section>
+        <section class="panel text"><div class="label">Base Garment Prompt</div><pre>A single dress garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. Preserve the garment&#x27;s original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Dress-only: no separate top, no separate skirt, no two-piece outfit look, and no added waistband between bodice and skirt. Keep the dress as one continuous garment from bodice to hem with the original waist transition preserved in a single piece. Do not split it into a separate top and skirt or split the dress into bodice and skirt as if they were separate garments. Keep the bodice and skirt flow smooth, flat, and cloth-like rather than body-shaped. This garment is a high-neck, long-sleeved dress with a fitted bodice that transitions into a flared skirt. The upper edge features a high, turtleneck-style neckline with a diagonal cross-over seam detail at the front, creating an X-shaped pattern. The shoulders are structured with pronounced, angular shoulder pads that extend outward, giving a dramatic silhouette. The sleeves are long and fitted, extending to the wrists without visible cuffs. The bodice is form-fitting and extends seamlessly into the skirt, which begins at the natural waistline with a diagonal seam that runs from the lower right side of the bust to the left hip, creating a ruched, gathered effect along the diagonal panel. The skirt flares outward from the hips, forming a wide, bell-shaped silhouette that reaches the floor. The hem is a full-length, straight cut with a slight flare at the bottom. There are no visible closures or openings on the front of the dress. The fabric appears to have a , velvety texture, contributing to the gathered and ruched detailing along the diagonal panel and the lower skirt. The overall construction is a single, continuous piece with a structured bodice and a voluminous, ruched skirt</pre></section>
+        <section class="panel text"><div class="label">Case Summary</div><pre>{
+  &quot;summary&quot;: {
+    &quot;case_id&quot;: &quot;Screenshot-2026-04-09-at-8.15.16-PM__dress&quot;,
+    &quot;target_type&quot;: &quot;dress&quot;,
+    &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/Screenshot 2026-04-09 at 8.15.16\u202fPM.png&quot;,
+    &quot;probe_status_code&quot;: 200,
+    &quot;probe_selection_required&quot;: false,
+    &quot;final_status_code&quot;: 200,
+    &quot;final_selection_required&quot;: false,
+    &quot;selected_type&quot;: &quot;dress&quot;,
+    &quot;prompt_description&quot;: &quot;This garment is a high-neck, long-sleeved dress with a fitted bodice that transitions into a flared skirt. The upper edge features a high, turtleneck-style neckline with a diagonal cross-over seam detail at the front, creating an X-shaped pattern. The shoulders are structured with pronounced, angular shoulder pads that extend outward, giving a dramatic silhouette. The sleeves are long and fitted, extending to the wrists without visible cuffs. The bodice is form-fitting and extends seamlessly into the skirt, which begins at the natural waistline with a diagonal seam that runs from the lower right side of the bust to the left hip, creating a ruched, gathered effect along the diagonal panel. The skirt flares outward from the hips, forming a wide, bell-shaped silhouette that reaches the floor. The hem is a full-length, straight cut with a slight flare at the bottom. There are no visible closures or openings on the front of the dress. The fabric appears to have a , velvety texture, contributing to the gathered and ruched detailing along the diagonal panel and the lower skirt. The overall construction is a single, continuous piece with a structured bodice and a voluminous, ruched skirt&quot;,
+    &quot;output_image_url&quot;: &quot;https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/4da85a6d-6397-4f57-8f61-f8be715f1cd4.png&quot;,
+    &quot;probe_latency_s&quot;: 26.9721,
+    &quot;final_latency_s&quot;: 27.097
+  },
+  &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/Screenshot 2026-04-09 at 8.15.16\u202fPM.png&quot;,
+  &quot;working_input&quot;: &quot;/workspace/codex_test_garments_full_20260410/Screenshot 2026-04-09 at 8.15.16\u202fPM.png&quot;,
+  &quot;chosen_probe_item&quot;: null,
+  &quot;probe_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/dress/Screenshot-2026-04-09-at-8.15.16-PM__dress/probe_response.json&quot;,
+  &quot;final_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/dress/Screenshot-2026-04-09-at-8.15.16-PM__dress/final_response.json&quot;
+}</pre></section>
+      </div>
+    </article>
+    
+    <article class="card">
+      <header class="card-header">
+        <h2>Screenshot-2026-04-09-at-8.15.41-PM__dress</h2>
+        <div class="meta">
+          <span>target: dress</span>
+          <span>selected: dress</span>
+        </div>
+      </header>
+      <div class="grid images">
+        <figure class="panel image"><div class="label">Source Image</div><img src="assets/dress_Screenshot-2026-04-09-at-8.15.41-PM__dress_source.png" alt="Source Image"></figure>
+        <figure class="panel image"><div class="label">Input Crop</div><img src="assets/dress_Screenshot-2026-04-09-at-8.15.41-PM__dress_crop.png" alt="Input Crop"></figure>
+        <figure class="panel image"><div class="label">Extracted Output</div><img src="assets/dress_Screenshot-2026-04-09-at-8.15.41-PM__dress_output.png" alt="Extracted Output"></figure>
+      </div>
+      <p class="link-row"><a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/b15b3e5d-c67f-4293-b5d2-254bd4442463.png">Output image URL</a></p>
+      <div class="grid text">
+        <section class="panel text"><div class="label">Prompt Description</div><pre>This garment is a fitted bodycon dress with a structured bodice and skirt. The upper edge features a sweetheart neckline with a square cutout at the center front. The shoulder layout includes short sleeves that are attached directly to the bodice without visible straps. The bodice transitions seamlessly into the skirt, forming a single continuous piece. Vertical seams run from the bust to the hem, creating a tailored fit. The closure consists of six large, round, -colored buttons arranged in a vertical line down the center front. The skirt silhouette is form-fitting and short, ending above the knee. The fabric exhibits a textured pattern resembling crocodile , adding visual interest. The hem is straight and even, with no visible slits or cutouts. The dress&#x27;s construction emphasizes a structured, hourglass shape through its tailored seams and button closure</pre></section>
+        <section class="panel text"><div class="label">MiniCPM Description</div><pre>This garment is a fitted bodycon dress with a structured bodice and skirt. The upper edge features a sweetheart neckline with a square cutout at the center front. The shoulder layout includes short sleeves that are attached directly to the bodice without visible straps. The bodice transitions seamlessly into the skirt, forming a single continuous piece. Vertical seams run from the bust to the hem, creating a tailored fit. The closure consists of six large, round, gold-colored buttons arranged in a vertical line down the center front. The skirt silhouette is form-fitting and short, ending above the knee. The fabric exhibits a textured pattern resembling crocodile skin, adding visual interest. The hem is straight and even, with no visible slits or cutouts. The dress&#x27;s construction emphasizes a structured, hourglass shape through its tailored seams and button closure.</pre></section>
+        <section class="panel text"><div class="label">Base Garment Prompt</div><pre>A single dress garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. Preserve the garment&#x27;s original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Dress-only: no separate top, no separate skirt, no two-piece outfit look, and no added waistband between bodice and skirt. Keep the dress as one continuous garment from bodice to hem with the original waist transition preserved in a single piece. Do not split it into a separate top and skirt or split the dress into bodice and skirt as if they were separate garments. Keep the bodice and skirt flow smooth, flat, and cloth-like rather than body-shaped. This garment is a fitted bodycon dress with a structured bodice and skirt. The upper edge features a sweetheart neckline with a square cutout at the center front. The shoulder layout includes short sleeves that are attached directly to the bodice without visible straps. The bodice transitions seamlessly into the skirt, forming a single continuous piece. Vertical seams run from the bust to the hem, creating a tailored fit. The closure consists of six large, round, -colored buttons arranged in a vertical line down the center front. The skirt silhouette is form-fitting and short, ending above the knee. The fabric exhibits a textured pattern resembling crocodile , adding visual interest. The hem is straight and even, with no visible slits or cutouts. The dress&#x27;s construction emphasizes a structured, hourglass shape through its tailored seams and button closure</pre></section>
+        <section class="panel text"><div class="label">Case Summary</div><pre>{
+  &quot;summary&quot;: {
+    &quot;case_id&quot;: &quot;Screenshot-2026-04-09-at-8.15.41-PM__dress&quot;,
+    &quot;target_type&quot;: &quot;dress&quot;,
+    &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/Screenshot 2026-04-09 at 8.15.41\u202fPM.png&quot;,
+    &quot;probe_status_code&quot;: 200,
+    &quot;probe_selection_required&quot;: false,
+    &quot;final_status_code&quot;: 200,
+    &quot;final_selection_required&quot;: false,
+    &quot;selected_type&quot;: &quot;dress&quot;,
+    &quot;prompt_description&quot;: &quot;This garment is a fitted bodycon dress with a structured bodice and skirt. The upper edge features a sweetheart neckline with a square cutout at the center front. The shoulder layout includes short sleeves that are attached directly to the bodice without visible straps. The bodice transitions seamlessly into the skirt, forming a single continuous piece. Vertical seams run from the bust to the hem, creating a tailored fit. The closure consists of six large, round, -colored buttons arranged in a vertical line down the center front. The skirt silhouette is form-fitting and short, ending above the knee. The fabric exhibits a textured pattern resembling crocodile , adding visual interest. The hem is straight and even, with no visible slits or cutouts. The dress&#x27;s construction emphasizes a structured, hourglass shape through its tailored seams and button closure&quot;,
+    &quot;output_image_url&quot;: &quot;https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/b15b3e5d-c67f-4293-b5d2-254bd4442463.png&quot;,
+    &quot;probe_latency_s&quot;: 18.5792,
+    &quot;final_latency_s&quot;: 18.5307
+  },
+  &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/Screenshot 2026-04-09 at 8.15.41\u202fPM.png&quot;,
+  &quot;working_input&quot;: &quot;/workspace/codex_test_garments_full_20260410/Screenshot 2026-04-09 at 8.15.41\u202fPM.png&quot;,
+  &quot;chosen_probe_item&quot;: null,
+  &quot;probe_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/dress/Screenshot-2026-04-09-at-8.15.41-PM__dress/probe_response.json&quot;,
+  &quot;final_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/dress/Screenshot-2026-04-09-at-8.15.41-PM__dress/final_response.json&quot;
+}</pre></section>
+      </div>
+    </article>
+    
+    <article class="card">
+      <header class="card-header">
+        <h2>WXLWZYWL-Fall-Savings-Day-Clearance-2024-Women-Casual-Turn-Down-Dress-Vintage-3-4-Sleeve-Maxi-Dresses-Pretty-Floral-Print-Summer-Dress_57887428-c8e1-4838-9fff-7678fba11345.48ac2e7c66741bae2d5b53885cfb32d7__dress</h2>
+        <div class="meta">
+          <span>target: dress</span>
+          <span>selected: dress</span>
+        </div>
+      </header>
+      <div class="grid images">
+        <figure class="panel image"><div class="label">Source Image</div><img src="assets/dress_WXLWZYWL-Fall-Savings-Day-Clearance-2024-Women-Casual-Turn-Down-Dress-Vintage-3-4-Sleeve-Maxi-Dresses-Pretty-Floral-Print-Summer-Dress_57887428-c8e1-4838-9fff-7678fba11345.48ac2e7c66741bae2d5b53885cfb32d7__dress_source.png" alt="Source Image"></figure>
+        <figure class="panel image"><div class="label">Input Crop</div><img src="assets/dress_WXLWZYWL-Fall-Savings-Day-Clearance-2024-Women-Casual-Turn-Down-Dress-Vintage-3-4-Sleeve-Maxi-Dresses-Pretty-Floral-Print-Summer-Dress_57887428-c8e1-4838-9fff-7678fba11345.48ac2e7c66741bae2d5b53885cfb32d7__dress_crop.png" alt="Input Crop"></figure>
+        <figure class="panel image"><div class="label">Extracted Output</div><img src="assets/dress_WXLWZYWL-Fall-Savings-Day-Clearance-2024-Women-Casual-Turn-Down-Dress-Vintage-3-4-Sleeve-Maxi-Dresses-Pretty-Floral-Print-Summer-Dress_57887428-c8e1-4838-9fff-7678fba11345.48ac2e7c66741bae2d5b53885cfb32d7__dress_output.png" alt="Extracted Output"></figure>
+      </div>
+      <p class="link-row"><a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/d97918ce-8637-4e73-ba5d-0abc5fdb8e5e.png">Output image URL</a></p>
+      <div class="grid text">
+        <section class="panel text"><div class="label">Prompt Description</div><pre>This garment is a long dress with a continuous bodice-to-skirt transition. The upper edge features a V-neckline with a pointed collar and a button closure extending down the front. The shoulder layout includes three-quarter length sleeves with cuffs. The waist transition is marked by a self-tie belt with a bow at the front, creating a gathered effect on the skirt. The skirt silhouette is asymmetrical, with a high-low hem that is shorter in the front and longer in the back, revealing an inner lining. The closure consists of a series of buttons along the front placket. The dress has a floral print with flowers and leaves, and the fabric appears to have a smooth texture. The skirt panels are pleated, contributing to the volume and flow of the garment. The hemline is uneven, with the front edge shorter than the back, and the inner lining extends beyond the outer fabric at the front. The dress is constructed as a single piece, with the bodice and skirt seamlessly integrated</pre></section>
+        <section class="panel text"><div class="label">MiniCPM Description</div><pre>This garment is a long dress with a continuous bodice-to-skirt transition. The upper edge features a V-neckline with a pointed collar and a button closure extending down the front. The shoulder layout includes three-quarter length sleeves with white cuffs. The waist transition is marked by a self-tie belt with a bow at the front, creating a gathered effect on the skirt. The skirt silhouette is asymmetrical, with a high-low hem that is shorter in the front and longer in the back, revealing an inner white lining. The closure consists of a series of buttons along the front placket. The dress has a floral print with white flowers and green leaves, and the fabric appears to have a smooth texture. The skirt panels are pleated, contributing to the volume and flow of the garment. The hemline is uneven, with the front edge shorter than the back, and the inner lining extends beyond the outer fabric at the front. The dress is constructed as a single piece, with the bodice and skirt seamlessly integrated.</pre></section>
+        <section class="panel text"><div class="label">Base Garment Prompt</div><pre>A single dress garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. Preserve the garment&#x27;s original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Dress-only: no separate top, no separate skirt, no two-piece outfit look, and no added waistband between bodice and skirt. Keep the dress as one continuous garment from bodice to hem with the original waist transition preserved in a single piece. Do not split it into a separate top and skirt or split the dress into bodice and skirt as if they were separate garments. Keep the bodice and skirt flow smooth, flat, and cloth-like rather than body-shaped. This garment is a long dress with a continuous bodice-to-skirt transition. The upper edge features a V-neckline with a pointed collar and a button closure extending down the front. The shoulder layout includes three-quarter length sleeves with cuffs. The waist transition is marked by a self-tie belt with a bow at the front, creating a gathered effect on the skirt. The skirt silhouette is asymmetrical, with a high-low hem that is shorter in the front and longer in the back, revealing an inner lining. The closure consists of a series of buttons along the front placket. The dress has a floral print with flowers and leaves, and the fabric appears to have a smooth texture. The skirt panels are pleated, contributing to the volume and flow of the garment. The hemline is uneven, with the front edge shorter than the back, and the inner lining extends beyond the outer fabric at the front. The dress is constructed as a single piece, with the bodice and skirt seamlessly integrated</pre></section>
+        <section class="panel text"><div class="label">Case Summary</div><pre>{
+  &quot;summary&quot;: {
+    &quot;case_id&quot;: &quot;WXLWZYWL-Fall-Savings-Day-Clearance-2024-Women-Casual-Turn-Down-Dress-Vintage-3-4-Sleeve-Maxi-Dresses-Pretty-Floral-Print-Summer-Dress_57887428-c8e1-4838-9fff-7678fba11345.48ac2e7c66741bae2d5b53885cfb32d7__dress&quot;,
+    &quot;target_type&quot;: &quot;dress&quot;,
+    &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/WXLWZYWL-Fall-Savings-Day-Clearance-2024-Women-Casual-Turn-Down-Dress-Vintage-3-4-Sleeve-Maxi-Dresses-Pretty-Floral-Print-Summer-Dress_57887428-c8e1-4838-9fff-7678fba11345.48ac2e7c66741bae2d5b53885cfb32d7.png&quot;,
+    &quot;probe_status_code&quot;: 200,
+    &quot;probe_selection_required&quot;: false,
+    &quot;final_status_code&quot;: 200,
+    &quot;final_selection_required&quot;: false,
+    &quot;selected_type&quot;: &quot;dress&quot;,
+    &quot;prompt_description&quot;: &quot;This garment is a long dress with a continuous bodice-to-skirt transition. The upper edge features a V-neckline with a pointed collar and a button closure extending down the front. The shoulder layout includes three-quarter length sleeves with cuffs. The waist transition is marked by a self-tie belt with a bow at the front, creating a gathered effect on the skirt. The skirt silhouette is asymmetrical, with a high-low hem that is shorter in the front and longer in the back, revealing an inner lining. The closure consists of a series of buttons along the front placket. The dress has a floral print with flowers and leaves, and the fabric appears to have a smooth texture. The skirt panels are pleated, contributing to the volume and flow of the garment. The hemline is uneven, with the front edge shorter than the back, and the inner lining extends beyond the outer fabric at the front. The dress is constructed as a single piece, with the bodice and skirt seamlessly integrated&quot;,
+    &quot;output_image_url&quot;: &quot;https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/d97918ce-8637-4e73-ba5d-0abc5fdb8e5e.png&quot;,
+    &quot;probe_latency_s&quot;: 25.9076,
+    &quot;final_latency_s&quot;: 25.8476
+  },
+  &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/WXLWZYWL-Fall-Savings-Day-Clearance-2024-Women-Casual-Turn-Down-Dress-Vintage-3-4-Sleeve-Maxi-Dresses-Pretty-Floral-Print-Summer-Dress_57887428-c8e1-4838-9fff-7678fba11345.48ac2e7c66741bae2d5b53885cfb32d7.png&quot;,
+  &quot;working_input&quot;: &quot;/workspace/codex_test_garments_full_20260410/WXLWZYWL-Fall-Savings-Day-Clearance-2024-Women-Casual-Turn-Down-Dress-Vintage-3-4-Sleeve-Maxi-Dresses-Pretty-Floral-Print-Summer-Dress_57887428-c8e1-4838-9fff-7678fba11345.48ac2e7c66741bae2d5b53885cfb32d7.png&quot;,
+  &quot;chosen_probe_item&quot;: null,
+  &quot;probe_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/dress/WXLWZYWL-Fall-Savings-Day-Clearance-2024-Women-Casual-Turn-Down-Dress-Vintage-3-4-Sleeve-Maxi-Dresses-Pretty-Floral-Print-Summer-Dress_57887428-c8e1-4838-9fff-7678fba11345.48ac2e7c66741bae2d5b53885cfb32d7__dress/probe_response.json&quot;,
+  &quot;final_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/dress/WXLWZYWL-Fall-Savings-Day-Clearance-2024-Women-Casual-Turn-Down-Dress-Vintage-3-4-Sleeve-Maxi-Dresses-Pretty-Floral-Print-Summer-Dress_57887428-c8e1-4838-9fff-7678fba11345.48ac2e7c66741bae2d5b53885cfb32d7__dress/final_response.json&quot;
+}</pre></section>
+      </div>
+    </article>
+    
+    <article class="card">
+      <header class="card-header">
+        <h2>WhatsApp-Image-2026-02-12-at-15.51.25-1__dress</h2>
+        <div class="meta">
+          <span>target: dress</span>
+          <span>selected: dress</span>
+        </div>
+      </header>
+      <div class="grid images">
+        <figure class="panel image"><div class="label">Source Image</div><img src="assets/dress_WhatsApp-Image-2026-02-12-at-15.51.25-1__dress_source.png" alt="Source Image"></figure>
+        <figure class="panel image"><div class="label">Input Crop</div><img src="assets/dress_WhatsApp-Image-2026-02-12-at-15.51.25-1__dress_crop.png" alt="Input Crop"></figure>
+        <figure class="panel image"><div class="label">Extracted Output</div><img src="assets/dress_WhatsApp-Image-2026-02-12-at-15.51.25-1__dress_output.png" alt="Extracted Output"></figure>
+      </div>
+      <p class="link-row"><a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/727762f9-0931-403a-8510-c1b9c6959d4c.png">Output image URL</a></p>
+      <div class="grid text">
+        <section class="panel text"><div class="label">Prompt Description</div><pre>This garment is a long, ankle-length dress with a continuous bodice-to-skirt transition. The upper edge features a V-neckline with a small central opening, secured by a drawstring closure with tassels. The shoulder layout includes long sleeves with flared cuffs, each adorned with a narrow trim along the outer edge. The dress has a fitted bodice that extends seamlessly into a full, flowing skirt, creating a single garment piece. The skirt silhouette is voluminous, with a slight A-line shape, and the hemline reaches the ankles. The dress is constructed from a single fabric panel, with visible seams running vertically along the sides of the bodice and skirt, and a horizontal seam at the waistline. The pattern consists of repeating paisley motifs in and , evenly distributed across the entire fabric. The drawstring closure is positioned at the center of the neckline, with two tassels hanging down. The sleeves are attached to the bodice at the shoulders and flare out towards the cuffs, which are finished with a contrasting trim. The dress appears to be made from a lightweight, draping fabric, allowing the skirt to flow naturally</pre></section>
+        <section class="panel text"><div class="label">MiniCPM Description</div><pre>This garment is a long, ankle-length dress with a continuous bodice-to-skirt transition. The upper edge features a V-neckline with a small central opening, secured by a drawstring closure with tassels. The shoulder layout includes long sleeves with flared cuffs, each adorned with a narrow trim along the outer edge. The dress has a fitted bodice that extends seamlessly into a full, flowing skirt, creating a single garment piece. The skirt silhouette is voluminous, with a slight A-line shape, and the hemline reaches the ankles. The dress is constructed from a single fabric panel, with visible seams running vertically along the sides of the bodice and skirt, and a horizontal seam at the waistline. The pattern consists of repeating paisley motifs in red and white, evenly distributed across the entire fabric. The drawstring closure is positioned at the center of the neckline, with two tassels hanging down. The sleeves are attached to the bodice at the shoulders and flare out towards the cuffs, which are finished with a contrasting trim. The dress appears to be made from a lightweight, draping fabric, allowing the skirt to flow naturally.</pre></section>
+        <section class="panel text"><div class="label">Base Garment Prompt</div><pre>A single dress garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. Preserve the garment&#x27;s original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Dress-only: no separate top, no separate skirt, no two-piece outfit look, and no added waistband between bodice and skirt. Keep the dress as one continuous garment from bodice to hem with the original waist transition preserved in a single piece. Do not split it into a separate top and skirt or split the dress into bodice and skirt as if they were separate garments. Keep the bodice and skirt flow smooth, flat, and cloth-like rather than body-shaped. This garment is a long, ankle-length dress with a continuous bodice-to-skirt transition. The upper edge features a V-neckline with a small central opening, secured by a drawstring closure with tassels. The shoulder layout includes long sleeves with flared cuffs, each adorned with a narrow trim along the outer edge. The dress has a fitted bodice that extends seamlessly into a full, flowing skirt, creating a single garment piece. The skirt silhouette is voluminous, with a slight A-line shape, and the hemline reaches the ankles. The dress is constructed from a single fabric panel, with visible seams running vertically along the sides of the bodice and skirt, and a horizontal seam at the waistline. The pattern consists of repeating paisley motifs in and , evenly distributed across the entire fabric. The drawstring closure is positioned at the center of the neckline, with two tassels hanging down. The sleeves are attached to the bodice at the shoulders and flare out towards the cuffs, which are finished with a contrasting trim. The dress appears to be made from a lightweight, draping fabric, allowing the skirt to flow naturally</pre></section>
+        <section class="panel text"><div class="label">Case Summary</div><pre>{
+  &quot;summary&quot;: {
+    &quot;case_id&quot;: &quot;WhatsApp-Image-2026-02-12-at-15.51.25-1__dress&quot;,
+    &quot;target_type&quot;: &quot;dress&quot;,
+    &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/WhatsApp Image 2026-02-12 at 15.51.25 (1).jpeg&quot;,
+    &quot;probe_status_code&quot;: 200,
+    &quot;probe_selection_required&quot;: false,
+    &quot;final_status_code&quot;: 200,
+    &quot;final_selection_required&quot;: false,
+    &quot;selected_type&quot;: &quot;dress&quot;,
+    &quot;prompt_description&quot;: &quot;This garment is a long, ankle-length dress with a continuous bodice-to-skirt transition. The upper edge features a V-neckline with a small central opening, secured by a drawstring closure with tassels. The shoulder layout includes long sleeves with flared cuffs, each adorned with a narrow trim along the outer edge. The dress has a fitted bodice that extends seamlessly into a full, flowing skirt, creating a single garment piece. The skirt silhouette is voluminous, with a slight A-line shape, and the hemline reaches the ankles. The dress is constructed from a single fabric panel, with visible seams running vertically along the sides of the bodice and skirt, and a horizontal seam at the waistline. The pattern consists of repeating paisley motifs in and , evenly distributed across the entire fabric. The drawstring closure is positioned at the center of the neckline, with two tassels hanging down. The sleeves are attached to the bodice at the shoulders and flare out towards the cuffs, which are finished with a contrasting trim. The dress appears to be made from a lightweight, draping fabric, allowing the skirt to flow naturally&quot;,
+    &quot;output_image_url&quot;: &quot;https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/727762f9-0931-403a-8510-c1b9c6959d4c.png&quot;,
+    &quot;probe_latency_s&quot;: 26.4881,
+    &quot;final_latency_s&quot;: 26.4832
+  },
+  &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/WhatsApp Image 2026-02-12 at 15.51.25 (1).jpeg&quot;,
+  &quot;working_input&quot;: &quot;/workspace/codex_test_garments_full_20260410/WhatsApp Image 2026-02-12 at 15.51.25 (1).jpeg&quot;,
+  &quot;chosen_probe_item&quot;: null,
+  &quot;probe_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/dress/WhatsApp-Image-2026-02-12-at-15.51.25-1__dress/probe_response.json&quot;,
+  &quot;final_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/dress/WhatsApp-Image-2026-02-12-at-15.51.25-1__dress/final_response.json&quot;
+}</pre></section>
+      </div>
+    </article>
+    
+    <article class="card">
+      <header class="card-header">
+        <h2>WhatsApp-Image-2026-02-19-at-11.25.37__dress</h2>
+        <div class="meta">
+          <span>target: dress</span>
+          <span>selected: dress</span>
+        </div>
+      </header>
+      <div class="grid images">
+        <figure class="panel image"><div class="label">Source Image</div><img src="assets/dress_WhatsApp-Image-2026-02-19-at-11.25.37__dress_source.png" alt="Source Image"></figure>
+        <figure class="panel image"><div class="label">Input Crop</div><img src="assets/dress_WhatsApp-Image-2026-02-19-at-11.25.37__dress_crop.png" alt="Input Crop"></figure>
+        <figure class="panel image"><div class="label">Extracted Output</div><img src="assets/dress_WhatsApp-Image-2026-02-19-at-11.25.37__dress_output.png" alt="Extracted Output"></figure>
+      </div>
+      <p class="link-row"><a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/8ed9abf3-4cd0-44f9-a70d-ce02c44b8cca.png">Output image URL</a></p>
+      <div class="grid text">
+        <section class="panel text"><div class="label">Prompt Description</div><pre>This garment is a knee-length, off-the-shoulder dress with a fitted bodice and flared skirt. The upper edge features a wide, rounded neckline with a slight V-shape at the center front. The shoulder layout includes short, off-the-shoulder sleeves that are attached to the bodice, creating a cap sleeve effect. The bodice transitions seamlessly into the waistband, which is defined by a gathered seam at the natural waist, creating a cinched silhouette. The skirt is full and flared, with a voluminous A-line shape that extends to just below the knee. The fabric is printed with large floral motifs, including , , and flowers with leaves on a . The dress has a fitted bodice with a smooth front panel that extends down to the waistband, where it flares out into the skirt. The hemline is straight and even, with no visible slits or cutouts. The dress appears to have a concealed closure at the back, as no fastening is visible at the front. The overall construction suggests a single-piece garment with a structured bodice and a full, gathered skirt</pre></section>
+        <section class="panel text"><div class="label">MiniCPM Description</div><pre>This garment is a knee-length, off-the-shoulder dress with a fitted bodice and flared skirt. The upper edge features a wide, rounded neckline with a slight V-shape at the center front. The shoulder layout includes short, off-the-shoulder sleeves that are attached to the bodice, creating a cap sleeve effect. The bodice transitions seamlessly into the waistband, which is defined by a gathered seam at the natural waist, creating a cinched silhouette. The skirt is full and flared, with a voluminous A-line shape that extends to just below the knee. The fabric is printed with large floral motifs, including red, purple, and pink flowers with green leaves on a white background. The dress has a fitted bodice with a smooth front panel that extends down to the waistband, where it flares out into the skirt. The hemline is straight and even, with no visible slits or cutouts. The dress appears to have a concealed closure at the back, as no fastening is visible at the front. The overall construction suggests a single-piece garment with a structured bodice and a full, gathered skirt.</pre></section>
+        <section class="panel text"><div class="label">Base Garment Prompt</div><pre>A single dress garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. Preserve the garment&#x27;s original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Dress-only: no separate top, no separate skirt, no two-piece outfit look, and no added waistband between bodice and skirt. Keep the dress as one continuous garment from bodice to hem with the original waist transition preserved in a single piece. Do not split it into a separate top and skirt or split the dress into bodice and skirt as if they were separate garments. Keep the bodice and skirt flow smooth, flat, and cloth-like rather than body-shaped. This garment is a knee-length, off-the-shoulder dress with a fitted bodice and flared skirt. The upper edge features a wide, rounded neckline with a slight V-shape at the center front. The shoulder layout includes short, off-the-shoulder sleeves that are attached to the bodice, creating a cap sleeve effect. The bodice transitions seamlessly into the waistband, which is defined by a gathered seam at the natural waist, creating a cinched silhouette. The skirt is full and flared, with a voluminous A-line shape that extends to just below the knee. The fabric is printed with large floral motifs, including , , and flowers with leaves on a . The dress has a fitted bodice with a smooth front panel that extends down to the waistband, where it flares out into the skirt. The hemline is straight and even, with no visible slits or cutouts. The dress appears to have a concealed closure at the back, as no fastening is visible at the front. The overall construction suggests a single-piece garment with a structured bodice and a full, gathered skirt</pre></section>
+        <section class="panel text"><div class="label">Case Summary</div><pre>{
+  &quot;summary&quot;: {
+    &quot;case_id&quot;: &quot;WhatsApp-Image-2026-02-19-at-11.25.37__dress&quot;,
+    &quot;target_type&quot;: &quot;dress&quot;,
+    &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/WhatsApp Image 2026-02-19 at 11.25.37.jpeg&quot;,
+    &quot;probe_status_code&quot;: 200,
+    &quot;probe_selection_required&quot;: false,
+    &quot;final_status_code&quot;: 200,
+    &quot;final_selection_required&quot;: false,
+    &quot;selected_type&quot;: &quot;dress&quot;,
+    &quot;prompt_description&quot;: &quot;This garment is a knee-length, off-the-shoulder dress with a fitted bodice and flared skirt. The upper edge features a wide, rounded neckline with a slight V-shape at the center front. The shoulder layout includes short, off-the-shoulder sleeves that are attached to the bodice, creating a cap sleeve effect. The bodice transitions seamlessly into the waistband, which is defined by a gathered seam at the natural waist, creating a cinched silhouette. The skirt is full and flared, with a voluminous A-line shape that extends to just below the knee. The fabric is printed with large floral motifs, including , , and flowers with leaves on a . The dress has a fitted bodice with a smooth front panel that extends down to the waistband, where it flares out into the skirt. The hemline is straight and even, with no visible slits or cutouts. The dress appears to have a concealed closure at the back, as no fastening is visible at the front. The overall construction suggests a single-piece garment with a structured bodice and a full, gathered skirt&quot;,
+    &quot;output_image_url&quot;: &quot;https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/8ed9abf3-4cd0-44f9-a70d-ce02c44b8cca.png&quot;,
+    &quot;probe_latency_s&quot;: 26.2061,
+    &quot;final_latency_s&quot;: 26.227
+  },
+  &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/WhatsApp Image 2026-02-19 at 11.25.37.jpeg&quot;,
+  &quot;working_input&quot;: &quot;/workspace/codex_test_garments_full_20260410/WhatsApp Image 2026-02-19 at 11.25.37.jpeg&quot;,
+  &quot;chosen_probe_item&quot;: null,
+  &quot;probe_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/dress/WhatsApp-Image-2026-02-19-at-11.25.37__dress/probe_response.json&quot;,
+  &quot;final_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/dress/WhatsApp-Image-2026-02-19-at-11.25.37__dress/final_response.json&quot;
+}</pre></section>
+      </div>
+    </article>
+    
+    <article class="card">
+      <header class="card-header">
+        <h2>Whisk_56ca305d507370b806f4c0f3e5fa723eeg__dress</h2>
+        <div class="meta">
+          <span>target: dress</span>
+          <span>selected: dress</span>
+        </div>
+      </header>
+      <div class="grid images">
+        <figure class="panel image"><div class="label">Source Image</div><img src="assets/dress_Whisk_56ca305d507370b806f4c0f3e5fa723eeg__dress_source.png" alt="Source Image"></figure>
+        <figure class="panel image"><div class="label">Input Crop</div><img src="assets/dress_Whisk_56ca305d507370b806f4c0f3e5fa723eeg__dress_crop.png" alt="Input Crop"></figure>
+        <figure class="panel image"><div class="label">Extracted Output</div><img src="assets/dress_Whisk_56ca305d507370b806f4c0f3e5fa723eeg__dress_output.png" alt="Extracted Output"></figure>
+      </div>
+      <p class="link-row"><a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/6056094d-ae75-47bf-8740-e896111900fe.png">Output image URL</a></p>
+      <div class="grid text">
+        <section class="panel text"><div class="label">Prompt Description</div><pre>This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt</pre></section>
+        <section class="panel text"><div class="label">MiniCPM Description</div><pre>This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a deep V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt.</pre></section>
+        <section class="panel text"><div class="label">Base Garment Prompt</div><pre>A single dress garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. Preserve the garment&#x27;s original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Dress-only: no separate top, no separate skirt, no two-piece outfit look, and no added waistband between bodice and skirt. Keep the dress as one continuous garment from bodice to hem with the original waist transition preserved in a single piece. Do not split it into a separate top and skirt or split the dress into bodice and skirt as if they were separate garments. Keep the bodice and skirt flow smooth, flat, and cloth-like rather than body-shaped. This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt</pre></section>
+        <section class="panel text"><div class="label">Case Summary</div><pre>{
+  &quot;summary&quot;: {
+    &quot;case_id&quot;: &quot;Whisk_56ca305d507370b806f4c0f3e5fa723eeg__dress&quot;,
+    &quot;target_type&quot;: &quot;dress&quot;,
+    &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/Whisk_56ca305d507370b806f4c0f3e5fa723eeg.png&quot;,
+    &quot;probe_status_code&quot;: 200,
+    &quot;probe_selection_required&quot;: false,
+    &quot;final_status_code&quot;: 200,
+    &quot;final_selection_required&quot;: false,
+    &quot;selected_type&quot;: &quot;dress&quot;,
+    &quot;prompt_description&quot;: &quot;This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt&quot;,
+    &quot;output_image_url&quot;: &quot;https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/6056094d-ae75-47bf-8740-e896111900fe.png&quot;,
+    &quot;probe_latency_s&quot;: 21.9331,
+    &quot;final_latency_s&quot;: 21.9722
+  },
+  &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/Whisk_56ca305d507370b806f4c0f3e5fa723eeg.png&quot;,
+  &quot;working_input&quot;: &quot;/workspace/codex_test_garments_full_20260410/Whisk_56ca305d507370b806f4c0f3e5fa723eeg.png&quot;,
+  &quot;chosen_probe_item&quot;: null,
+  &quot;probe_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/dress/Whisk_56ca305d507370b806f4c0f3e5fa723eeg__dress/probe_response.json&quot;,
+  &quot;final_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/dress/Whisk_56ca305d507370b806f4c0f3e5fa723eeg__dress/final_response.json&quot;
+}</pre></section>
+      </div>
+    </article>
+    
+    <article class="card">
+      <header class="card-header">
+        <h2>Whisk_aa1fa87018c414cb8484e38e224c180adr__dress</h2>
+        <div class="meta">
+          <span>target: dress</span>
+          <span>selected: dress</span>
+        </div>
+      </header>
+      <div class="grid images">
+        <figure class="panel image"><div class="label">Source Image</div><img src="assets/dress_Whisk_aa1fa87018c414cb8484e38e224c180adr__dress_source.png" alt="Source Image"></figure>
+        <figure class="panel image"><div class="label">Input Crop</div><img src="assets/dress_Whisk_aa1fa87018c414cb8484e38e224c180adr__dress_crop.png" alt="Input Crop"></figure>
+        <figure class="panel image"><div class="label">Extracted Output</div><img src="assets/dress_Whisk_aa1fa87018c414cb8484e38e224c180adr__dress_output.png" alt="Extracted Output"></figure>
+      </div>
+      <p class="link-row"><a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/416a8f08-bb6a-426f-bc6d-7223c6cb1b10.png">Output image URL</a></p>
+      <div class="grid text">
+        <section class="panel text"><div class="label">Prompt Description</div><pre>This garment is a long-sleeved, fitted dress with a round neckline and a continuous bodice-to-skirt transition. The shoulder layout features long sleeves with a gathered detail at the upper , creating a voluminous bell shape that extends to the wrist. The sleeves are adorned with tassel trims hanging from the cuffs. The dress has a defined waistband that transitions smoothly into a form-fitting skirt, maintaining the same sequined texture throughout. The hemline is not fully visible, but the dress appears to be knee-length or slightly longer based on the visible portion. The garment is constructed from a single piece of sequined fabric, with no visible seams or closures on the front. The neckline is a simple round shape, and the shoulder straps are integrated into the sleeve design rather than separate straps. The sequins are densely packed, creating a uniform shimmering texture across the entire dress</pre></section>
+        <section class="panel text"><div class="label">MiniCPM Description</div><pre>This garment is a long-sleeved, fitted dress with a round neckline and a continuous bodice-to-skirt transition. The shoulder layout features long sleeves with a gathered detail at the upper arm, creating a voluminous bell shape that extends to the wrist. The sleeves are adorned with tassel trims hanging from the cuffs. The dress has a defined waistband that transitions smoothly into a form-fitting skirt, maintaining the same sequined texture throughout. The hemline is not fully visible, but the dress appears to be knee-length or slightly longer based on the visible portion. The garment is constructed from a single piece of sequined fabric, with no visible seams or closures on the front. The neckline is a simple round shape, and the shoulder straps are integrated into the sleeve design rather than separate straps. The sequins are densely packed, creating a uniform shimmering texture across the entire dress.</pre></section>
+        <section class="panel text"><div class="label">Base Garment Prompt</div><pre>A single dress garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. Preserve the garment&#x27;s original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Dress-only: no separate top, no separate skirt, no two-piece outfit look, and no added waistband between bodice and skirt. Keep the dress as one continuous garment from bodice to hem with the original waist transition preserved in a single piece. Do not split it into a separate top and skirt or split the dress into bodice and skirt as if they were separate garments. Keep the bodice and skirt flow smooth, flat, and cloth-like rather than body-shaped. This garment is a long-sleeved, fitted dress with a round neckline and a continuous bodice-to-skirt transition. The shoulder layout features long sleeves with a gathered detail at the upper , creating a voluminous bell shape that extends to the wrist. The sleeves are adorned with tassel trims hanging from the cuffs. The dress has a defined waistband that transitions smoothly into a form-fitting skirt, maintaining the same sequined texture throughout. The hemline is not fully visible, but the dress appears to be knee-length or slightly longer based on the visible portion. The garment is constructed from a single piece of sequined fabric, with no visible seams or closures on the front. The neckline is a simple round shape, and the shoulder straps are integrated into the sleeve design rather than separate straps. The sequins are densely packed, creating a uniform shimmering texture across the entire dress</pre></section>
+        <section class="panel text"><div class="label">Case Summary</div><pre>{
+  &quot;summary&quot;: {
+    &quot;case_id&quot;: &quot;Whisk_aa1fa87018c414cb8484e38e224c180adr__dress&quot;,
+    &quot;target_type&quot;: &quot;dress&quot;,
+    &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/Whisk_aa1fa87018c414cb8484e38e224c180adr.png&quot;,
+    &quot;probe_status_code&quot;: 200,
+    &quot;probe_selection_required&quot;: false,
+    &quot;final_status_code&quot;: 200,
+    &quot;final_selection_required&quot;: false,
+    &quot;selected_type&quot;: &quot;dress&quot;,
+    &quot;prompt_description&quot;: &quot;This garment is a long-sleeved, fitted dress with a round neckline and a continuous bodice-to-skirt transition. The shoulder layout features long sleeves with a gathered detail at the upper , creating a voluminous bell shape that extends to the wrist. The sleeves are adorned with tassel trims hanging from the cuffs. The dress has a defined waistband that transitions smoothly into a form-fitting skirt, maintaining the same sequined texture throughout. The hemline is not fully visible, but the dress appears to be knee-length or slightly longer based on the visible portion. The garment is constructed from a single piece of sequined fabric, with no visible seams or closures on the front. The neckline is a simple round shape, and the shoulder straps are integrated into the sleeve design rather than separate straps. The sequins are densely packed, creating a uniform shimmering texture across the entire dress&quot;,
+    &quot;output_image_url&quot;: &quot;https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/416a8f08-bb6a-426f-bc6d-7223c6cb1b10.png&quot;,
+    &quot;probe_latency_s&quot;: 23.6159,
+    &quot;final_latency_s&quot;: 23.6328
+  },
+  &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/Whisk_aa1fa87018c414cb8484e38e224c180adr.png&quot;,
+  &quot;working_input&quot;: &quot;/workspace/codex_test_garments_full_20260410/Whisk_aa1fa87018c414cb8484e38e224c180adr.png&quot;,
+  &quot;chosen_probe_item&quot;: null,
+  &quot;probe_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/dress/Whisk_aa1fa87018c414cb8484e38e224c180adr__dress/probe_response.json&quot;,
+  &quot;final_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/dress/Whisk_aa1fa87018c414cb8484e38e224c180adr__dress/final_response.json&quot;
+}</pre></section>
+      </div>
+    </article>
+    
+    <article class="card">
+      <header class="card-header">
+        <h2>9565aac5-85c5-41c2-b044-6e9756b494db__top</h2>
+        <div class="meta">
+          <span>target: top</span>
+          <span>selected: top</span>
+        </div>
+      </header>
+      <div class="grid images">
+        <figure class="panel image"><div class="label">Source Image</div><img src="assets/top_9565aac5-85c5-41c2-b044-6e9756b494db__top_source.png" alt="Source Image"></figure>
+        <figure class="panel image"><div class="label">Input Crop</div><img src="assets/top_9565aac5-85c5-41c2-b044-6e9756b494db__top_crop.png" alt="Input Crop"></figure>
+        <figure class="panel image"><div class="label">Extracted Output</div><img src="assets/top_9565aac5-85c5-41c2-b044-6e9756b494db__top_output.png" alt="Extracted Output"></figure>
+      </div>
+      <p class="link-row"><a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/7ad10891-2229-48a1-9e68-5ed0d3b4773a.png">Output image URL</a></p>
+      <div class="grid text">
+        <section class="panel text"><div class="label">Prompt Description</div><pre>This garment is a long dress with a wrap-front construction. The upper edge features a V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, -colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material</pre></section>
+        <section class="panel text"><div class="label">MiniCPM Description</div><pre>This garment is a long dress with a wrap-front construction. The upper edge features a deep V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, cream-colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, white outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material.</pre></section>
+        <section class="panel text"><div class="label">Base Garment Prompt</div><pre>A single top garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The neckline, shoulder line, sleeve geometry, waistline, and hem shape match the reference exactly. Keep the garment front panel flat and cloth-like with no torso volume, chest projection, or mannequin-shaped curvature beneath the fabric. Preserve the garment&#x27;s original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Top-only: no fabric above the garment&#x27;s upper edge, no fabric below the hem, no lower-body garments or legs visible. Crop to the garment bounds only; no extra fabric beyond the original top silhouette. Keep the front panel flat and cloth-like; do not introduce torso curvature, chest projection, or mannequin form beneath the fabric. No added panels, yokes, underlayers, or secondary garment sections above the neckline or below the hem. Do not change the shoulder layout, sleeve count, strap count, or neckline asymmetry from the reference. Do not invent a second shoulder, mirrored strap, mirrored sleeve, seam bridge, or new asymmetrical cut. Preserve the exact upper edge of the garment; if the source neckline is low, wide, or exposes the upper chest, keep that same neckline depth and opening. Do not raise it into a higher-coverage chest panel or a more modest scoop top. If the source top ends below the bust or has a cropped hem, preserve that exact short hem position and do not extend the garment into the abdomen, waist, or full torso length. Preserve the exact garment color tone and shading from the reference crop; do not warm it, cool it, bleach it, brighten it, darken it, or make it more saturated. Do not add padding, cups, or extra bust volume; keep bust shaping, seams, and underbust placement exactly as the reference. This garment is a long dress with a wrap-front construction. The upper edge features a V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, -colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material</pre></section>
+        <section class="panel text"><div class="label">Case Summary</div><pre>{
+  &quot;summary&quot;: {
+    &quot;case_id&quot;: &quot;9565aac5-85c5-41c2-b044-6e9756b494db__top&quot;,
+    &quot;target_type&quot;: &quot;top&quot;,
+    &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/9565aac5-85c5-41c2-b044-6e9756b494db.jpg&quot;,
+    &quot;probe_status_code&quot;: 200,
+    &quot;probe_selection_required&quot;: false,
+    &quot;final_status_code&quot;: 200,
+    &quot;final_selection_required&quot;: false,
+    &quot;selected_type&quot;: &quot;top&quot;,
+    &quot;prompt_description&quot;: &quot;This garment is a long dress with a wrap-front construction. The upper edge features a V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, -colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material&quot;,
+    &quot;output_image_url&quot;: &quot;https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/7ad10891-2229-48a1-9e68-5ed0d3b4773a.png&quot;,
+    &quot;probe_latency_s&quot;: 25.3892,
+    &quot;final_latency_s&quot;: 25.4092
+  },
+  &quot;source_image&quot;: &quot;/workspace/codex_test_garments_full_20260410/9565aac5-85c5-41c2-b044-6e9756b494db.jpg&quot;,
+  &quot;working_input&quot;: &quot;/workspace/codex_test_garments_full_20260410/9565aac5-85c5-41c2-b044-6e9756b494db.jpg&quot;,
+  &quot;chosen_probe_item&quot;: null,
+  &quot;probe_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/top/9565aac5-85c5-41c2-b044-6e9756b494db__top/probe_response.json&quot;,
+  &quot;final_response_path&quot;: &quot;/workspace/analyze_batch_results_20260410/full_autotype_001/top/9565aac5-85c5-41c2-b044-6e9756b494db__top/final_response.json&quot;
+}</pre></section>
+      </div>
+    </article>
+    
+  </main>
+</body>
+</html>

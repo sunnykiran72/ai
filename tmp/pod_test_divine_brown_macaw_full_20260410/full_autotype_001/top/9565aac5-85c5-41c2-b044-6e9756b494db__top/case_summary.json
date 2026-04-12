@@ -1,0 +1,21 @@
+{
+  "summary": {
+    "case_id": "9565aac5-85c5-41c2-b044-6e9756b494db__top",
+    "target_type": "top",
+    "source_image": "/workspace/codex_test_garments_full_20260410/9565aac5-85c5-41c2-b044-6e9756b494db.jpg",
+    "probe_status_code": 200,
+    "probe_selection_required": false,
+    "final_status_code": 200,
+    "final_selection_required": false,
+    "selected_type": "top",
+    "prompt_description": "This garment is a long dress with a wrap-front construction. The upper edge features a V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, -colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material",
+    "output_image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/7ad10891-2229-48a1-9e68-5ed0d3b4773a.png",
+    "probe_latency_s": 25.3892,
+    "final_latency_s": 25.4092
+  },
+  "source_image": "/workspace/codex_test_garments_full_20260410/9565aac5-85c5-41c2-b044-6e9756b494db.jpg",
+  "working_input": "/workspace/codex_test_garments_full_20260410/9565aac5-85c5-41c2-b044-6e9756b494db.jpg",
+  "chosen_probe_item": null,
+  "probe_response_path": "/workspace/analyze_batch_results_20260410/full_autotype_001/top/9565aac5-85c5-41c2-b044-6e9756b494db__top/probe_response.json",
+  "final_response_path": "/workspace/analyze_batch_results_20260410/full_autotype_001/top/9565aac5-85c5-41c2-b044-6e9756b494db__top/final_response.json"
+}

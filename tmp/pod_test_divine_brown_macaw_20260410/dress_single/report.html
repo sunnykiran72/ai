@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Analyze Batch Report</title>
+  <style>
+    :root {
+      --bg: #f3efe7;
+      --card: #fffdf8;
+      --ink: #181512;
+      --muted: #6f655c;
+      --line: #dfd6ca;
+      --accent: #8f3d28;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Georgia, "Iowan Old Style", serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(143,61,40,0.08), transparent 28%),
+        linear-gradient(180deg, #f8f3ec 0%, var(--bg) 100%);
+    }
+    .page {
+      width: min(1500px, calc(100vw - 40px));
+      margin: 24px auto 48px;
+    }
+    .hero {
+      padding: 28px 30px;
+      border: 1px solid var(--line);
+      background: linear-gradient(135deg, rgba(255,255,255,0.95), rgba(255,248,241,0.92));
+      border-radius: 22px;
+      box-shadow: 0 18px 50px rgba(60, 39, 24, 0.08);
+      margin-bottom: 22px;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 34px;
+      line-height: 1.05;
+      letter-spacing: -0.03em;
+    }
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      padding: 22px;
+      margin-bottom: 20px;
+      box-shadow: 0 14px 36px rgba(28, 19, 12, 0.06);
+    }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: baseline;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+    .card-header h2 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.1;
+    }
+    .meta {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      color: var(--muted);
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .grid {
+      display: grid;
+      gap: 16px;
+    }
+    .images {
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      margin-bottom: 18px;
+    }
+    .text {
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    }
+    .image-block, .text-block {
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255,255,255,0.75);
+      padding: 14px;
+    }
+    .label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.09em;
+      color: var(--accent);
+      margin-bottom: 10px;
+      font-weight: 700;
+    }
+    img {
+      display: block;
+      width: 100%;
+      height: auto;
+      border-radius: 10px;
+      border: 1px solid rgba(0,0,0,0.05);
+      background: white;
+    }
+    pre {
+      margin: 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: #2c241d;
+    }
+    @media (max-width: 720px) {
+      .page { width: min(100vw - 20px, 1500px); }
+      .hero { padding: 20px; }
+      .card { padding: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <h1>Analyze Batch Report</h1>
+      <p>Review of /analyze runs including source image, selected crop, generated prompt text, and final extracted garment output.</p>
+    </header>
+    
+            <section class="card">
+              <div class="card-header">
+                <h2>Screenshot-2026-04-09-at-8.07.58-PM__dress</h2>
+                <div class="meta">
+                  <span>target: dress</span>
+                  <span>selected: dress</span>
+                  <span>status: 200</span>
+                </div>
+              </div>
+              <div class="grid images">
+                <div class="image-block"><div class="label">Source Image</div><img src="dress/Screenshot-2026-04-09-at-8.07.58-PM__dress/Screenshot 2026-04-09 at 8.07.58 PM.png" alt="Source Image"></div>
+                
+                
+              </div>
+              <div class="grid text">
+                <div class="text-block"><div class="label">Prompt Description</div><pre>This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette
+</pre></div>
+                <div class="text-block"><div class="label">MiniCPM Description</div><pre>This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the leg, adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette.
+</pre></div>
+                <div class="text-block"><div class="label">Base Garment Prompt</div><pre>A single dress garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. Preserve the garment's original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Dress-only: no separate top, no separate skirt, no two-piece outfit look, and no added waistband between bodice and skirt. Keep the dress as one continuous garment from bodice to hem with the original waist transition preserved in a single piece. Do not split it into a separate top and skirt or split the dress into bodice and skirt as if they were separate garments. Keep the bodice and skirt flow smooth, flat, and cloth-like rather than body-shaped. This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette
+</pre></div>
+                <div class="text-block"><div class="label">Case Summary</div><pre>{
+  "summary": {
+    "case_id": "Screenshot-2026-04-09-at-8.07.58-PM__dress",
+    "target_type": "dress",
+    "source_image": "/workspace/codex_dress_case/Screenshot 2026-04-09 at 8.07.58\u202fPM.png",
+    "probe_status_code": 200,
+    "probe_selection_required": false,
+    "final_status_code": 200,
+    "final_selection_required": false,
+    "selected_type": "dress",
+    "prompt_description": "This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment's dramatic silhouette",
+    "output_image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/72183f70-6e48-422c-b7aa-b8e2dd882ef2.png",
+    "probe_latency_s": 25.4173,
+    "final_latency_s": 25.478
+  },
+  "source_image": "/workspace/codex_dress_case/Screenshot 2026-04-09 at 8.07.58\u202fPM.png",
+  "working_input": "/workspace/codex_dress_case/Screenshot 2026-04-09 at 8.07.58\u202fPM.png",
+  "chosen_probe_item": null,
+  "probe_response_path": "/workspace/analyze_batch_results_20260410/dress_single/dress/Screenshot-2026-04-09-at-8.07.58-PM__dress/probe_response.json",
+  "final_response_path": "/workspace/analyze_batch_results_20260410/dress_single/dress/Screenshot-2026-04-09-at-8.07.58-PM__dress/final_response.json"
+}</pre></div>
+              </div>
+            </section>
+            
+  </main>
+</body>
+</html>

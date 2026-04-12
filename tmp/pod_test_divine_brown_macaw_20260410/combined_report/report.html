@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pod Analyze Test Report</title>
+<style>
+:root { --bg:#f4efe8; --card:#fffdf9; --ink:#171310; --muted:#6e6458; --line:#ddd2c6; --accent:#8a4428; }
+* { box-sizing:border-box; }
+body { margin:0; color:var(--ink); font-family:Georgia, 'Iowan Old Style', serif; background:radial-gradient(circle at top left, rgba(138,68,40,0.08), transparent 25%), linear-gradient(180deg, #faf6f1 0%, var(--bg) 100%); }
+main { width:min(1500px, calc(100vw - 32px)); margin:24px auto 48px; }
+.hero { background:rgba(255,255,255,0.84); border:1px solid var(--line); border-radius:24px; padding:26px 28px; box-shadow:0 18px 40px rgba(35,22,12,0.08); margin-bottom:22px; }
+h1 { margin:0 0 8px; font-size:34px; line-height:1.05; letter-spacing:-0.03em; }
+.hero p { margin:0; color:var(--muted); }
+.card { background:var(--card); border:1px solid var(--line); border-radius:22px; padding:20px; margin-bottom:20px; box-shadow:0 14px 32px rgba(35,22,12,0.06); }
+.card-head h2 { margin:0 0 14px; font-size:26px; }
+.image-grid, .text-grid { display:grid; gap:16px; }
+.image-grid { grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); margin-bottom:14px; }
+.text-grid { grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); }
+.panel { background:rgba(255,255,255,0.72); border:1px solid var(--line); border-radius:16px; padding:14px; }
+.label { font-size:12px; text-transform:uppercase; letter-spacing:0.09em; color:var(--accent); font-weight:700; margin-bottom:10px; }
+img { display:block; width:100%; height:auto; border-radius:10px; background:white; }
+pre { margin:0; white-space:pre-wrap; word-break:break-word; font:13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.link-row { margin:0 0 16px; font-size:14px; }
+a { color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+<section class="hero">
+<h1>Divine Brown Macaw Analyze Test</h1>
+<p>Pod run on April 10, 2026 for one curated top case and one curated dress case. Each card shows the source image, detector crop, extracted output cloth image, prompt text, and latency metadata returned by <code>/analyze</code>.</p>
+</section>
+
+    <article class="card">
+      <header class="card-head"><h2>Top</h2></header>
+      <div class="image-grid">
+        <figure class="panel"><div class="label">Source Image</div><img src="assets/top_case_source.png" alt="Source Image"></figure>
+        <figure class="panel"><div class="label">Input Crop</div><img src="assets/top_case_input_crop.png" alt="Input Crop"></figure>
+        <figure class="panel"><div class="label">Extracted Output</div><img src="assets/top_case_output.png" alt="Extracted Output"></figure>
+      </div>
+      <p class="link-row"><a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/a2c9d1f8-8cda-4a0b-87f6-6d1b32c034c4.png">Output image URL</a></p>
+      <div class="text-grid">
+        <section class="panel"><div class="label">Prompt Description</div><pre>This garment is a bra. The upper edge features a V-neckline with a central front opening. The shoulder panels are wide and extend down to the bust line, covering the upper chest area. The straps are narrow and positioned at the outer edges of the shoulders. The bust panel is a single, continuous piece that extends from the underbust to the neckline, forming a smooth, seamless front. A decorative bow closure is centered at the bottom of the front opening, adorned with a textured, beaded trim. The hem endpoint is not fully visible, but the garment appears to end at the underbust level. The construction includes a central seam running vertically down the front, aligning with the bow closure. The fabric has a smooth, satin-like texture, and the bow trim adds a three-dimensional element to the otherwise flat front panel. The overall design prioritizes a fitted silhouette with minimal visible seams aside from the central front seam and the edges of the shoulder panels</pre></section>
+        <section class="panel"><div class="label">MiniCPM Description</div><pre>This garment is a bra. The upper edge features a deep V-neckline with a central front opening. The shoulder panels are wide and extend down to the bust line, covering the upper chest area. The straps are narrow and positioned at the outer edges of the shoulders. The bust panel is a single, continuous piece that extends from the underbust to the neckline, forming a smooth, seamless front. A decorative bow closure is centered at the bottom of the front opening, adorned with a textured, beaded trim. The hem endpoint is not fully visible, but the garment appears to end at the underbust level. The construction includes a central seam running vertically down the front, aligning with the bow closure. The fabric has a smooth, satin-like texture, and the bow trim adds a three-dimensional element to the otherwise flat front panel. The overall design prioritizes a fitted silhouette with minimal visible seams aside from the central front seam and the edges of the shoulder panels.</pre></section>
+        <section class="panel"><div class="label">Base Garment Prompt</div><pre>A single top garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The neckline, shoulder line, sleeve geometry, waistline, and hem shape match the reference exactly. Keep the garment front panel flat and cloth-like with no torso volume, chest projection, or mannequin-shaped curvature beneath the fabric. Preserve the garment&#x27;s original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Top-only: no fabric above the garment&#x27;s upper edge, no fabric below the hem, no lower-body garments or legs visible. Crop to the garment bounds only; no extra fabric beyond the original top silhouette. Keep the front panel flat and cloth-like; do not introduce torso curvature, chest projection, or mannequin form beneath the fabric. No added panels, yokes, underlayers, or secondary garment sections above the neckline or below the hem. Do not change the shoulder layout, sleeve count, strap count, or neckline asymmetry from the reference. Do not invent a second shoulder, mirrored strap, mirrored sleeve, seam bridge, or new asymmetrical cut. Preserve the exact upper edge of the garment; if the source neckline is low, wide, or exposes the upper chest, keep that same neckline depth and opening. Do not raise it into a higher-coverage chest panel or a more modest scoop top. If the source top ends below the bust or has a cropped hem, preserve that exact short hem position and do not extend the garment into the abdomen, waist, or full torso length. Preserve the exact garment color tone and shading from the reference crop; do not warm it, cool it, bleach it, brighten it, darken it, or make it more saturated. Do not add padding, cups, or extra bust volume; keep bust shaping, seams, and underbust placement exactly as the reference. This garment is a bra. The upper edge features a V-neckline with a central front opening. The shoulder panels are wide and extend down to the bust line, covering the upper chest area. The straps are narrow and positioned at the outer edges of the shoulders. The bust panel is a single, continuous piece that extends from the underbust to the neckline, forming a smooth, seamless front. A decorative bow closure is centered at the bottom of the front opening, adorned with a textured, beaded trim. The hem endpoint is not fully visible, but the garment appears to end at the underbust level. The construction includes a central seam running vertically down the front, aligning with the bow closure. The fabric has a smooth, satin-like texture, and the bow trim adds a three-dimensional element to the otherwise flat front panel. The overall design prioritizes a fitted silhouette with minimal visible seams aside from the central front seam and the edges of the shoulder panels</pre></section>
+        <section class="panel"><div class="label">Latency And Metadata</div><pre>{
+  &quot;selected_type&quot;: &quot;top&quot;,
+  &quot;style&quot;: &quot;bra&quot;,
+  &quot;primary_category_key&quot;: &quot;tops&quot;,
+  &quot;processing_time_ms&quot;: 17211,
+  &quot;latencies&quot;: {
+    &quot;total&quot;: 17.2117,
+    &quot;gpu_queue_wait&quot;: 0.0,
+    &quot;stages&quot;: {
+      &quot;read_input_s&quot;: 0.0004,
+      &quot;blur_check_s&quot;: 0.0,
+      &quot;yolo_detect_s&quot;: 0.0361,
+      &quot;yolo_crop_s&quot;: 0.0,
+      &quot;caption_total_s&quot;: 0.0,
+      &quot;primary_type_total_s&quot;: 0.0,
+      &quot;extract_total_s&quot;: 7.1115,
+      &quot;progress_sync_s&quot;: 0.9518,
+      &quot;minicpm_s&quot;: 9.0014,
+      &quot;joycaption_s&quot;: 0.0
+    }
+  },
+  &quot;bbox&quot;: [
+    454,
+    283,
+    837,
+    764
+  ],
+  &quot;extract_crop_bbox&quot;: [
+    424,
+    245,
+    867,
+    783
+  ],
+  &quot;reason_codes&quot;: [
+    &quot;SINGLE_ITEM&quot;,
+    &quot;TYPE_FORCED_EXTRACT&quot;,
+    &quot;TYPE_FORCED_VTON&quot;
+  ]
+}</pre></section>
+      </div>
+    </article>
+    
+    <article class="card">
+      <header class="card-head"><h2>Dress</h2></header>
+      <div class="image-grid">
+        <figure class="panel"><div class="label">Source Image</div><img src="assets/dress_case_source.png" alt="Source Image"></figure>
+        <figure class="panel"><div class="label">Input Crop</div><img src="assets/dress_case_input_crop.png" alt="Input Crop"></figure>
+        <figure class="panel"><div class="label">Extracted Output</div><img src="assets/dress_case_output.png" alt="Extracted Output"></figure>
+      </div>
+      <p class="link-row"><a href="https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/72183f70-6e48-422c-b7aa-b8e2dd882ef2.png">Output image URL</a></p>
+      <div class="text-grid">
+        <section class="panel"><div class="label">Prompt Description</div><pre>This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment&#x27;s dramatic silhouette</pre></section>
+        <section class="panel"><div class="label">MiniCPM Description</div><pre>This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the leg, adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment&#x27;s dramatic silhouette.</pre></section>
+        <section class="panel"><div class="label">Base Garment Prompt</div><pre>A single dress garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. Preserve the garment&#x27;s original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Dress-only: no separate top, no separate skirt, no two-piece outfit look, and no added waistband between bodice and skirt. Keep the dress as one continuous garment from bodice to hem with the original waist transition preserved in a single piece. Do not split it into a separate top and skirt or split the dress into bodice and skirt as if they were separate garments. Keep the bodice and skirt flow smooth, flat, and cloth-like rather than body-shaped. This garment is a strapless evening dress with a sweetheart neckline, featuring a fitted bodice that transitions seamlessly into a voluminous, layered skirt. The bodice is structured with a smooth, form-fitting silhouette, accented by a decorative trim along the neckline. The skirt is composed of multiple cascading ruffled panels that create an asymmetrical, high-low hemline, with the front hem reaching mid-calf and the back extending into a dramatic train. An asymmetric thigh-high slit on one side reveals the , adding to the dynamic flow of the skirt. The dress lacks visible shoulder straps or sleeves, emphasizing the strapless design. The continuous construction from bodice to skirt is evident, with the ruffled panels starting at the waist and extending downward, creating a fluid, layered effect. The hemline is uneven due to the cascading ruffles and the high slit, contributing to the garment&#x27;s dramatic silhouette</pre></section>
+        <section class="panel"><div class="label">Latency And Metadata</div><pre>{
+  &quot;selected_type&quot;: &quot;dress&quot;,
+  &quot;style&quot;: &quot;day dress&quot;,
+  &quot;primary_category_key&quot;: &quot;dresses&quot;,
+  &quot;processing_time_ms&quot;: 25415,
+  &quot;latencies&quot;: {
+    &quot;total&quot;: 25.4156,
+    &quot;gpu_queue_wait&quot;: 0.0001,
+    &quot;stages&quot;: {
+      &quot;read_input_s&quot;: 0.002,
+      &quot;blur_check_s&quot;: 0.0,
+      &quot;yolo_detect_s&quot;: 0.0318,
+      &quot;yolo_crop_s&quot;: 0.0,
+      &quot;caption_total_s&quot;: 0.0,
+      &quot;primary_type_total_s&quot;: 0.0,
+      &quot;extract_total_s&quot;: 12.9608,
+      &quot;progress_sync_s&quot;: 0.9583,
+      &quot;minicpm_s&quot;: 11.3438,
+      &quot;joycaption_s&quot;: 0.0
+    }
+  },
+  &quot;bbox&quot;: [
+    239,
+    97,
+    1063,
+    1555
+  ],
+  &quot;extract_crop_bbox&quot;: [
+    116,
+    0,
+    1134,
+    1558
+  ],
+  &quot;reason_codes&quot;: [
+    &quot;SINGLE_ITEM&quot;,
+    &quot;TYPE_FORCED_EXTRACT&quot;,
+    &quot;TYPE_FORCED_VTON&quot;
+  ]
+}</pre></section>
+      </div>
+    </article>
+    
+</main>
+</body>
+</html>

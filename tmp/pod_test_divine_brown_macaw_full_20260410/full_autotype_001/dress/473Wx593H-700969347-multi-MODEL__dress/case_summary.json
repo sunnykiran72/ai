@@ -1,0 +1,21 @@
+{
+  "summary": {
+    "case_id": "473Wx593H-700969347-multi-MODEL__dress",
+    "target_type": "dress",
+    "source_image": "/workspace/codex_test_garments_full_20260410/-473Wx593H-700969347-multi-MODEL.png",
+    "probe_status_code": 200,
+    "probe_selection_required": false,
+    "final_status_code": 200,
+    "final_selection_required": false,
+    "selected_type": "dress",
+    "prompt_description": "This garment is a strapless dress with a fitted bodice transitioning into a voluminous skirt. The upper edge features a wide, gathered neckline with a slight pleat detail at the center front. Thin, adjustable shoulder straps are attached to the bodice, providing support. The bodice is structured with vertical seams and a drawstring closure at the waist, creating a cinched silhouette. The skirt is gathered from the waistband, forming a full, flared shape that extends to mid-calf length. The hemline is straight and even, with no visible slits or cutouts. The dress is constructed from a single piece of fabric, with the bodice and skirt seamlessly integrated. The fabric exhibits a tie-dye pattern, adding visual interest to the construction. The overall design emphasizes a continuous flow from the bodice to the skirt, with the gathered elements contributing to the dress's fullness and shape",
+    "output_image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/63def5b9-bde1-4021-ae0c-aa18dc0f12fc.png",
+    "probe_latency_s": 16.9981,
+    "final_latency_s": 16.2868
+  },
+  "source_image": "/workspace/codex_test_garments_full_20260410/-473Wx593H-700969347-multi-MODEL.png",
+  "working_input": "/workspace/codex_test_garments_full_20260410/-473Wx593H-700969347-multi-MODEL.png",
+  "chosen_probe_item": null,
+  "probe_response_path": "/workspace/analyze_batch_results_20260410/full_autotype_001/dress/473Wx593H-700969347-multi-MODEL__dress/probe_response.json",
+  "final_response_path": "/workspace/analyze_batch_results_20260410/full_autotype_001/dress/473Wx593H-700969347-multi-MODEL__dress/final_response.json"
+}

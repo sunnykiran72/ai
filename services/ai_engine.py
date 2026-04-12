@@ -27,6 +27,7 @@ from core.openclip_runner import OpenCLIPRunner
 from core.fashion_color_classifier_runner import FashionColorClassifierRunner
 from core.garment_color_masker import GarmentColorMasker
 from core.grounding_dino_runner import GroundingDinoRunner
+from core.realesrgan_runner import RealESRGANRunner
 from modules.wardrobe.yolo_cropper import YoloCropper
 from modules.wardrobe.human_parser import HumanParser
 from modules.wardrobe.cloth_detection import ClothDetector
@@ -72,6 +73,13 @@ class AIEngine:
         self.qwen25vl = Qwen25VLRunner()
         self.joycaption = JoyCaptionRunner()
         self.minicpm = MiniCPMVRunner()
+        self.realesrgan = RealESRGANRunner(
+            model_name=config.app.user_prep_upscale_model_name,
+            model_path=config.app.user_prep_upscale_model_path,
+            tile=config.app.user_prep_upscale_tile,
+            tile_pad=config.app.user_prep_upscale_tile_pad,
+            pre_pad=config.app.user_prep_upscale_pre_pad,
+        )
         
         # Classification models
         self.openclip = OpenCLIPRunner()
@@ -181,6 +189,9 @@ class AIEngine:
             "joycaption_loaded": self.joycaption.is_loaded,
             "minicpm_loaded": self.minicpm.is_loaded,
             "minicpm_model_id": str(getattr(self.minicpm, "model_id", "")),
+            "realesrgan_loaded": self.realesrgan.is_loaded,
+            "realesrgan_available": self.realesrgan.is_available,
+            "realesrgan_model_name": self.realesrgan.model_name,
             "openclip_loaded": self.openclip.is_loaded,
             "openclip_available": self.openclip.is_available,
             "fashion_basecolour_loaded": self.fashion_basecolour.is_loaded,

@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Upscale Comparison - bella.PNG</title>
+  <style>
+    :root {
+      --bg: #f4f0eb;
+      --panel: #fffdfa;
+      --ink: #1f1a17;
+      --muted: #6f6760;
+      --line: #d9d1c7;
+      --accent: #7c5c39;
+      --shadow: 0 14px 34px rgba(31, 24, 18, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      color: var(--ink);
+      font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
+      background:
+        radial-gradient(circle at top right, rgba(124, 92, 57, 0.12), transparent 24%),
+        linear-gradient(180deg, #fbf8f3 0%, var(--bg) 100%);
+    }
+
+    .page {
+      max-width: 1800px;
+      margin: 0 auto;
+      padding: 32px 20px 48px;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: clamp(28px, 3vw, 44px);
+      line-height: 1;
+      letter-spacing: -0.03em;
+    }
+
+    .subtitle {
+      margin: 0 0 20px;
+      color: var(--muted);
+      font-size: 16px;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 28px;
+    }
+
+    .pill {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 12px;
+      background: rgba(255,255,255,0.74);
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 18px;
+    }
+
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+
+    .card-head {
+      padding: 16px 16px 12px;
+      border-bottom: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(255,255,255,0.94), rgba(248,244,238,0.94));
+    }
+
+    .title-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+
+    .title {
+      margin: 0;
+      font-size: 20px;
+      line-height: 1.1;
+    }
+
+    .tag {
+      border-radius: 999px;
+      padding: 6px 10px;
+      font-size: 12px;
+      color: var(--accent);
+      border: 1px solid rgba(124, 92, 57, 0.18);
+      background: rgba(124, 92, 57, 0.08);
+      white-space: nowrap;
+    }
+
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+
+    .meta span {
+      display: block;
+      margin-top: 2px;
+      font-size: 14px;
+      color: var(--ink);
+    }
+
+    .image-wrap {
+      padding: 14px;
+      background:
+        linear-gradient(45deg, #efe8de 25%, #faf7f2 25%, #faf7f2 50%, #efe8de 50%, #efe8de 75%, #faf7f2 75%, #faf7f2 100%);
+      background-size: 22px 22px;
+    }
+
+    .image-wrap button {
+      all: unset;
+      display: block;
+      width: 100%;
+      cursor: zoom-in;
+    }
+
+    .image-wrap img {
+      width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 12px;
+      border: 1px solid rgba(0, 0, 0, 0.08);
+      background: #fff;
+    }
+
+    .path {
+      padding: 0 16px 16px;
+      font-size: 12px;
+      color: var(--muted);
+      word-break: break-all;
+    }
+
+    dialog {
+      border: 0;
+      padding: 0;
+      background: transparent;
+      max-width: min(94vw, 1500px);
+    }
+
+    dialog::backdrop {
+      background: rgba(15, 11, 8, 0.74);
+      backdrop-filter: blur(4px);
+    }
+
+    .modal {
+      background: #101010;
+      border-radius: 18px;
+      overflow: hidden;
+      box-shadow: 0 30px 80px rgba(0,0,0,0.45);
+    }
+
+    .modal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px;
+      color: #f2ece4;
+      background: rgba(255,255,255,0.06);
+    }
+
+    .modal-title {
+      margin: 0;
+      font-size: 18px;
+    }
+
+    .close {
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(255,255,255,0.08);
+      color: #fff;
+      border-radius: 999px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font: inherit;
+    }
+
+    .modal img {
+      display: block;
+      width: 100%;
+      height: auto;
+      max-height: calc(90vh - 70px);
+      object-fit: contain;
+      background: #101010;
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <h1>Upscale Comparison</h1>
+    <p class="subtitle">Image: <code>bella.PNG</code> | Click any panel to zoom.</p>
+    <div class="legend">
+      <div class="pill">Original + model outputs</div>
+      <div class="pill">Pod benchmark outputs</div>
+      <div class="pill">Latency shown from the same RTX PRO 6000 pod</div>
+    </div>
+
+    <main class="grid">
+      <article class="card">
+        <div class="card-head">
+          <div class="title-row">
+            <h2 class="title">Original</h2>
+            <div class="tag">Input</div>
+          </div>
+          <div class="meta">
+            <div>Latency<span>N/A</span></div>
+            <div>Comment<span>Baseline</span></div>
+          </div>
+        </div>
+        <div class="image-wrap">
+          <button type="button" data-title="Original" data-src="file:///Users/kiran/Downloads/bella.PNG">
+            <img src="file:///Users/kiran/Downloads/bella.PNG" alt="Original bella input">
+          </button>
+        </div>
+        <div class="path">/Users/kiran/Downloads/bella.PNG</div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <div class="title-row">
+            <h2 class="title">Real-ESRGAN x4plus</h2>
+            <div class="tag">Fastest</div>
+          </div>
+          <div class="meta">
+            <div>Latency<span>0.56s</span></div>
+            <div>Comment<span>Best speed</span></div>
+          </div>
+        </div>
+        <div class="image-wrap">
+          <button type="button" data-title="Real-ESRGAN x4plus" data-src="file:///tmp/sr_compare/RealESRGAN_x4plus.png">
+            <img src="file:///tmp/sr_compare/RealESRGAN_x4plus.png" alt="Real-ESRGAN x4plus bella">
+          </button>
+        </div>
+        <div class="path">/tmp/sr_compare/RealESRGAN_x4plus.png</div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <div class="title-row">
+            <h2 class="title">UltraSharpV2</h2>
+            <div class="tag">Texture-first</div>
+          </div>
+          <div class="meta">
+            <div>Latency<span>4.91s</span></div>
+            <div>Comment<span>Less smoothing</span></div>
+          </div>
+        </div>
+        <div class="image-wrap">
+          <button type="button" data-title="UltraSharpV2" data-src="file:///tmp/sr_compare/UltraSharpV2.png">
+            <img src="file:///tmp/sr_compare/UltraSharpV2.png" alt="UltraSharpV2 bella">
+          </button>
+        </div>
+        <div class="path">/tmp/sr_compare/UltraSharpV2.png</div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <div class="title-row">
+            <h2 class="title">UltraSharpV2 Lite</h2>
+            <div class="tag">Fast alt</div>
+          </div>
+          <div class="meta">
+            <div>Latency<span>2.95s</span></div>
+            <div>Comment<span>Softer than full V2</span></div>
+          </div>
+        </div>
+        <div class="image-wrap">
+          <button type="button" data-title="UltraSharpV2 Lite" data-src="file:///tmp/sr_compare/UltraSharpV2_Lite.png">
+            <img src="file:///tmp/sr_compare/UltraSharpV2_Lite.png" alt="UltraSharpV2 Lite bella">
+          </button>
+        </div>
+        <div class="path">/tmp/sr_compare/UltraSharpV2_Lite.png</div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <div class="title-row">
+            <h2 class="title">AuraSR-v2</h2>
+            <div class="tag">GAN SR</div>
+          </div>
+          <div class="meta">
+            <div>Latency<span>5.36s</span></div>
+            <div>Comment<span>Good texture retention</span></div>
+          </div>
+        </div>
+        <div class="image-wrap">
+          <button type="button" data-title="AuraSR-v2" data-src="file:///tmp/compare_bella_all_local/AuraSR_v2.png">
+            <img src="file:///tmp/compare_bella_all_local/AuraSR_v2.png" alt="AuraSR-v2 bella">
+          </button>
+        </div>
+        <div class="path">/tmp/compare_bella_all_local/AuraSR_v2.png</div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <div class="title-row">
+            <h2 class="title">Swin2SR Realworld x4</h2>
+            <div class="tag">Transformer</div>
+          </div>
+          <div class="meta">
+            <div>Latency<span>3.19s</span></div>
+            <div>Comment<span>Not great on bella</span></div>
+          </div>
+        </div>
+        <div class="image-wrap">
+          <button type="button" data-title="Swin2SR Realworld x4" data-src="file:///tmp/compare_bella_all_local/Swin2SR_realworld_x4.png">
+            <img src="file:///tmp/compare_bella_all_local/Swin2SR_realworld_x4.png" alt="Swin2SR realworld x4 bella">
+          </button>
+        </div>
+        <div class="path">/tmp/compare_bella_all_local/Swin2SR_realworld_x4.png</div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <div class="title-row">
+            <h2 class="title">SUPIR F_fidelity_50</h2>
+            <div class="tag">Slowest</div>
+          </div>
+          <div class="meta">
+            <div>Latency<span>28.69s</span></div>
+            <div>Comment<span>Most generative</span></div>
+          </div>
+        </div>
+        <div class="image-wrap">
+          <button type="button" data-title="SUPIR F_fidelity_50" data-src="file:///tmp/supir_local/F_fidelity_50.png">
+            <img src="file:///tmp/supir_local/F_fidelity_50.png" alt="SUPIR F fidelity 50 bella">
+          </button>
+        </div>
+        <div class="path">/tmp/supir_local/F_fidelity_50.png</div>
+      </article>
+
+      <article class="card">
+        <div class="card-head">
+          <div class="title-row">
+            <h2 class="title">Q_quality_50</h2>
+            <div class="tag">SUPIR alt</div>
+          </div>
+          <div class="meta">
+            <div>Latency<span>28.70s</span></div>
+            <div>Comment<span>Sharper but more aggressive</span></div>
+          </div>
+        </div>
+        <div class="image-wrap">
+          <button type="button" data-title="Q_quality_50" data-src="file:///tmp/supir_local/Q_quality_50.png">
+            <img src="file:///tmp/supir_local/Q_quality_50.png" alt="SUPIR Q quality 50 bella">
+          </button>
+        </div>
+        <div class="path">/tmp/supir_local/Q_quality_50.png</div>
+      </article>
+    </main>
+  </div>
+
+  <dialog id="viewer">
+    <div class="modal">
+      <div class="modal-head">
+        <h3 class="modal-title" id="viewer-title">Preview</h3>
+        <button class="close" id="viewer-close" type="button">Close</button>
+      </div>
+      <img id="viewer-image" alt="">
+    </div>
+  </dialog>
+
+  <script>
+    const viewer = document.getElementById("viewer");
+    const viewerImage = document.getElementById("viewer-image");
+    const viewerTitle = document.getElementById("viewer-title");
+    const closeButton = document.getElementById("viewer-close");
+
+    document.querySelectorAll("[data-src]").forEach((button) => {
+      button.addEventListener("click", () => {
+        viewerImage.src = button.dataset.src;
+        viewerImage.alt = button.dataset.title || "Preview";
+        viewerTitle.textContent = button.dataset.title || "Preview";
+        viewer.showModal();
+      });
+    });
+
+    closeButton.addEventListener("click", () => viewer.close());
+    viewer.addEventListener("click", (event) => {
+      const rect = viewer.querySelector(".modal").getBoundingClientRect();
+      const inside = (
+        event.clientX >= rect.left &&
+        event.clientX <= rect.right &&
+        event.clientY >= rect.top &&
+        event.clientY <= rect.bottom
+      );
+      if (!inside) {
+        viewer.close();
+      }
+    });
+  </script>
+</body>
+</html>

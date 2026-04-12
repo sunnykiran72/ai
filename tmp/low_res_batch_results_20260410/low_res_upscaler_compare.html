@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Low-Res Upscaler Benchmark</title>
+  <style>
+    :root {
+      --bg: #f4efe6;
+      --panel: #fffaf2;
+      --line: #d9ccb8;
+      --text: #201913;
+      --muted: #6a5a4f;
+      --accent: #9e5b2a;
+    }
+    body {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      background: linear-gradient(180deg, #efe4d0 0%, var(--bg) 35%, #f8f3ec 100%);
+      color: var(--text);
+    }
+    main {
+      max-width: 1680px;
+      margin: 0 auto;
+      padding: 32px 24px 64px;
+    }
+    h1, h2, h3, h4 { margin: 0 0 12px; }
+    p { margin: 0 0 10px; color: var(--muted); }
+    .summary-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      margin-bottom: 28px;
+    }
+    .summary-table th, .summary-table td {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .settings {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .settings-card, .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px;
+      box-shadow: 0 8px 30px rgba(66, 43, 18, 0.06);
+    }
+    .settings-card pre {
+      overflow-x: auto;
+      white-space: pre-wrap;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .image-section {
+      margin-bottom: 26px;
+      padding-top: 20px;
+      border-top: 1px solid rgba(158, 91, 42, 0.2);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+    }
+    .card img {
+      width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 12px;
+      background: #ebe3d4;
+      margin-bottom: 10px;
+    }
+    .card.error {
+      border-color: #c06a55;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Low-Res Upscaler Benchmark</h1>
+    <p>Final outputs are capped to a max side of 1024px after each model's native 4x pass.</p>
+    <table class="summary-table">
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th>Load Seconds</th>
+          <th>Avg Inference Seconds</th>
+          <th>Completed</th>
+          <th>Failed</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>Real-ESRGAN_x4plus</td><td>3.9752</td><td>0.245</td><td>11</td><td>0</td></tr><tr><td>UltraSharpV2</td><td>5.3531</td><td>8.515</td><td>11</td><td>0</td></tr><tr><td>AuraSR-v2</td><td>5.6809</td><td>2.19</td><td>11</td><td>0</td></tr><tr><td>Swin2SR_realworld_x4</td><td>3.5157</td><td>1.744</td><td>11</td><td>0</td></tr>
+      </tbody>
+    </table>
+    <section class="settings">
+      <section class='settings-card'><h3>Real-ESRGAN_x4plus</h3><p>Status: ok</p><pre>{
+  &quot;model_variant&quot;: &quot;RealESRGAN_x4plus&quot;,
+  &quot;native_scale&quot;: 4,
+  &quot;tile&quot;: 0,
+  &quot;tile_pad&quot;: 10,
+  &quot;pre_pad&quot;: 0,
+  &quot;half&quot;: true,
+  &quot;weight_path&quot;: &quot;/tmp/realesrgan_weights/RealESRGAN_x4plus.pth&quot;,
+  &quot;postprocess_max_side&quot;: 1024,
+  &quot;postprocess_resample&quot;: &quot;LANCZOS&quot;
+}</pre></section><section class='settings-card'><h3>UltraSharpV2</h3><p>Status: ok</p><pre>{
+  &quot;model_variant&quot;: &quot;UltraSharpV2_full&quot;,
+  &quot;native_scale&quot;: 4,
+  &quot;onnx_path&quot;: &quot;/tmp/ultrasharp/4x-UltraSharpV2_fp32_op17.onnx&quot;,
+  &quot;providers&quot;: [
+    &quot;CUDAExecutionProvider&quot;,
+    &quot;CPUExecutionProvider&quot;
+  ],
+  &quot;postprocess_max_side&quot;: 1024,
+  &quot;postprocess_resample&quot;: &quot;LANCZOS&quot;
+}</pre></section><section class='settings-card'><h3>AuraSR-v2</h3><p>Status: ok</p><pre>{
+  &quot;model_variant&quot;: &quot;AuraSR-v2&quot;,
+  &quot;native_scale&quot;: 4,
+  &quot;method&quot;: &quot;upscale_4x_overlapped&quot;,
+  &quot;max_batch_size&quot;: 8,
+  &quot;weight_type&quot;: &quot;checkboard&quot;,
+  &quot;seed&quot;: 1234,
+  &quot;weight_path&quot;: &quot;/tmp/hf-home-aura/hub/models--fal--AuraSR-v2/snapshots/ff452185a7c8b51206dd62c21c292e7baad5c3a3/model.safetensors&quot;,
+  &quot;postprocess_max_side&quot;: 1024,
+  &quot;postprocess_resample&quot;: &quot;LANCZOS&quot;
+}</pre></section><section class='settings-card'><h3>Swin2SR_realworld_x4</h3><p>Status: ok</p><pre>{
+  &quot;model_variant&quot;: &quot;caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr&quot;,
+  &quot;native_scale&quot;: 4,
+  &quot;device&quot;: &quot;cuda&quot;,
+  &quot;model_dir&quot;: &quot;/tmp/hf-home-swin/transformers/models--caidas--swin2SR-realworld-sr-x4-64-bsrgan-psnr/snapshots/bb13f02e45e88d00b6c202b3fbe6a181af144606&quot;,
+  &quot;window_size&quot;: 8,
+  &quot;postprocess_max_side&quot;: 1024,
+  &quot;postprocess_resample&quot;: &quot;LANCZOS&quot;
+}</pre></section>
+    </section>
+    <section class='image-section'><h2>121500727-femme-d-affaires-prospère-jeune-femme-brune-intelligente-en-tenue-formelle-debout-avec-les-jambes.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/121500727-femme-d-affaires-prospère-jeune-femme-brune-intelligente-en-tenue-formelle-debout-avec-les-jambes.jpg' alt='121500727-femme-d-affaires-prospère-jeune-femme-brune-intelligente-en-tenue-formelle-debout-avec-les-jambes.jpg' loading='lazy'><p>121500727-femme-d-affaires-prospère-jeune-femme-brune-intelligente-en-tenue-formelle-debout-avec-les-jambes.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/121500727-femme-d-affaires-prospère-jeune-femme-brune-intelligente-en-tenue-formelle-debout-avec-les-jambes.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.3493s inference</p><p>683x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/121500727-femme-d-affaires-prospère-jeune-femme-brune-intelligente-en-tenue-formelle-debout-avec-les-jambes.png' alt='UltraSharpV2' loading='lazy'><p>13.2239s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/121500727-femme-d-affaires-prospère-jeune-femme-brune-intelligente-en-tenue-formelle-debout-avec-les-jambes.png' alt='AuraSR-v2' loading='lazy'><p>1.9314s inference</p><p>683x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/121500727-femme-d-affaires-prospère-jeune-femme-brune-intelligente-en-tenue-formelle-debout-avec-les-jambes.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>2.0106s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>131452196-portrait-de-belle-fille-brune-avec-du-maquillage-dans-des-vêtements-de-mode.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/131452196-portrait-de-belle-fille-brune-avec-du-maquillage-dans-des-vêtements-de-mode.jpg' alt='131452196-portrait-de-belle-fille-brune-avec-du-maquillage-dans-des-vêtements-de-mode.jpg' loading='lazy'><p>131452196-portrait-de-belle-fille-brune-avec-du-maquillage-dans-des-vêtements-de-mode.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/131452196-portrait-de-belle-fille-brune-avec-du-maquillage-dans-des-vêtements-de-mode.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.1855s inference</p><p>667x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/131452196-portrait-de-belle-fille-brune-avec-du-maquillage-dans-des-vêtements-de-mode.png' alt='UltraSharpV2' loading='lazy'><p>13.9063s inference</p><p>667x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/131452196-portrait-de-belle-fille-brune-avec-du-maquillage-dans-des-vêtements-de-mode.png' alt='AuraSR-v2' loading='lazy'><p>1.8601s inference</p><p>667x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/131452196-portrait-de-belle-fille-brune-avec-du-maquillage-dans-des-vêtements-de-mode.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>1.6238s inference</p><p>667x1024</p></article></div></section><section class='image-section'><h2>164361969-photo-of-beautiful-young-girl-in-a-casual-clothes.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/164361969-photo-of-beautiful-young-girl-in-a-casual-clothes.jpg' alt='164361969-photo-of-beautiful-young-girl-in-a-casual-clothes.jpg' loading='lazy'><p>164361969-photo-of-beautiful-young-girl-in-a-casual-clothes.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/164361969-photo-of-beautiful-young-girl-in-a-casual-clothes.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.1964s inference</p><p>683x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/164361969-photo-of-beautiful-young-girl-in-a-casual-clothes.png' alt='UltraSharpV2' loading='lazy'><p>14.0531s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/164361969-photo-of-beautiful-young-girl-in-a-casual-clothes.png' alt='AuraSR-v2' loading='lazy'><p>1.8648s inference</p><p>683x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/164361969-photo-of-beautiful-young-girl-in-a-casual-clothes.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>1.4934s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>178795102-jolie-femme-dans-des-vêtements-à-la-mode-posant-luxe-coiffure-glamour.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/178795102-jolie-femme-dans-des-vêtements-à-la-mode-posant-luxe-coiffure-glamour.jpg' alt='178795102-jolie-femme-dans-des-vêtements-à-la-mode-posant-luxe-coiffure-glamour.jpg' loading='lazy'><p>178795102-jolie-femme-dans-des-vêtements-à-la-mode-posant-luxe-coiffure-glamour.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/178795102-jolie-femme-dans-des-vêtements-à-la-mode-posant-luxe-coiffure-glamour.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.189s inference</p><p>683x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/178795102-jolie-femme-dans-des-vêtements-à-la-mode-posant-luxe-coiffure-glamour.png' alt='UltraSharpV2' loading='lazy'><p>1.5066s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/178795102-jolie-femme-dans-des-vêtements-à-la-mode-posant-luxe-coiffure-glamour.png' alt='AuraSR-v2' loading='lazy'><p>1.8754s inference</p><p>683x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/178795102-jolie-femme-dans-des-vêtements-à-la-mode-posant-luxe-coiffure-glamour.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>1.5291s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>360_F_135155053_CeD16Z9JjSBN66YLw8bv1x0UzNT8bWyd.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/360_F_135155053_CeD16Z9JjSBN66YLw8bv1x0UzNT8bWyd.jpg' alt='360_F_135155053_CeD16Z9JjSBN66YLw8bv1x0UzNT8bWyd.jpg' loading='lazy'><p>360_F_135155053_CeD16Z9JjSBN66YLw8bv1x0UzNT8bWyd.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/360_F_135155053_CeD16Z9JjSBN66YLw8bv1x0UzNT8bWyd.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.1466s inference</p><p>683x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/360_F_135155053_CeD16Z9JjSBN66YLw8bv1x0UzNT8bWyd.png' alt='UltraSharpV2' loading='lazy'><p>13.4106s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/360_F_135155053_CeD16Z9JjSBN66YLw8bv1x0UzNT8bWyd.png' alt='AuraSR-v2' loading='lazy'><p>1.1569s inference</p><p>683x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/360_F_135155053_CeD16Z9JjSBN66YLw8bv1x0UzNT8bWyd.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>1.1335s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>closeup-pretty-young-woman-with-long-hair-standing-against-isolated-background_662251-535.avif.png</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/closeup-pretty-young-woman-with-long-hair-standing-against-isolated-background_662251-535.avif.png' alt='closeup-pretty-young-woman-with-long-hair-standing-against-isolated-background_662251-535.avif.png' loading='lazy'><p>closeup-pretty-young-woman-with-long-hair-standing-against-isolated-background_662251-535.avif.png</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/closeup-pretty-young-woman-with-long-hair-standing-against-isolated-background_662251-535.avif.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.3608s inference</p><p>1024x684</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/closeup-pretty-young-woman-with-long-hair-standing-against-isolated-background_662251-535.avif.png' alt='UltraSharpV2' loading='lazy'><p>3.0002s inference</p><p>1024x684</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/closeup-pretty-young-woman-with-long-hair-standing-against-isolated-background_662251-535.avif.png' alt='AuraSR-v2' loading='lazy'><p>3.207s inference</p><p>1024x684</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/closeup-pretty-young-woman-with-long-hair-standing-against-isolated-background_662251-535.avif.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>2.2187s inference</p><p>1024x684</p></article></div></section><section class='image-section'><h2>istockphoto-1035693082-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/istockphoto-1035693082-612x612.jpg' alt='istockphoto-1035693082-612x612.jpg' loading='lazy'><p>istockphoto-1035693082-612x612.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/istockphoto-1035693082-612x612.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.3417s inference</p><p>683x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/istockphoto-1035693082-612x612.png' alt='UltraSharpV2' loading='lazy'><p>2.7675s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/istockphoto-1035693082-612x612.png' alt='AuraSR-v2' loading='lazy'><p>3.2013s inference</p><p>683x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/istockphoto-1035693082-612x612.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>2.2909s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>istockphoto-1303500951-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/istockphoto-1303500951-612x612.jpg' alt='istockphoto-1303500951-612x612.jpg' loading='lazy'><p>istockphoto-1303500951-612x612.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/istockphoto-1303500951-612x612.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.3358s inference</p><p>683x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/istockphoto-1303500951-612x612.png' alt='UltraSharpV2' loading='lazy'><p>2.8925s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/istockphoto-1303500951-612x612.png' alt='AuraSR-v2' loading='lazy'><p>3.1755s inference</p><p>683x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/istockphoto-1303500951-612x612.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>2.1273s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>istockphoto-695789866-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/istockphoto-695789866-612x612.jpg' alt='istockphoto-695789866-612x612.jpg' loading='lazy'><p>istockphoto-695789866-612x612.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/istockphoto-695789866-612x612.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.3227s inference</p><p>683x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/istockphoto-695789866-612x612.png' alt='UltraSharpV2' loading='lazy'><p>2.7618s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/istockphoto-695789866-612x612.png' alt='AuraSR-v2' loading='lazy'><p>3.1712s inference</p><p>683x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/istockphoto-695789866-612x612.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>2.1564s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>portrait-of-cheerful-happy-asian-woman-posing-on-white-background-photo.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/portrait-of-cheerful-happy-asian-woman-posing-on-white-background-photo.jpg' alt='portrait-of-cheerful-happy-asian-woman-posing-on-white-background-photo.jpg' loading='lazy'><p>portrait-of-cheerful-happy-asian-woman-posing-on-white-background-photo.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/portrait-of-cheerful-happy-asian-woman-posing-on-white-background-photo.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.1212s inference</p><p>685x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/portrait-of-cheerful-happy-asian-woman-posing-on-white-background-photo.png' alt='UltraSharpV2' loading='lazy'><p>12.7038s inference</p><p>685x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/portrait-of-cheerful-happy-asian-woman-posing-on-white-background-photo.png' alt='AuraSR-v2' loading='lazy'><p>1.158s inference</p><p>685x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/portrait-of-cheerful-happy-asian-woman-posing-on-white-background-photo.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>1.1607s inference</p><p>685x1024</p></article></div></section><section class='image-section'><h2>woman-portrait-and-smile-for-style-in-studio-casual-aesthetic-and-confidence-on-white-background-happy-female-person-outfit-and-fashion-on-mockup-space-cool-and-full-body-for-trendy-clothes-photo.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/woman-portrait-and-smile-for-style-in-studio-casual-aesthetic-and-confidence-on-white-background-happy-female-person-outfit-and-fashion-on-mockup-space-cool-and-full-body-for-trendy-clothes-photo.jpg' alt='woman-portrait-and-smile-for-style-in-studio-casual-aesthetic-and-confidence-on-white-background-happy-female-person-outfit-and-fashion-on-mockup-space-cool-and-full-body-for-trendy-clothes-photo.jpg' loading='lazy'><p>woman-portrait-and-smile-for-style-in-studio-casual-aesthetic-and-confidence-on-white-background-happy-female-person-outfit-and-fashion-on-mockup-space-cool-and-full-body-for-trendy-clothes-photo.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/woman-portrait-and-smile-for-style-in-studio-casual-aesthetic-and-confidence-on-white-background-happy-female-person-outfit-and-fashion-on-mockup-space-cool-and-full-body-for-trendy-clothes-photo.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.1455s inference</p><p>769x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/woman-portrait-and-smile-for-style-in-studio-casual-aesthetic-and-confidence-on-white-background-happy-female-person-outfit-and-fashion-on-mockup-space-cool-and-full-body-for-trendy-clothes-photo.png' alt='UltraSharpV2' loading='lazy'><p>13.4389s inference</p><p>769x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/woman-portrait-and-smile-for-style-in-studio-casual-aesthetic-and-confidence-on-white-background-happy-female-person-outfit-and-fashion-on-mockup-space-cool-and-full-body-for-trendy-clothes-photo.png' alt='AuraSR-v2' loading='lazy'><p>1.4882s inference</p><p>769x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/woman-portrait-and-smile-for-style-in-studio-casual-aesthetic-and-confidence-on-white-background-happy-female-person-outfit-and-fashion-on-mockup-space-cool-and-full-body-for-trendy-clothes-photo.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>1.4392s inference</p><p>769x1024</p></article></div></section>
+  </main>
+</body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "summary": {
+    "case_id": "WhatsApp-Image-2026-02-19-at-11.25.37__dress",
+    "target_type": "dress",
+    "source_image": "/workspace/codex_test_garments_full_20260410/WhatsApp Image 2026-02-19 at 11.25.37.jpeg",
+    "probe_status_code": 200,
+    "probe_selection_required": false,
+    "final_status_code": 200,
+    "final_selection_required": false,
+    "selected_type": "dress",
+    "prompt_description": "This garment is a knee-length, off-the-shoulder dress with a fitted bodice and flared skirt. The upper edge features a wide, rounded neckline with a slight V-shape at the center front. The shoulder layout includes short, off-the-shoulder sleeves that are attached to the bodice, creating a cap sleeve effect. The bodice transitions seamlessly into the waistband, which is defined by a gathered seam at the natural waist, creating a cinched silhouette. The skirt is full and flared, with a voluminous A-line shape that extends to just below the knee. The fabric is printed with large floral motifs, including , , and flowers with leaves on a . The dress has a fitted bodice with a smooth front panel that extends down to the waistband, where it flares out into the skirt. The hemline is straight and even, with no visible slits or cutouts. The dress appears to have a concealed closure at the back, as no fastening is visible at the front. The overall construction suggests a single-piece garment with a structured bodice and a full, gathered skirt",
+    "output_image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/8ed9abf3-4cd0-44f9-a70d-ce02c44b8cca.png",
+    "probe_latency_s": 26.2061,
+    "final_latency_s": 26.227
+  },
+  "source_image": "/workspace/codex_test_garments_full_20260410/WhatsApp Image 2026-02-19 at 11.25.37.jpeg",
+  "working_input": "/workspace/codex_test_garments_full_20260410/WhatsApp Image 2026-02-19 at 11.25.37.jpeg",
+  "chosen_probe_item": null,
+  "probe_response_path": "/workspace/analyze_batch_results_20260410/full_autotype_001/dress/WhatsApp-Image-2026-02-19-at-11.25.37__dress/probe_response.json",
+  "final_response_path": "/workspace/analyze_batch_results_20260410/full_autotype_001/dress/WhatsApp-Image-2026-02-19-at-11.25.37__dress/final_response.json"
+}

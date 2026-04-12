@@ -1,0 +1,145 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Low-Res Upscaler Benchmark</title>
+  <style>
+    :root {
+      --bg: #f4efe6;
+      --panel: #fffaf2;
+      --line: #d9ccb8;
+      --text: #201913;
+      --muted: #6a5a4f;
+      --accent: #9e5b2a;
+    }
+    body {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      background: linear-gradient(180deg, #efe4d0 0%, var(--bg) 35%, #f8f3ec 100%);
+      color: var(--text);
+    }
+    main {
+      max-width: 1680px;
+      margin: 0 auto;
+      padding: 32px 24px 64px;
+    }
+    h1, h2, h3, h4 { margin: 0 0 12px; }
+    p { margin: 0 0 10px; color: var(--muted); }
+    .summary-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      margin-bottom: 28px;
+    }
+    .summary-table th, .summary-table td {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .settings {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .settings-card, .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px;
+      box-shadow: 0 8px 30px rgba(66, 43, 18, 0.06);
+    }
+    .settings-card pre {
+      overflow-x: auto;
+      white-space: pre-wrap;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .image-section {
+      margin-bottom: 26px;
+      padding-top: 20px;
+      border-top: 1px solid rgba(158, 91, 42, 0.2);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+    }
+    .card img {
+      width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 12px;
+      background: #ebe3d4;
+      margin-bottom: 10px;
+    }
+    .card.error {
+      border-color: #c06a55;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Low-Res Upscaler Benchmark</h1>
+    <p>Final outputs are capped to a max side of 1024px after each model's native 4x pass.</p>
+    <table class="summary-table">
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th>Load Seconds</th>
+          <th>Avg Inference Seconds</th>
+          <th>Completed</th>
+          <th>Failed</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>Real-ESRGAN_x4plus</td><td>3.8043</td><td>0.3767</td><td>14</td><td>0</td></tr><tr><td>UltraSharpV2</td><td>5.1197</td><td>4.6872</td><td>14</td><td>0</td></tr><tr><td>AuraSR-v2</td><td>5.5799</td><td>3.4632</td><td>14</td><td>0</td></tr><tr><td>Swin2SR_realworld_x4</td><td>0.9385</td><td>2.3548</td><td>14</td><td>0</td></tr>
+      </tbody>
+    </table>
+    <section class="settings">
+      <section class='settings-card'><h3>Real-ESRGAN_x4plus</h3><p>Status: ok</p><pre>{
+  &quot;model_variant&quot;: &quot;RealESRGAN_x4plus&quot;,
+  &quot;native_scale&quot;: 4,
+  &quot;tile&quot;: 0,
+  &quot;tile_pad&quot;: 10,
+  &quot;pre_pad&quot;: 0,
+  &quot;half&quot;: true,
+  &quot;weight_path&quot;: &quot;/tmp/realesrgan_weights/RealESRGAN_x4plus.pth&quot;,
+  &quot;postprocess_max_side&quot;: 1024,
+  &quot;postprocess_resample&quot;: &quot;LANCZOS&quot;
+}</pre></section><section class='settings-card'><h3>UltraSharpV2</h3><p>Status: ok</p><pre>{
+  &quot;model_variant&quot;: &quot;UltraSharpV2_full&quot;,
+  &quot;native_scale&quot;: 4,
+  &quot;onnx_path&quot;: &quot;/tmp/ultrasharp/4x-UltraSharpV2_fp32_op17.onnx&quot;,
+  &quot;providers&quot;: [
+    &quot;CUDAExecutionProvider&quot;,
+    &quot;CPUExecutionProvider&quot;
+  ],
+  &quot;postprocess_max_side&quot;: 1024,
+  &quot;postprocess_resample&quot;: &quot;LANCZOS&quot;
+}</pre></section><section class='settings-card'><h3>AuraSR-v2</h3><p>Status: ok</p><pre>{
+  &quot;model_variant&quot;: &quot;AuraSR-v2&quot;,
+  &quot;native_scale&quot;: 4,
+  &quot;method&quot;: &quot;upscale_4x_overlapped&quot;,
+  &quot;max_batch_size&quot;: 8,
+  &quot;weight_type&quot;: &quot;checkboard&quot;,
+  &quot;seed&quot;: 1234,
+  &quot;weight_path&quot;: &quot;/tmp/hf-home-aura/hub/models--fal--AuraSR-v2/snapshots/ff452185a7c8b51206dd62c21c292e7baad5c3a3/model.safetensors&quot;,
+  &quot;postprocess_max_side&quot;: 1024,
+  &quot;postprocess_resample&quot;: &quot;LANCZOS&quot;
+}</pre></section><section class='settings-card'><h3>Swin2SR_realworld_x4</h3><p>Status: ok</p><pre>{
+  &quot;model_variant&quot;: &quot;caidas/swin2SR-realworld-sr-x4-64-bsrgan-psnr&quot;,
+  &quot;native_scale&quot;: 4,
+  &quot;device&quot;: &quot;cuda&quot;,
+  &quot;model_dir&quot;: &quot;/tmp/hf-home-swin/transformers/models--caidas--swin2SR-realworld-sr-x4-64-bsrgan-psnr/snapshots/bb13f02e45e88d00b6c202b3fbe6a181af144606&quot;,
+  &quot;window_size&quot;: 8,
+  &quot;postprocess_max_side&quot;: 1024,
+  &quot;postprocess_resample&quot;: &quot;LANCZOS&quot;
+}</pre></section>
+    </section>
+    <section class='image-section'><h2>765DC106-B404-41E5-B1DF-199C5E82FABE 2.PNG</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/765DC106-B404-41E5-B1DF-199C5E82FABE 2.PNG' alt='765DC106-B404-41E5-B1DF-199C5E82FABE 2.PNG' loading='lazy'><p>765DC106-B404-41E5-B1DF-199C5E82FABE 2.PNG</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/765DC106-B404-41E5-B1DF-199C5E82FABE 2.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.7091s inference</p><p>682x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/765DC106-B404-41E5-B1DF-199C5E82FABE 2.png' alt='UltraSharpV2' loading='lazy'><p>5.3236s inference</p><p>682x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/765DC106-B404-41E5-B1DF-199C5E82FABE 2.png' alt='AuraSR-v2' loading='lazy'><p>5.2995s inference</p><p>682x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/765DC106-B404-41E5-B1DF-199C5E82FABE 2.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>3.2266s inference</p><p>682x1024</p></article></div></section><section class='image-section'><h2>7d2c7f05-ae77-41a1-948e-c179626e4568.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/7d2c7f05-ae77-41a1-948e-c179626e4568.jpg' alt='7d2c7f05-ae77-41a1-948e-c179626e4568.jpg' loading='lazy'><p>7d2c7f05-ae77-41a1-948e-c179626e4568.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/7d2c7f05-ae77-41a1-948e-c179626e4568.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.7874s inference</p><p>576x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/7d2c7f05-ae77-41a1-948e-c179626e4568.png' alt='UltraSharpV2' loading='lazy'><p>6.5617s inference</p><p>576x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/7d2c7f05-ae77-41a1-948e-c179626e4568.png' alt='AuraSR-v2' loading='lazy'><p>6.6915s inference</p><p>576x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/7d2c7f05-ae77-41a1-948e-c179626e4568.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>4.1465s inference</p><p>576x1024</p></article></div></section><section class='image-section'><h2>depositphotos_193329662-stock-photo-young-crazy-man-satisfied-expression.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/depositphotos_193329662-stock-photo-young-crazy-man-satisfied-expression.jpg' alt='depositphotos_193329662-stock-photo-young-crazy-man-satisfied-expression.jpg' loading='lazy'><p>depositphotos_193329662-stock-photo-young-crazy-man-satisfied-expression.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/depositphotos_193329662-stock-photo-young-crazy-man-satisfied-expression.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.3587s inference</p><p>739x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/depositphotos_193329662-stock-photo-young-crazy-man-satisfied-expression.png' alt='UltraSharpV2' loading='lazy'><p>2.8722s inference</p><p>739x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/depositphotos_193329662-stock-photo-young-crazy-man-satisfied-expression.png' alt='AuraSR-v2' loading='lazy'><p>3.2372s inference</p><p>739x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/depositphotos_193329662-stock-photo-young-crazy-man-satisfied-expression.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>2.3523s inference</p><p>739x1024</p></article></div></section><section class='image-section'><h2>gettyimages-1277789459-170667a.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/gettyimages-1277789459-170667a.jpg' alt='gettyimages-1277789459-170667a.jpg' loading='lazy'><p>gettyimages-1277789459-170667a.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/gettyimages-1277789459-170667a.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.2357s inference</p><p>683x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/gettyimages-1277789459-170667a.png' alt='UltraSharpV2' loading='lazy'><p>12.8939s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/gettyimages-1277789459-170667a.png' alt='AuraSR-v2' loading='lazy'><p>2.2487s inference</p><p>683x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/gettyimages-1277789459-170667a.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>1.7594s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>gettyimages-1386178864-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/gettyimages-1386178864-612x612.jpg' alt='gettyimages-1386178864-612x612.jpg' loading='lazy'><p>gettyimages-1386178864-612x612.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/gettyimages-1386178864-612x612.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.3329s inference</p><p>683x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/gettyimages-1386178864-612x612.png' alt='UltraSharpV2' loading='lazy'><p>2.8168s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/gettyimages-1386178864-612x612.png' alt='AuraSR-v2' loading='lazy'><p>3.2031s inference</p><p>683x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/gettyimages-1386178864-612x612.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>2.2878s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>gettyimages-1457156726-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/gettyimages-1457156726-612x612.jpg' alt='gettyimages-1457156726-612x612.jpg' loading='lazy'><p>gettyimages-1457156726-612x612.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/gettyimages-1457156726-612x612.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.3266s inference</p><p>683x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/gettyimages-1457156726-612x612.png' alt='UltraSharpV2' loading='lazy'><p>2.9028s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/gettyimages-1457156726-612x612.png' alt='AuraSR-v2' loading='lazy'><p>3.2454s inference</p><p>683x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/gettyimages-1457156726-612x612.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>2.1816s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>gettyimages-2155141672-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/gettyimages-2155141672-612x612.jpg' alt='gettyimages-2155141672-612x612.jpg' loading='lazy'><p>gettyimages-2155141672-612x612.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/gettyimages-2155141672-612x612.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.3382s inference</p><p>683x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/gettyimages-2155141672-612x612.png' alt='UltraSharpV2' loading='lazy'><p>2.7621s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/gettyimages-2155141672-612x612.png' alt='AuraSR-v2' loading='lazy'><p>3.2648s inference</p><p>683x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/gettyimages-2155141672-612x612.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>2.3161s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>gettyimages-2207333436-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/gettyimages-2207333436-612x612.jpg' alt='gettyimages-2207333436-612x612.jpg' loading='lazy'><p>gettyimages-2207333436-612x612.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/gettyimages-2207333436-612x612.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.3331s inference</p><p>681x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/gettyimages-2207333436-612x612.png' alt='UltraSharpV2' loading='lazy'><p>2.7746s inference</p><p>681x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/gettyimages-2207333436-612x612.png' alt='AuraSR-v2' loading='lazy'><p>3.3001s inference</p><p>681x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/gettyimages-2207333436-612x612.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>2.3449s inference</p><p>681x1024</p></article></div></section><section class='image-section'><h2>istockphoto-1180106547-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/istockphoto-1180106547-612x612.jpg' alt='istockphoto-1180106547-612x612.jpg' loading='lazy'><p>istockphoto-1180106547-612x612.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/istockphoto-1180106547-612x612.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.3374s inference</p><p>683x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/istockphoto-1180106547-612x612.png' alt='UltraSharpV2' loading='lazy'><p>2.773s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/istockphoto-1180106547-612x612.png' alt='AuraSR-v2' loading='lazy'><p>3.3218s inference</p><p>683x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/istockphoto-1180106547-612x612.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>2.2223s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>istockphoto-1184187907-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/istockphoto-1184187907-612x612.jpg' alt='istockphoto-1184187907-612x612.jpg' loading='lazy'><p>istockphoto-1184187907-612x612.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/istockphoto-1184187907-612x612.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.3262s inference</p><p>683x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/istockphoto-1184187907-612x612.png' alt='UltraSharpV2' loading='lazy'><p>2.7605s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/istockphoto-1184187907-612x612.png' alt='AuraSR-v2' loading='lazy'><p>3.2718s inference</p><p>683x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/istockphoto-1184187907-612x612.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>2.2542s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>istockphoto-1332517953-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/istockphoto-1332517953-612x612.jpg' alt='istockphoto-1332517953-612x612.jpg' loading='lazy'><p>istockphoto-1332517953-612x612.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/istockphoto-1332517953-612x612.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.3508s inference</p><p>699x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/istockphoto-1332517953-612x612.png' alt='UltraSharpV2' loading='lazy'><p>2.8488s inference</p><p>699x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/istockphoto-1332517953-612x612.png' alt='AuraSR-v2' loading='lazy'><p>3.2517s inference</p><p>699x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/istockphoto-1332517953-612x612.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>2.2706s inference</p><p>699x1024</p></article></div></section><section class='image-section'><h2>istockphoto-2194356461-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/istockphoto-2194356461-612x612.jpg' alt='istockphoto-2194356461-612x612.jpg' loading='lazy'><p>istockphoto-2194356461-612x612.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/istockphoto-2194356461-612x612.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.3364s inference</p><p>683x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/istockphoto-2194356461-612x612.png' alt='UltraSharpV2' loading='lazy'><p>2.761s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/istockphoto-2194356461-612x612.png' alt='AuraSR-v2' loading='lazy'><p>3.2356s inference</p><p>683x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/istockphoto-2194356461-612x612.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>2.2873s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>istockphoto-466708390-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/istockphoto-466708390-612x612.jpg' alt='istockphoto-466708390-612x612.jpg' loading='lazy'><p>istockphoto-466708390-612x612.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/istockphoto-466708390-612x612.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.3379s inference</p><p>683x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/istockphoto-466708390-612x612.png' alt='UltraSharpV2' loading='lazy'><p>2.7627s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/istockphoto-466708390-612x612.png' alt='AuraSR-v2' loading='lazy'><p>3.2581s inference</p><p>683x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/istockphoto-466708390-612x612.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>2.3105s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>pngtree-confident-full-body-asian-business-man-model-full-modern-photo-image_9050792.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/pngtree-confident-full-body-asian-business-man-model-full-modern-photo-image_9050792.jpg' alt='pngtree-confident-full-body-asian-business-man-model-full-modern-photo-image_9050792.jpg' loading='lazy'><p>pngtree-confident-full-body-asian-business-man-model-full-modern-photo-image_9050792.jpg</p></article><article class='card'><h4>Real-ESRGAN_x4plus</h4><img src='results/Real-ESRGAN_x4plus/pngtree-confident-full-body-asian-business-man-model-full-modern-photo-image_9050792.png' alt='Real-ESRGAN_x4plus' loading='lazy'><p>0.1638s inference</p><p>684x1024</p></article><article class='card'><h4>UltraSharpV2</h4><img src='results/UltraSharpV2/pngtree-confident-full-body-asian-business-man-model-full-modern-photo-image_9050792.png' alt='UltraSharpV2' loading='lazy'><p>12.807s inference</p><p>684x1024</p></article><article class='card'><h4>AuraSR-v2</h4><img src='results/AuraSR-v2/pngtree-confident-full-body-asian-business-man-model-full-modern-photo-image_9050792.png' alt='AuraSR-v2' loading='lazy'><p>1.6557s inference</p><p>684x1024</p></article><article class='card'><h4>Swin2SR_realworld_x4</h4><img src='results/Swin2SR_realworld_x4/pngtree-confident-full-body-asian-business-man-model-full-modern-photo-image_9050792.png' alt='Swin2SR_realworld_x4' loading='lazy'><p>1.0068s inference</p><p>684x1024</p></article></div></section>
+  </main>
+</body>
+</html>

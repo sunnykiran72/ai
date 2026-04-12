@@ -1,0 +1,414 @@
+{
+  "status": 200,
+  "data": {
+    "result": "ACCEPTED",
+    "title": "Added To Wardrobe",
+    "description": "Garment extracted successfully.",
+    "reason_codes": [
+      "SINGLE_ITEM"
+    ],
+    "selection_required": false,
+    "clothing_type": "long sleeve t-shirt",
+    "category_key": "long_sleeve_t_shirts",
+    "primary_category_key": "tops",
+    "style": "long sleeve t-shirt",
+    "selected_type": "top",
+    "selected_item": {
+      "garment_id": 0,
+      "type": "top",
+      "garment_type": "top",
+      "type_source": "detector",
+      "detection_source": "fashion_object_detection",
+      "promptDescription": "This garment is a long dress with a wrap-front construction. The upper edge features a V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, -colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material",
+      "description": "This garment is a long dress with a wrap-front construction. The upper edge features a V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, -colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material",
+      "style": "long sleeve t-shirt",
+      "category_key": "long_sleeve_t_shirts",
+      "primary_category_key": "tops",
+      "url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/a6b192ea-2f18-4daf-9880-366fdd3a98a0.png",
+      "bbox": [
+        28,
+        13,
+        1321,
+        1715
+      ],
+      "crop": {
+        "width": 1293,
+        "height": 1576,
+        "area_ratio": 0.8519453154396087
+      },
+      "confidence": {
+        "yolo": 0.6933121681213379,
+        "detector": 0.6933121681213379
+      },
+      "detector_label": "top",
+      "detector_metrics": {
+        "width": 1293.0,
+        "height": 1576.0,
+        "aspect_ratio": 0.8204314720812182,
+        "area_ratio": 0.8519453154396087,
+        "center_x_ratio": 0.5033582089552239,
+        "center_y_ratio": 0.519327731092437,
+        "height_ratio": 0.8829131652661064,
+        "width_ratio": 0.9649253731343284
+      },
+      "minicpm_description": "This garment is a long dress with a wrap-front construction. The upper edge features a deep V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, cream-colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, white outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material.",
+      "joycaption_description": "",
+      "baseGarmentPrompt": "A single top garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The neckline, shoulder line, sleeve geometry, waistline, and hem shape match the reference exactly. Keep the garment front panel flat and cloth-like with no torso volume, chest projection, or mannequin-shaped curvature beneath the fabric. Preserve the garment's original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Top-only: no fabric above the garment's upper edge, no fabric below the hem, no lower-body garments or legs visible. Crop to the garment bounds only; no extra fabric beyond the original top silhouette. Keep the front panel flat and cloth-like; do not introduce torso curvature, chest projection, or mannequin form beneath the fabric. No added panels, yokes, underlayers, or secondary garment sections above the neckline or below the hem. Do not change the shoulder layout, sleeve count, strap count, or neckline asymmetry from the reference. Do not invent a second shoulder, mirrored strap, mirrored sleeve, seam bridge, or new asymmetrical cut. Preserve the exact upper edge of the garment; if the source neckline is low, wide, or exposes the upper chest, keep that same neckline depth and opening. Do not raise it into a higher-coverage chest panel or a more modest scoop top. If the source top ends below the bust or has a cropped hem, preserve that exact short hem position and do not extend the garment into the abdomen, waist, or full torso length. Preserve the exact garment color tone and shading from the reference crop; do not warm it, cool it, bleach it, brighten it, darken it, or make it more saturated. Do not add padding, cups, or extra bust volume; keep bust shaping, seams, and underbust placement exactly as the reference. This garment is a long dress with a wrap-front construction. The upper edge features a V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, -colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material",
+      "extractionAvoidClause": "",
+      "promptDescriptionSource": "minicpm_direct_prompt",
+      "garmentMetadata": {
+        "schema_version": "garment_metadata.v1",
+        "prompt": {
+          "base_garment_prompt": "colors=cream, white; coverage=upper body; preserve=waist, cool it, bleach it, brighten it, darken it, or make it more saturated. Do not add padding, cups, or extra bust volume; keep bust shaping, seams, and underbust placement exactly as the reference. This garment is a long dress with a wrap-front construction. The upper edge features a V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, -colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material.",
+          "prompt_description": "colors=cream, white.",
+          "extraction_avoid_clause": "",
+          "prompt_sections_raw": "",
+          "descriptor_raw_text": "This garment is a long dress with a wrap-front construction. The upper edge features a deep V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, cream-colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, white outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material.",
+          "source": "minicpm_direct_prompt"
+        },
+        "classification": {
+          "target_type": "top",
+          "backend_target_type": "top",
+          "style": "t-shirt",
+          "primary_category_key": "tops",
+          "category_key": "t_shirts"
+        },
+        "color": {
+          "dominant_hexes": [
+            "#F4EBD7",
+            "#F5F5F5"
+          ],
+          "accent_hexes": [],
+          "color_hints": [
+            "cream",
+            "white"
+          ],
+          "profile": {},
+          "mask_source": "",
+          "resolved_source": "semantic_descriptor_override",
+          "signal_confidence": 0.48,
+          "signal_strength": "low",
+          "fashion_basecolour": {},
+          "primary_color_label": "cream",
+          "primary_color_family": "cream",
+          "secondary_color_label": "white",
+          "secondary_color_family": "neutral_light",
+          "primary_color_descriptor": "cream",
+          "secondary_color_descriptor": "white accent",
+          "brightness": "unknown",
+          "saturation": "unknown",
+          "undertone": "unknown",
+          "descriptor_source": "profile_composition",
+          "sampling_mask": {}
+        },
+        "details": {
+          "colors": "cream, white",
+          "coverage": "upper body",
+          "preserve": "waist, cool it, bleach it, brighten it, darken it, or make it more saturated. Do not add padding, cups, or extra bust volume"
+        }
+      },
+      "detector_bbox": [
+        28,
+        139,
+        1321,
+        1715
+      ],
+      "bbox_geometry_source": "detector_bbox_top_recovery",
+      "extract_crop_bbox": [
+        0,
+        0,
+        1340,
+        1785
+      ],
+      "extract_crop_mode": "garment_bbox_expanded",
+      "output_image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/a6b192ea-2f18-4daf-9880-366fdd3a98a0.png",
+      "output_image_source": "flux2_extraction",
+      "raw_image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/a6b192ea-2f18-4daf-9880-366fdd3a98a0.png",
+      "raw_image_source": "flux2_extraction",
+      "extraction": {
+        "pipeline": "flux2_extraction",
+        "steps": 10,
+        "seed": 23,
+        "guidance_scale": 3.5,
+        "resolution": [
+          512,
+          768
+        ],
+        "request_total_seconds": 11.937718868255615,
+        "base_garment_prompt": "A single top garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The neckline, shoulder line, sleeve geometry, waistline, and hem shape match the reference exactly. Keep the garment front panel flat and cloth-like with no torso volume, chest projection, or mannequin-shaped curvature beneath the fabric. Preserve the garment's original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Top-only: no fabric above the garment's upper edge, no fabric below the hem, no lower-body garments or legs visible. Crop to the garment bounds only; no extra fabric beyond the original top silhouette. Keep the front panel flat and cloth-like; do not introduce torso curvature, chest projection, or mannequin form beneath the fabric. No added panels, yokes, underlayers, or secondary garment sections above the neckline or below the hem. Do not change the shoulder layout, sleeve count, strap count, or neckline asymmetry from the reference. Do not invent a second shoulder, mirrored strap, mirrored sleeve, seam bridge, or new asymmetrical cut. Preserve the exact upper edge of the garment; if the source neckline is low, wide, or exposes the upper chest, keep that same neckline depth and opening. Do not raise it into a higher-coverage chest panel or a more modest scoop top. If the source top ends below the bust or has a cropped hem, preserve that exact short hem position and do not extend the garment into the abdomen, waist, or full torso length. Preserve the exact garment color tone and shading from the reference crop; do not warm it, cool it, bleach it, brighten it, darken it, or make it more saturated. Do not add padding, cups, or extra bust volume; keep bust shaping, seams, and underbust placement exactly as the reference. This garment is a long dress with a wrap-front construction. The upper edge features a V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, -colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material",
+        "prompt_description": "This garment is a long dress with a wrap-front construction. The upper edge features a V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, -colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material",
+        "lora_enabled": false,
+        "startup_metrics": {
+          "pipeline_init_total_seconds": 97.04002046585083,
+          "pipeline_model_load_seconds": 76.55591368675232,
+          "pipeline_lora_load_seconds": 1.976440191268921,
+          "lora_enabled": true,
+          "lora_required": true,
+          "lora_loaded": true,
+          "lora_mode": "tryon",
+          "lora_path": "/workspace/models/flux2-lora/fal-virtual-tryon",
+          "bfs_lora_path": "/workspace/models/flux2-lora/bfs-best-face-swap",
+          "lora_source_resolved": "/workspace/models/flux2-lora/fal-virtual-tryon",
+          "lora_sources_resolved": [
+            "/workspace/models/flux2-lora/fal-virtual-tryon"
+          ],
+          "lora_weight_loaded": "flux-klein-tryon.safetensors",
+          "lora_weights_loaded": [
+            "flux-klein-tryon.safetensors"
+          ],
+          "lora_adapters_loaded": [
+            "fal_tryon"
+          ],
+          "lora_scales_loaded": [
+            0.7
+          ],
+          "lora_auto_download": true,
+          "lora_downloaded": false,
+          "pipeline_optimize_seconds": 0.008476495742797852,
+          "compile_mode": "none",
+          "compile_status": "disabled",
+          "compile_vae_decode": false,
+          "channels_last": true,
+          "fuse_lora": false,
+          "runtime_lora_toggle": true,
+          "tf32_enabled": true,
+          "torch_version": "2.10.0+cu128",
+          "device": "cuda",
+          "dtype": "torch.bfloat16",
+          "pipeline_class": "Flux2KleinPipeline"
+        },
+        "path": "flux2_extraction",
+        "extraction_avoid_clause": "",
+        "prompt_sections_raw": "",
+        "descriptor_raw_text": "This garment is a long dress with a wrap-front construction. The upper edge features a deep V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, cream-colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, white outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material.",
+        "negative_prompt_mode": "none"
+      },
+      "cloth_verified": true,
+      "cloth_verification_source": "flux2_extraction",
+      "promptSectionsRaw": "",
+      "promptDescriptionRaw": "This garment is a long dress with a wrap-front construction. The upper edge features a V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, -colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material",
+      "wardrobe_progress_id": "fd1cae44-aaf5-40f2-b3b6-ab1960a04bb3",
+      "progress_sync": {
+        "enabled": true,
+        "synced": false,
+        "status_code": 401,
+        "id": "fd1cae44-aaf5-40f2-b3b6-ab1960a04bb3",
+        "response": {
+          "message": "Invalid token",
+          "status": 401
+        }
+      },
+      "metadata": {
+        "garmentExtractionMeta": {
+          "pipeline": "flux2_extraction",
+          "steps": 10,
+          "seed": 23,
+          "guidance_scale": 3.5,
+          "resolution": [
+            512,
+            768
+          ],
+          "request_total_seconds": 11.937718868255615,
+          "base_garment_prompt": "A single top garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The neckline, shoulder line, sleeve geometry, waistline, and hem shape match the reference exactly. Keep the garment front panel flat and cloth-like with no torso volume, chest projection, or mannequin-shaped curvature beneath the fabric. Preserve the garment's original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Top-only: no fabric above the garment's upper edge, no fabric below the hem, no lower-body garments or legs visible. Crop to the garment bounds only; no extra fabric beyond the original top silhouette. Keep the front panel flat and cloth-like; do not introduce torso curvature, chest projection, or mannequin form beneath the fabric. No added panels, yokes, underlayers, or secondary garment sections above the neckline or below the hem. Do not change the shoulder layout, sleeve count, strap count, or neckline asymmetry from the reference. Do not invent a second shoulder, mirrored strap, mirrored sleeve, seam bridge, or new asymmetrical cut. Preserve the exact upper edge of the garment; if the source neckline is low, wide, or exposes the upper chest, keep that same neckline depth and opening. Do not raise it into a higher-coverage chest panel or a more modest scoop top. If the source top ends below the bust or has a cropped hem, preserve that exact short hem position and do not extend the garment into the abdomen, waist, or full torso length. Preserve the exact garment color tone and shading from the reference crop; do not warm it, cool it, bleach it, brighten it, darken it, or make it more saturated. Do not add padding, cups, or extra bust volume; keep bust shaping, seams, and underbust placement exactly as the reference. This garment is a long dress with a wrap-front construction. The upper edge features a V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, -colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material",
+          "prompt_description": "This garment is a long dress with a wrap-front construction. The upper edge features a V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, -colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material",
+          "lora_enabled": false,
+          "startup_metrics": {
+            "pipeline_init_total_seconds": 97.04002046585083,
+            "pipeline_model_load_seconds": 76.55591368675232,
+            "pipeline_lora_load_seconds": 1.976440191268921,
+            "lora_enabled": true,
+            "lora_required": true,
+            "lora_loaded": true,
+            "lora_mode": "tryon",
+            "lora_path": "/workspace/models/flux2-lora/fal-virtual-tryon",
+            "bfs_lora_path": "/workspace/models/flux2-lora/bfs-best-face-swap",
+            "lora_source_resolved": "/workspace/models/flux2-lora/fal-virtual-tryon",
+            "lora_sources_resolved": [
+              "/workspace/models/flux2-lora/fal-virtual-tryon"
+            ],
+            "lora_weight_loaded": "flux-klein-tryon.safetensors",
+            "lora_weights_loaded": [
+              "flux-klein-tryon.safetensors"
+            ],
+            "lora_adapters_loaded": [
+              "fal_tryon"
+            ],
+            "lora_scales_loaded": [
+              0.7
+            ],
+            "lora_auto_download": true,
+            "lora_downloaded": false,
+            "pipeline_optimize_seconds": 0.008476495742797852,
+            "compile_mode": "none",
+            "compile_status": "disabled",
+            "compile_vae_decode": false,
+            "channels_last": true,
+            "fuse_lora": false,
+            "runtime_lora_toggle": true,
+            "tf32_enabled": true,
+            "torch_version": "2.10.0+cu128",
+            "device": "cuda",
+            "dtype": "torch.bfloat16",
+            "pipeline_class": "Flux2KleinPipeline"
+          },
+          "path": "flux2_extraction",
+          "extraction_avoid_clause": "",
+          "prompt_sections_raw": "",
+          "descriptor_raw_text": "This garment is a long dress with a wrap-front construction. The upper edge features a deep V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, cream-colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, white outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material.",
+          "negative_prompt_mode": "none"
+        },
+        "garmentMetadata": {
+          "schema_version": "garment_metadata.v1",
+          "prompt": {
+            "base_garment_prompt": "colors=cream, white; coverage=upper body; preserve=waist, cool it, bleach it, brighten it, darken it, or make it more saturated. Do not add padding, cups, or extra bust volume; keep bust shaping, seams, and underbust placement exactly as the reference. This garment is a long dress with a wrap-front construction. The upper edge features a V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, -colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material.",
+            "prompt_description": "colors=cream, white.",
+            "extraction_avoid_clause": "",
+            "prompt_sections_raw": "",
+            "descriptor_raw_text": "This garment is a long dress with a wrap-front construction. The upper edge features a deep V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, cream-colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, white outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material.",
+            "source": "minicpm_direct_prompt"
+          },
+          "classification": {
+            "target_type": "top",
+            "backend_target_type": "top",
+            "style": "t-shirt",
+            "primary_category_key": "tops",
+            "category_key": "t_shirts"
+          },
+          "color": {
+            "dominant_hexes": [
+              "#F4EBD7",
+              "#F5F5F5"
+            ],
+            "accent_hexes": [],
+            "color_hints": [
+              "cream",
+              "white"
+            ],
+            "profile": {},
+            "mask_source": "",
+            "resolved_source": "semantic_descriptor_override",
+            "signal_confidence": 0.48,
+            "signal_strength": "low",
+            "fashion_basecolour": {},
+            "primary_color_label": "cream",
+            "primary_color_family": "cream",
+            "secondary_color_label": "white",
+            "secondary_color_family": "neutral_light",
+            "primary_color_descriptor": "cream",
+            "secondary_color_descriptor": "white accent",
+            "brightness": "unknown",
+            "saturation": "unknown",
+            "undertone": "unknown",
+            "descriptor_source": "profile_composition",
+            "sampling_mask": {}
+          },
+          "details": {
+            "colors": "cream, white",
+            "coverage": "upper body",
+            "preserve": "waist, cool it, bleach it, brighten it, darken it, or make it more saturated. Do not add padding, cups, or extra bust volume"
+          }
+        },
+        "progressSync": {
+          "enabled": true,
+          "synced": false,
+          "status_code": 401,
+          "id": "fd1cae44-aaf5-40f2-b3b6-ab1960a04bb3",
+          "response": {
+            "message": "Invalid token",
+            "status": 401
+          }
+        }
+      },
+      "imageUrl": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/a6b192ea-2f18-4daf-9880-366fdd3a98a0.png",
+      "outputImage": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/a6b192ea-2f18-4daf-9880-366fdd3a98a0.png"
+    },
+    "garmentMetadata": {
+      "schema_version": "garment_metadata.v1",
+      "prompt": {
+        "base_garment_prompt": "colors=cream, white; coverage=upper body; preserve=waist, cool it, bleach it, brighten it, darken it, or make it more saturated. Do not add padding, cups, or extra bust volume; keep bust shaping, seams, and underbust placement exactly as the reference. This garment is a long dress with a wrap-front construction. The upper edge features a V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, -colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material.",
+        "prompt_description": "colors=cream, white.",
+        "extraction_avoid_clause": "",
+        "prompt_sections_raw": "",
+        "descriptor_raw_text": "This garment is a long dress with a wrap-front construction. The upper edge features a deep V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, cream-colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, white outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material.",
+        "source": "minicpm_direct_prompt"
+      },
+      "classification": {
+        "target_type": "top",
+        "backend_target_type": "top",
+        "style": "t-shirt",
+        "primary_category_key": "tops",
+        "category_key": "t_shirts"
+      },
+      "color": {
+        "dominant_hexes": [
+          "#F4EBD7",
+          "#F5F5F5"
+        ],
+        "accent_hexes": [],
+        "color_hints": [
+          "cream",
+          "white"
+        ],
+        "profile": {},
+        "mask_source": "",
+        "resolved_source": "semantic_descriptor_override",
+        "signal_confidence": 0.48,
+        "signal_strength": "low",
+        "fashion_basecolour": {},
+        "primary_color_label": "cream",
+        "primary_color_family": "cream",
+        "secondary_color_label": "white",
+        "secondary_color_family": "neutral_light",
+        "primary_color_descriptor": "cream",
+        "secondary_color_descriptor": "white accent",
+        "brightness": "unknown",
+        "saturation": "unknown",
+        "undertone": "unknown",
+        "descriptor_source": "profile_composition",
+        "sampling_mask": {}
+      },
+      "details": {
+        "colors": "cream, white",
+        "coverage": "upper body",
+        "preserve": "waist, cool it, bleach it, brighten it, darken it, or make it more saturated. Do not add padding, cups, or extra bust volume"
+      }
+    },
+    "cloth_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/a6b192ea-2f18-4daf-9880-366fdd3a98a0.png",
+    "output_image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/a6b192ea-2f18-4daf-9880-366fdd3a98a0.png",
+    "extraction_path": "flux2_extraction",
+    "promptDescription": "This garment is a long dress with a wrap-front construction. The upper edge features a V-neckline with overlapping front panels that create an offset opening. The shoulder layout includes gathered detailing at the neckline, transitioning into long sleeves with elasticized cuffs. The bust and underbust panels are continuous, forming a fitted bodice that extends into a full, A-line skirt. A wide, -colored sash with a large bow is tied at the waist, serving as both a closure and decorative trim. The hem endpoint is a straight, floor-length finish. The dress has visible seam lines along the bust, waist, and hem, indicating panel construction. The floral pattern consists of large, outlined flowers distributed across the fabric. The fabric appears smooth with a slight sheen, and the overall structure suggests a lightweight, flowing material",
+    "wardrobe_progress_id": "fd1cae44-aaf5-40f2-b3b6-ab1960a04bb3",
+    "multipart_data": {
+      "format": "multipart-data",
+      "parts": [
+        {
+          "part_name": "extracted_cloth",
+          "kind": "cloth",
+          "mime_type": "image/png",
+          "image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/a6b192ea-2f18-4daf-9880-366fdd3a98a0.png"
+        }
+      ]
+    },
+    "total_garments_found": 1,
+    "latencies": {
+      "total": 25.3198,
+      "gpu_queue_wait": 0.0001,
+      "stages": {
+        "read_input_s": 0.0004,
+        "blur_check_s": 0.0,
+        "yolo_detect_s": 0.0729,
+        "yolo_crop_s": 0.0,
+        "caption_total_s": 0.0,
+        "primary_type_total_s": 0.0,
+        "extract_total_s": 13.1649,
+        "progress_sync_s": 0.9564,
+        "minicpm_s": 11.0318,
+        "joycaption_s": 0.0
+      }
+    },
+    "processing_time_ms": 25319,
+    "imageUrl": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/a6b192ea-2f18-4daf-9880-366fdd3a98a0.png",
+    "progressId": "fd1cae44-aaf5-40f2-b3b6-ab1960a04bb3"
+  },
+  "message": ""
+}

@@ -1,0 +1,393 @@
+{
+  "status": 200,
+  "data": {
+    "result": "ACCEPTED",
+    "title": "Added To Wardrobe",
+    "description": "Garment extracted successfully.",
+    "reason_codes": [
+      "SINGLE_ITEM",
+      "TYPE_FORCED_EXTRACT",
+      "TYPE_FORCED_VTON"
+    ],
+    "selection_required": false,
+    "clothing_type": "day dress",
+    "category_key": "day_dresses",
+    "primary_category_key": "dresses",
+    "style": "day dress",
+    "selected_type": "dress",
+    "selected_item": {
+      "garment_id": 0,
+      "type": "dress",
+      "garment_type": "dress",
+      "type_source": "requested_type_match",
+      "detection_source": "fashion_object_detection",
+      "promptDescription": "This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt",
+      "description": "This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt",
+      "style": "day dress",
+      "category_key": "day_dresses",
+      "primary_category_key": "dresses",
+      "url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/6056094d-ae75-47bf-8740-e896111900fe.png",
+      "bbox": [
+        99,
+        309,
+        652,
+        1342
+      ],
+      "crop": {
+        "width": 553,
+        "height": 906,
+        "area_ratio": 0.4853922526041667
+      },
+      "confidence": {
+        "yolo": 0.8924612402915955,
+        "detector": 0.8924612402915955
+      },
+      "detector_label": "dress",
+      "detector_metrics": {
+        "width": 553.0,
+        "height": 906.0,
+        "aspect_ratio": 0.6103752759381899,
+        "area_ratio": 0.4853922526041667,
+        "center_x_ratio": 0.4889322916666667,
+        "center_y_ratio": 0.6614583333333334,
+        "height_ratio": 0.6741071428571429,
+        "width_ratio": 0.7200520833333334
+      },
+      "minicpm_description": "This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a deep V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt.",
+      "joycaption_description": "",
+      "baseGarmentPrompt": "A single dress garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. Preserve the garment's original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Dress-only: no separate top, no separate skirt, no two-piece outfit look, and no added waistband between bodice and skirt. Keep the dress as one continuous garment from bodice to hem with the original waist transition preserved in a single piece. Do not split it into a separate top and skirt or split the dress into bodice and skirt as if they were separate garments. Keep the bodice and skirt flow smooth, flat, and cloth-like rather than body-shaped. This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt",
+      "extractionAvoidClause": "",
+      "promptDescriptionSource": "minicpm_direct_prompt",
+      "garmentMetadata": {
+        "schema_version": "garment_metadata.v1",
+        "prompt": {
+          "base_garment_prompt": "coverage=full body.",
+          "prompt_description": "This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt",
+          "extraction_avoid_clause": "",
+          "prompt_sections_raw": "",
+          "descriptor_raw_text": "This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a deep V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt.",
+          "source": "minicpm_direct_prompt"
+        },
+        "classification": {
+          "target_type": "dress",
+          "backend_target_type": "dress",
+          "style": "day dress",
+          "primary_category_key": "dresses",
+          "category_key": "day_dresses"
+        },
+        "color": {
+          "dominant_hexes": [],
+          "accent_hexes": [],
+          "color_hints": [],
+          "profile": {},
+          "mask_source": "",
+          "resolved_source": "pixel",
+          "signal_confidence": 0.48,
+          "signal_strength": "low",
+          "fashion_basecolour": {},
+          "primary_color_label": "",
+          "primary_color_family": "",
+          "secondary_color_label": "",
+          "secondary_color_family": "",
+          "primary_color_descriptor": "",
+          "secondary_color_descriptor": "",
+          "brightness": "unknown",
+          "saturation": "unknown",
+          "undertone": "unknown",
+          "descriptor_source": "profile_composition",
+          "sampling_mask": {}
+        },
+        "details": {
+          "coverage": "full body"
+        }
+      },
+      "detector_bbox": [
+        99,
+        436,
+        652,
+        1342
+      ],
+      "bbox_geometry_source": "detector_bbox_dress_top_recovery",
+      "extract_crop_bbox": [
+        17,
+        155,
+        734,
+        1344
+      ],
+      "extract_crop_mode": "garment_bbox_expanded",
+      "output_image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/6056094d-ae75-47bf-8740-e896111900fe.png",
+      "output_image_source": "flux2_extraction",
+      "raw_image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/6056094d-ae75-47bf-8740-e896111900fe.png",
+      "raw_image_source": "flux2_extraction",
+      "extraction": {
+        "pipeline": "flux2_extraction",
+        "steps": 10,
+        "seed": 23,
+        "guidance_scale": 3.5,
+        "resolution": [
+          512,
+          768
+        ],
+        "request_total_seconds": 10.317464828491211,
+        "base_garment_prompt": "A single dress garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. Preserve the garment's original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Dress-only: no separate top, no separate skirt, no two-piece outfit look, and no added waistband between bodice and skirt. Keep the dress as one continuous garment from bodice to hem with the original waist transition preserved in a single piece. Do not split it into a separate top and skirt or split the dress into bodice and skirt as if they were separate garments. Keep the bodice and skirt flow smooth, flat, and cloth-like rather than body-shaped. This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt",
+        "prompt_description": "This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt",
+        "lora_enabled": false,
+        "startup_metrics": {
+          "pipeline_init_total_seconds": 97.04002046585083,
+          "pipeline_model_load_seconds": 76.55591368675232,
+          "pipeline_lora_load_seconds": 1.976440191268921,
+          "lora_enabled": true,
+          "lora_required": true,
+          "lora_loaded": true,
+          "lora_mode": "tryon",
+          "lora_path": "/workspace/models/flux2-lora/fal-virtual-tryon",
+          "bfs_lora_path": "/workspace/models/flux2-lora/bfs-best-face-swap",
+          "lora_source_resolved": "/workspace/models/flux2-lora/fal-virtual-tryon",
+          "lora_sources_resolved": [
+            "/workspace/models/flux2-lora/fal-virtual-tryon"
+          ],
+          "lora_weight_loaded": "flux-klein-tryon.safetensors",
+          "lora_weights_loaded": [
+            "flux-klein-tryon.safetensors"
+          ],
+          "lora_adapters_loaded": [
+            "fal_tryon"
+          ],
+          "lora_scales_loaded": [
+            0.7
+          ],
+          "lora_auto_download": true,
+          "lora_downloaded": false,
+          "pipeline_optimize_seconds": 0.008476495742797852,
+          "compile_mode": "none",
+          "compile_status": "disabled",
+          "compile_vae_decode": false,
+          "channels_last": true,
+          "fuse_lora": false,
+          "runtime_lora_toggle": true,
+          "tf32_enabled": true,
+          "torch_version": "2.10.0+cu128",
+          "device": "cuda",
+          "dtype": "torch.bfloat16",
+          "pipeline_class": "Flux2KleinPipeline"
+        },
+        "path": "flux2_extraction",
+        "extraction_avoid_clause": "",
+        "prompt_sections_raw": "",
+        "descriptor_raw_text": "This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a deep V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt.",
+        "negative_prompt_mode": "none"
+      },
+      "cloth_verified": true,
+      "cloth_verification_source": "flux2_extraction",
+      "promptSectionsRaw": "",
+      "promptDescriptionRaw": "This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt",
+      "extract_type_forced": "dress",
+      "wardrobe_progress_id": "664ad162-f401-43f0-9282-bdb01d319c49",
+      "progress_sync": {
+        "enabled": true,
+        "synced": false,
+        "status_code": 401,
+        "id": "664ad162-f401-43f0-9282-bdb01d319c49",
+        "response": {
+          "message": "Invalid token",
+          "status": 401
+        }
+      },
+      "metadata": {
+        "garmentExtractionMeta": {
+          "pipeline": "flux2_extraction",
+          "steps": 10,
+          "seed": 23,
+          "guidance_scale": 3.5,
+          "resolution": [
+            512,
+            768
+          ],
+          "request_total_seconds": 10.317464828491211,
+          "base_garment_prompt": "A single dress garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The bodice structure, neckline, waistline, skirt silhouette, and full length match the reference exactly. Preserve the garment's original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Dress-only: no separate top, no separate skirt, no two-piece outfit look, and no added waistband between bodice and skirt. Keep the dress as one continuous garment from bodice to hem with the original waist transition preserved in a single piece. Do not split it into a separate top and skirt or split the dress into bodice and skirt as if they were separate garments. Keep the bodice and skirt flow smooth, flat, and cloth-like rather than body-shaped. This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt",
+          "prompt_description": "This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt",
+          "lora_enabled": false,
+          "startup_metrics": {
+            "pipeline_init_total_seconds": 97.04002046585083,
+            "pipeline_model_load_seconds": 76.55591368675232,
+            "pipeline_lora_load_seconds": 1.976440191268921,
+            "lora_enabled": true,
+            "lora_required": true,
+            "lora_loaded": true,
+            "lora_mode": "tryon",
+            "lora_path": "/workspace/models/flux2-lora/fal-virtual-tryon",
+            "bfs_lora_path": "/workspace/models/flux2-lora/bfs-best-face-swap",
+            "lora_source_resolved": "/workspace/models/flux2-lora/fal-virtual-tryon",
+            "lora_sources_resolved": [
+              "/workspace/models/flux2-lora/fal-virtual-tryon"
+            ],
+            "lora_weight_loaded": "flux-klein-tryon.safetensors",
+            "lora_weights_loaded": [
+              "flux-klein-tryon.safetensors"
+            ],
+            "lora_adapters_loaded": [
+              "fal_tryon"
+            ],
+            "lora_scales_loaded": [
+              0.7
+            ],
+            "lora_auto_download": true,
+            "lora_downloaded": false,
+            "pipeline_optimize_seconds": 0.008476495742797852,
+            "compile_mode": "none",
+            "compile_status": "disabled",
+            "compile_vae_decode": false,
+            "channels_last": true,
+            "fuse_lora": false,
+            "runtime_lora_toggle": true,
+            "tf32_enabled": true,
+            "torch_version": "2.10.0+cu128",
+            "device": "cuda",
+            "dtype": "torch.bfloat16",
+            "pipeline_class": "Flux2KleinPipeline"
+          },
+          "path": "flux2_extraction",
+          "extraction_avoid_clause": "",
+          "prompt_sections_raw": "",
+          "descriptor_raw_text": "This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a deep V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt.",
+          "negative_prompt_mode": "none"
+        },
+        "garmentMetadata": {
+          "schema_version": "garment_metadata.v1",
+          "prompt": {
+            "base_garment_prompt": "coverage=full body.",
+            "prompt_description": "This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt",
+            "extraction_avoid_clause": "",
+            "prompt_sections_raw": "",
+            "descriptor_raw_text": "This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a deep V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt.",
+            "source": "minicpm_direct_prompt"
+          },
+          "classification": {
+            "target_type": "dress",
+            "backend_target_type": "dress",
+            "style": "day dress",
+            "primary_category_key": "dresses",
+            "category_key": "day_dresses"
+          },
+          "color": {
+            "dominant_hexes": [],
+            "accent_hexes": [],
+            "color_hints": [],
+            "profile": {},
+            "mask_source": "",
+            "resolved_source": "pixel",
+            "signal_confidence": 0.48,
+            "signal_strength": "low",
+            "fashion_basecolour": {},
+            "primary_color_label": "",
+            "primary_color_family": "",
+            "secondary_color_label": "",
+            "secondary_color_family": "",
+            "primary_color_descriptor": "",
+            "secondary_color_descriptor": "",
+            "brightness": "unknown",
+            "saturation": "unknown",
+            "undertone": "unknown",
+            "descriptor_source": "profile_composition",
+            "sampling_mask": {}
+          },
+          "details": {
+            "coverage": "full body"
+          }
+        },
+        "progressSync": {
+          "enabled": true,
+          "synced": false,
+          "status_code": 401,
+          "id": "664ad162-f401-43f0-9282-bdb01d319c49",
+          "response": {
+            "message": "Invalid token",
+            "status": 401
+          }
+        }
+      },
+      "imageUrl": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/6056094d-ae75-47bf-8740-e896111900fe.png",
+      "outputImage": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/6056094d-ae75-47bf-8740-e896111900fe.png"
+    },
+    "garmentMetadata": {
+      "schema_version": "garment_metadata.v1",
+      "prompt": {
+        "base_garment_prompt": "coverage=full body.",
+        "prompt_description": "This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt",
+        "extraction_avoid_clause": "",
+        "prompt_sections_raw": "",
+        "descriptor_raw_text": "This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a deep V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt.",
+        "source": "minicpm_direct_prompt"
+      },
+      "classification": {
+        "target_type": "dress",
+        "backend_target_type": "dress",
+        "style": "day dress",
+        "primary_category_key": "dresses",
+        "category_key": "day_dresses"
+      },
+      "color": {
+        "dominant_hexes": [],
+        "accent_hexes": [],
+        "color_hints": [],
+        "profile": {},
+        "mask_source": "",
+        "resolved_source": "pixel",
+        "signal_confidence": 0.48,
+        "signal_strength": "low",
+        "fashion_basecolour": {},
+        "primary_color_label": "",
+        "primary_color_family": "",
+        "secondary_color_label": "",
+        "secondary_color_family": "",
+        "primary_color_descriptor": "",
+        "secondary_color_descriptor": "",
+        "brightness": "unknown",
+        "saturation": "unknown",
+        "undertone": "unknown",
+        "descriptor_source": "profile_composition",
+        "sampling_mask": {}
+      },
+      "details": {
+        "coverage": "full body"
+      }
+    },
+    "cloth_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/6056094d-ae75-47bf-8740-e896111900fe.png",
+    "output_image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/6056094d-ae75-47bf-8740-e896111900fe.png",
+    "extraction_path": "flux2_extraction",
+    "promptDescription": "This garment is a sleeveless dress with a V-neckline. The bodice features a draped, ruched design with overlapping fabric panels creating an asymmetrical cross-over detail at the waist. The shoulder straps are absent, and the upper edge of the bodice forms a V-shape. The waistline transitions into a gathered, pleated skirt that flows continuously from the bodice without visible seams separating the two sections. The skirt has a voluminous, A-line silhouette with cascading pleats extending from the waist. The hemline is not fully visible, but the skirt appears to be floor-length or long. The fabric has a smooth texture with visible draping and gathering, and there are no visible closures, trims, or embellishments on the front of the dress. The overall construction is a single, continuous piece with a fitted bodice that flares into a full skirt",
+    "wardrobe_progress_id": "664ad162-f401-43f0-9282-bdb01d319c49",
+    "multipart_data": {
+      "format": "multipart-data",
+      "parts": [
+        {
+          "part_name": "extracted_cloth",
+          "kind": "cloth",
+          "mime_type": "image/png",
+          "image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/6056094d-ae75-47bf-8740-e896111900fe.png"
+        }
+      ]
+    },
+    "total_garments_found": 1,
+    "latencies": {
+      "total": 21.9316,
+      "gpu_queue_wait": 0.0001,
+      "stages": {
+        "read_input_s": 0.0004,
+        "blur_check_s": 0.0,
+        "yolo_detect_s": 0.0402,
+        "yolo_crop_s": 0.0,
+        "caption_total_s": 0.0,
+        "primary_type_total_s": 0.0,
+        "extract_total_s": 11.3117,
+        "progress_sync_s": 0.9616,
+        "minicpm_s": 9.517,
+        "joycaption_s": 0.0
+      }
+    },
+    "processing_time_ms": 21931,
+    "imageUrl": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/6056094d-ae75-47bf-8740-e896111900fe.png",
+    "progressId": "664ad162-f401-43f0-9282-bdb01d319c49"
+  },
+  "message": ""
+}

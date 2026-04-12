@@ -606,10 +606,13 @@ class TestGarmentPromptNatural:
         assert "requested garment type" in prompt
         assert "40 to 90 words" in prompt
         assert "do not add fluff" in prompt
+        assert "garment-only product image" in prompt
+        assert "never mention exposed human features" in prompt
         assert "never infer hidden length" in prompt
         assert "not fully visible" in prompt
         assert "use direct factual wording" in prompt
         assert "do not mention colors" in prompt
+        assert "do not use directional wording" in prompt
 
     def test_minicpm_top_prompt_includes_top_only_structure_fields(self):
         prompt = get_minicpm_garment_prompt("top").lower()
@@ -628,6 +631,7 @@ class TestGarmentPromptNatural:
         assert "dress-only guidance" in prompt
         assert "without assigning a side" in prompt
         assert "name the feature itself rather than its direction" in prompt
+        assert "never describe the body area revealed through it" in prompt
 
     def test_minicpm_outer_prompt_excludes_inner_layers(self):
         prompt = get_minicpm_garment_prompt("outer").lower()

@@ -1515,6 +1515,7 @@ def prepare_user_image_core(
     verifier_fn: Optional[Callable[..., Any]] = None,
     description_fn: Optional[Callable[..., Any]] = None,
     fallback_description_fn: Optional[Callable[..., Any]] = None,
+    prepared_image_fn: Optional[Callable[[Image.Image], Image.Image]] = None,
     upload_fn: Optional[Callable[[bytes], str]] = None,
     blur_check_enabled: bool = False,
     blur_min_focus_score: float = 22.0,
@@ -1643,7 +1644,20 @@ def prepare_user_image_core(
             status_code=503,
         )
 
-    prepared_bytes = _prepare_image_bytes(image)
+    prepared_image = image.convert("RGB")
+    prepared_image_mode = "original_full_frame"
+    if prepared_image_fn is not None:
+        try:
+            candidate = prepared_image_fn(image)
+            if isinstance(candidate, Image.Image):
+                prepared_image = candidate.convert("RGB")
+        except Exception:
+            prepared_image = image.convert("RGB")
+        if prepared_image.size != image.size:
+            prepared_image_mode = "upscaled_full_frame"
+
+    prepared_width, prepared_height = prepared_image.size
+    prepared_bytes = _prepare_image_bytes(prepared_image)
     try:
         url = str(upload_fn(prepared_bytes))
     except Exception as exc:
@@ -1679,8 +1693,9 @@ def prepare_user_image_core(
         "meta": {
             "person_bbox": bbox,
             "analysis_crop_size": {"width": int(crop.width), "height": int(crop.height)},
-            "prepared_image_size": {"width": int(width), "height": int(height)},
-            "prepared_image_mode": "original_full_frame",
+            "prepared_source_image_size": {"width": int(width), "height": int(height)},
+            "prepared_image_size": {"width": int(prepared_width), "height": int(prepared_height)},
+            "prepared_image_mode": prepared_image_mode,
             "detect": detect_meta,
             "face": face_meta,
             "verification": verification_meta,
@@ -1696,6 +1711,7 @@ async def prepare_user_image_pipeline(
     verifier_fn: Optional[Callable[..., Any]] = None,
     description_fn: Optional[Callable[..., Any]] = None,
     fallback_description_fn: Optional[Callable[..., Any]] = None,
+    prepared_image_fn: Optional[Callable[[Image.Image], Image.Image]] = None,
     upload_fn: Optional[Callable[[bytes], str]] = None,
     blur_check_enabled: bool = False,
     blur_min_focus_score: float = 22.0,
@@ -1723,6 +1739,7 @@ async def prepare_user_image_pipeline(
         verifier_fn=verifier_fn,
         description_fn=description_fn,
         fallback_description_fn=fallback_description_fn,
+        prepared_image_fn=prepared_image_fn,
         upload_fn=upload_fn,
         blur_check_enabled=blur_check_enabled,
         blur_min_focus_score=blur_min_focus_score,

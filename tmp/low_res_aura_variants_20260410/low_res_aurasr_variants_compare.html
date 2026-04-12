@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Low-Res Upscaler Benchmark</title>
+  <style>
+    :root {
+      --bg: #f4efe6;
+      --panel: #fffaf2;
+      --line: #d9ccb8;
+      --text: #201913;
+      --muted: #6a5a4f;
+      --accent: #9e5b2a;
+    }
+    body {
+      margin: 0;
+      font-family: Georgia, "Times New Roman", serif;
+      background: linear-gradient(180deg, #efe4d0 0%, var(--bg) 35%, #f8f3ec 100%);
+      color: var(--text);
+    }
+    main {
+      max-width: 1680px;
+      margin: 0 auto;
+      padding: 32px 24px 64px;
+    }
+    h1, h2, h3, h4 { margin: 0 0 12px; }
+    p { margin: 0 0 10px; color: var(--muted); }
+    .summary-table {
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      margin-bottom: 28px;
+    }
+    .summary-table th, .summary-table td {
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+    .settings {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+      margin-bottom: 28px;
+    }
+    .settings-card, .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 14px;
+      box-shadow: 0 8px 30px rgba(66, 43, 18, 0.06);
+    }
+    .settings-card pre {
+      overflow-x: auto;
+      white-space: pre-wrap;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .image-section {
+      margin-bottom: 26px;
+      padding-top: 20px;
+      border-top: 1px solid rgba(158, 91, 42, 0.2);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 16px;
+    }
+    .card img {
+      width: 100%;
+      height: auto;
+      display: block;
+      border-radius: 12px;
+      background: #ebe3d4;
+      margin-bottom: 10px;
+    }
+    .card.error {
+      border-color: #c06a55;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Low-Res Upscaler Benchmark</h1>
+    <p>Final outputs are capped to a max side of 1024px after each model's native 4x pass.</p>
+    <table class="summary-table">
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th>Load Seconds</th>
+          <th>Avg Inference Seconds</th>
+          <th>Completed</th>
+          <th>Failed</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td>AuraSR-v2_seed1234_checkboard</td><td>5.7887</td><td>3.4767</td><td>14</td><td>0</td></tr><tr><td>AuraSR-v2_seed1234_constant</td><td>5.7887</td><td>3.4588</td><td>14</td><td>0</td></tr><tr><td>AuraSR-v2_seed42_checkboard</td><td>5.7887</td><td>3.4782</td><td>14</td><td>0</td></tr><tr><td>AuraSR-v2_seed42_constant</td><td>5.7887</td><td>3.4557</td><td>14</td><td>0</td></tr><tr><td>AuraSR-v2_seed77_checkboard</td><td>5.7887</td><td>3.4811</td><td>14</td><td>0</td></tr><tr><td>AuraSR-v2_seed7_checkboard</td><td>5.7887</td><td>3.555</td><td>14</td><td>0</td></tr>
+      </tbody>
+    </table>
+    <section class="settings">
+      <section class='settings-card'><h3>AuraSR-v2_seed1234_checkboard</h3><p>Status: ok</p><pre>{
+  &quot;model_variant&quot;: &quot;AuraSR-v2&quot;,
+  &quot;native_scale&quot;: 4,
+  &quot;method&quot;: &quot;upscale_4x_overlapped&quot;,
+  &quot;seed&quot;: 1234,
+  &quot;weight_type&quot;: &quot;checkboard&quot;,
+  &quot;max_batch_size&quot;: 8,
+  &quot;postprocess_max_side&quot;: 1024,
+  &quot;postprocess_resample&quot;: &quot;LANCZOS&quot;,
+  &quot;weight_path&quot;: &quot;/tmp/hf-home-aura/hub/models--fal--AuraSR-v2/snapshots/ff452185a7c8b51206dd62c21c292e7baad5c3a3/model.safetensors&quot;
+}</pre></section><section class='settings-card'><h3>AuraSR-v2_seed1234_constant</h3><p>Status: ok</p><pre>{
+  &quot;model_variant&quot;: &quot;AuraSR-v2&quot;,
+  &quot;native_scale&quot;: 4,
+  &quot;method&quot;: &quot;upscale_4x_overlapped&quot;,
+  &quot;seed&quot;: 1234,
+  &quot;weight_type&quot;: &quot;constant&quot;,
+  &quot;max_batch_size&quot;: 8,
+  &quot;postprocess_max_side&quot;: 1024,
+  &quot;postprocess_resample&quot;: &quot;LANCZOS&quot;,
+  &quot;weight_path&quot;: &quot;/tmp/hf-home-aura/hub/models--fal--AuraSR-v2/snapshots/ff452185a7c8b51206dd62c21c292e7baad5c3a3/model.safetensors&quot;
+}</pre></section><section class='settings-card'><h3>AuraSR-v2_seed42_checkboard</h3><p>Status: ok</p><pre>{
+  &quot;model_variant&quot;: &quot;AuraSR-v2&quot;,
+  &quot;native_scale&quot;: 4,
+  &quot;method&quot;: &quot;upscale_4x_overlapped&quot;,
+  &quot;seed&quot;: 42,
+  &quot;weight_type&quot;: &quot;checkboard&quot;,
+  &quot;max_batch_size&quot;: 8,
+  &quot;postprocess_max_side&quot;: 1024,
+  &quot;postprocess_resample&quot;: &quot;LANCZOS&quot;,
+  &quot;weight_path&quot;: &quot;/tmp/hf-home-aura/hub/models--fal--AuraSR-v2/snapshots/ff452185a7c8b51206dd62c21c292e7baad5c3a3/model.safetensors&quot;
+}</pre></section><section class='settings-card'><h3>AuraSR-v2_seed42_constant</h3><p>Status: ok</p><pre>{
+  &quot;model_variant&quot;: &quot;AuraSR-v2&quot;,
+  &quot;native_scale&quot;: 4,
+  &quot;method&quot;: &quot;upscale_4x_overlapped&quot;,
+  &quot;seed&quot;: 42,
+  &quot;weight_type&quot;: &quot;constant&quot;,
+  &quot;max_batch_size&quot;: 8,
+  &quot;postprocess_max_side&quot;: 1024,
+  &quot;postprocess_resample&quot;: &quot;LANCZOS&quot;,
+  &quot;weight_path&quot;: &quot;/tmp/hf-home-aura/hub/models--fal--AuraSR-v2/snapshots/ff452185a7c8b51206dd62c21c292e7baad5c3a3/model.safetensors&quot;
+}</pre></section><section class='settings-card'><h3>AuraSR-v2_seed77_checkboard</h3><p>Status: ok</p><pre>{
+  &quot;model_variant&quot;: &quot;AuraSR-v2&quot;,
+  &quot;native_scale&quot;: 4,
+  &quot;method&quot;: &quot;upscale_4x_overlapped&quot;,
+  &quot;seed&quot;: 77,
+  &quot;weight_type&quot;: &quot;checkboard&quot;,
+  &quot;max_batch_size&quot;: 8,
+  &quot;postprocess_max_side&quot;: 1024,
+  &quot;postprocess_resample&quot;: &quot;LANCZOS&quot;,
+  &quot;weight_path&quot;: &quot;/tmp/hf-home-aura/hub/models--fal--AuraSR-v2/snapshots/ff452185a7c8b51206dd62c21c292e7baad5c3a3/model.safetensors&quot;
+}</pre></section><section class='settings-card'><h3>AuraSR-v2_seed7_checkboard</h3><p>Status: ok</p><pre>{
+  &quot;model_variant&quot;: &quot;AuraSR-v2&quot;,
+  &quot;native_scale&quot;: 4,
+  &quot;method&quot;: &quot;upscale_4x_overlapped&quot;,
+  &quot;seed&quot;: 7,
+  &quot;weight_type&quot;: &quot;checkboard&quot;,
+  &quot;max_batch_size&quot;: 8,
+  &quot;postprocess_max_side&quot;: 1024,
+  &quot;postprocess_resample&quot;: &quot;LANCZOS&quot;,
+  &quot;weight_path&quot;: &quot;/tmp/hf-home-aura/hub/models--fal--AuraSR-v2/snapshots/ff452185a7c8b51206dd62c21c292e7baad5c3a3/model.safetensors&quot;
+}</pre></section>
+    </section>
+    <section class='image-section'><h2>765DC106-B404-41E5-B1DF-199C5E82FABE 2.PNG</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/765DC106-B404-41E5-B1DF-199C5E82FABE 2.PNG' alt='765DC106-B404-41E5-B1DF-199C5E82FABE 2.PNG' loading='lazy'><p>765DC106-B404-41E5-B1DF-199C5E82FABE 2.PNG</p></article><article class='card'><h4>AuraSR-v2_seed1234_checkboard</h4><img src='results/AuraSR-v2_seed1234_checkboard/765DC106-B404-41E5-B1DF-199C5E82FABE 2.png' alt='AuraSR-v2_seed1234_checkboard' loading='lazy'><p>5.4342s inference</p><p>682x1024</p></article><article class='card'><h4>AuraSR-v2_seed1234_constant</h4><img src='results/AuraSR-v2_seed1234_constant/765DC106-B404-41E5-B1DF-199C5E82FABE 2.png' alt='AuraSR-v2_seed1234_constant' loading='lazy'><p>5.3536s inference</p><p>682x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_checkboard</h4><img src='results/AuraSR-v2_seed42_checkboard/765DC106-B404-41E5-B1DF-199C5E82FABE 2.png' alt='AuraSR-v2_seed42_checkboard' loading='lazy'><p>5.4495s inference</p><p>682x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_constant</h4><img src='results/AuraSR-v2_seed42_constant/765DC106-B404-41E5-B1DF-199C5E82FABE 2.png' alt='AuraSR-v2_seed42_constant' loading='lazy'><p>5.3265s inference</p><p>682x1024</p></article><article class='card'><h4>AuraSR-v2_seed77_checkboard</h4><img src='results/AuraSR-v2_seed77_checkboard/765DC106-B404-41E5-B1DF-199C5E82FABE 2.png' alt='AuraSR-v2_seed77_checkboard' loading='lazy'><p>5.4087s inference</p><p>682x1024</p></article><article class='card'><h4>AuraSR-v2_seed7_checkboard</h4><img src='results/AuraSR-v2_seed7_checkboard/765DC106-B404-41E5-B1DF-199C5E82FABE 2.png' alt='AuraSR-v2_seed7_checkboard' loading='lazy'><p>6.1163s inference</p><p>682x1024</p></article></div></section><section class='image-section'><h2>7d2c7f05-ae77-41a1-948e-c179626e4568.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/7d2c7f05-ae77-41a1-948e-c179626e4568.jpg' alt='7d2c7f05-ae77-41a1-948e-c179626e4568.jpg' loading='lazy'><p>7d2c7f05-ae77-41a1-948e-c179626e4568.jpg</p></article><article class='card'><h4>AuraSR-v2_seed1234_checkboard</h4><img src='results/AuraSR-v2_seed1234_checkboard/7d2c7f05-ae77-41a1-948e-c179626e4568.png' alt='AuraSR-v2_seed1234_checkboard' loading='lazy'><p>6.6633s inference</p><p>576x1024</p></article><article class='card'><h4>AuraSR-v2_seed1234_constant</h4><img src='results/AuraSR-v2_seed1234_constant/7d2c7f05-ae77-41a1-948e-c179626e4568.png' alt='AuraSR-v2_seed1234_constant' loading='lazy'><p>6.5678s inference</p><p>576x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_checkboard</h4><img src='results/AuraSR-v2_seed42_checkboard/7d2c7f05-ae77-41a1-948e-c179626e4568.png' alt='AuraSR-v2_seed42_checkboard' loading='lazy'><p>6.7635s inference</p><p>576x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_constant</h4><img src='results/AuraSR-v2_seed42_constant/7d2c7f05-ae77-41a1-948e-c179626e4568.png' alt='AuraSR-v2_seed42_constant' loading='lazy'><p>6.5363s inference</p><p>576x1024</p></article><article class='card'><h4>AuraSR-v2_seed77_checkboard</h4><img src='results/AuraSR-v2_seed77_checkboard/7d2c7f05-ae77-41a1-948e-c179626e4568.png' alt='AuraSR-v2_seed77_checkboard' loading='lazy'><p>6.7861s inference</p><p>576x1024</p></article><article class='card'><h4>AuraSR-v2_seed7_checkboard</h4><img src='results/AuraSR-v2_seed7_checkboard/7d2c7f05-ae77-41a1-948e-c179626e4568.png' alt='AuraSR-v2_seed7_checkboard' loading='lazy'><p>6.8943s inference</p><p>576x1024</p></article></div></section><section class='image-section'><h2>depositphotos_193329662-stock-photo-young-crazy-man-satisfied-expression.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/depositphotos_193329662-stock-photo-young-crazy-man-satisfied-expression.jpg' alt='depositphotos_193329662-stock-photo-young-crazy-man-satisfied-expression.jpg' loading='lazy'><p>depositphotos_193329662-stock-photo-young-crazy-man-satisfied-expression.jpg</p></article><article class='card'><h4>AuraSR-v2_seed1234_checkboard</h4><img src='results/AuraSR-v2_seed1234_checkboard/depositphotos_193329662-stock-photo-young-crazy-man-satisfied-expression.png' alt='AuraSR-v2_seed1234_checkboard' loading='lazy'><p>3.2525s inference</p><p>739x1024</p></article><article class='card'><h4>AuraSR-v2_seed1234_constant</h4><img src='results/AuraSR-v2_seed1234_constant/depositphotos_193329662-stock-photo-young-crazy-man-satisfied-expression.png' alt='AuraSR-v2_seed1234_constant' loading='lazy'><p>3.1969s inference</p><p>739x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_checkboard</h4><img src='results/AuraSR-v2_seed42_checkboard/depositphotos_193329662-stock-photo-young-crazy-man-satisfied-expression.png' alt='AuraSR-v2_seed42_checkboard' loading='lazy'><p>3.2465s inference</p><p>739x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_constant</h4><img src='results/AuraSR-v2_seed42_constant/depositphotos_193329662-stock-photo-young-crazy-man-satisfied-expression.png' alt='AuraSR-v2_seed42_constant' loading='lazy'><p>3.2415s inference</p><p>739x1024</p></article><article class='card'><h4>AuraSR-v2_seed77_checkboard</h4><img src='results/AuraSR-v2_seed77_checkboard/depositphotos_193329662-stock-photo-young-crazy-man-satisfied-expression.png' alt='AuraSR-v2_seed77_checkboard' loading='lazy'><p>3.2234s inference</p><p>739x1024</p></article><article class='card'><h4>AuraSR-v2_seed7_checkboard</h4><img src='results/AuraSR-v2_seed7_checkboard/depositphotos_193329662-stock-photo-young-crazy-man-satisfied-expression.png' alt='AuraSR-v2_seed7_checkboard' loading='lazy'><p>3.6281s inference</p><p>739x1024</p></article></div></section><section class='image-section'><h2>gettyimages-1277789459-170667a.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/gettyimages-1277789459-170667a.jpg' alt='gettyimages-1277789459-170667a.jpg' loading='lazy'><p>gettyimages-1277789459-170667a.jpg</p></article><article class='card'><h4>AuraSR-v2_seed1234_checkboard</h4><img src='results/AuraSR-v2_seed1234_checkboard/gettyimages-1277789459-170667a.png' alt='AuraSR-v2_seed1234_checkboard' loading='lazy'><p>2.3118s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed1234_constant</h4><img src='results/AuraSR-v2_seed1234_constant/gettyimages-1277789459-170667a.png' alt='AuraSR-v2_seed1234_constant' loading='lazy'><p>2.3222s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_checkboard</h4><img src='results/AuraSR-v2_seed42_checkboard/gettyimages-1277789459-170667a.png' alt='AuraSR-v2_seed42_checkboard' loading='lazy'><p>2.2343s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_constant</h4><img src='results/AuraSR-v2_seed42_constant/gettyimages-1277789459-170667a.png' alt='AuraSR-v2_seed42_constant' loading='lazy'><p>2.2365s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed77_checkboard</h4><img src='results/AuraSR-v2_seed77_checkboard/gettyimages-1277789459-170667a.png' alt='AuraSR-v2_seed77_checkboard' loading='lazy'><p>2.3027s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed7_checkboard</h4><img src='results/AuraSR-v2_seed7_checkboard/gettyimages-1277789459-170667a.png' alt='AuraSR-v2_seed7_checkboard' loading='lazy'><p>2.2316s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>gettyimages-1386178864-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/gettyimages-1386178864-612x612.jpg' alt='gettyimages-1386178864-612x612.jpg' loading='lazy'><p>gettyimages-1386178864-612x612.jpg</p></article><article class='card'><h4>AuraSR-v2_seed1234_checkboard</h4><img src='results/AuraSR-v2_seed1234_checkboard/gettyimages-1386178864-612x612.png' alt='AuraSR-v2_seed1234_checkboard' loading='lazy'><p>3.2513s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed1234_constant</h4><img src='results/AuraSR-v2_seed1234_constant/gettyimages-1386178864-612x612.png' alt='AuraSR-v2_seed1234_constant' loading='lazy'><p>3.2159s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_checkboard</h4><img src='results/AuraSR-v2_seed42_checkboard/gettyimages-1386178864-612x612.png' alt='AuraSR-v2_seed42_checkboard' loading='lazy'><p>3.214s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_constant</h4><img src='results/AuraSR-v2_seed42_constant/gettyimages-1386178864-612x612.png' alt='AuraSR-v2_seed42_constant' loading='lazy'><p>3.2967s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed77_checkboard</h4><img src='results/AuraSR-v2_seed77_checkboard/gettyimages-1386178864-612x612.png' alt='AuraSR-v2_seed77_checkboard' loading='lazy'><p>3.2331s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed7_checkboard</h4><img src='results/AuraSR-v2_seed7_checkboard/gettyimages-1386178864-612x612.png' alt='AuraSR-v2_seed7_checkboard' loading='lazy'><p>3.2059s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>gettyimages-1457156726-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/gettyimages-1457156726-612x612.jpg' alt='gettyimages-1457156726-612x612.jpg' loading='lazy'><p>gettyimages-1457156726-612x612.jpg</p></article><article class='card'><h4>AuraSR-v2_seed1234_checkboard</h4><img src='results/AuraSR-v2_seed1234_checkboard/gettyimages-1457156726-612x612.png' alt='AuraSR-v2_seed1234_checkboard' loading='lazy'><p>3.2416s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed1234_constant</h4><img src='results/AuraSR-v2_seed1234_constant/gettyimages-1457156726-612x612.png' alt='AuraSR-v2_seed1234_constant' loading='lazy'><p>3.284s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_checkboard</h4><img src='results/AuraSR-v2_seed42_checkboard/gettyimages-1457156726-612x612.png' alt='AuraSR-v2_seed42_checkboard' loading='lazy'><p>3.2695s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_constant</h4><img src='results/AuraSR-v2_seed42_constant/gettyimages-1457156726-612x612.png' alt='AuraSR-v2_seed42_constant' loading='lazy'><p>3.2138s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed77_checkboard</h4><img src='results/AuraSR-v2_seed77_checkboard/gettyimages-1457156726-612x612.png' alt='AuraSR-v2_seed77_checkboard' loading='lazy'><p>3.2463s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed7_checkboard</h4><img src='results/AuraSR-v2_seed7_checkboard/gettyimages-1457156726-612x612.png' alt='AuraSR-v2_seed7_checkboard' loading='lazy'><p>3.2541s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>gettyimages-2155141672-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/gettyimages-2155141672-612x612.jpg' alt='gettyimages-2155141672-612x612.jpg' loading='lazy'><p>gettyimages-2155141672-612x612.jpg</p></article><article class='card'><h4>AuraSR-v2_seed1234_checkboard</h4><img src='results/AuraSR-v2_seed1234_checkboard/gettyimages-2155141672-612x612.png' alt='AuraSR-v2_seed1234_checkboard' loading='lazy'><p>3.3567s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed1234_constant</h4><img src='results/AuraSR-v2_seed1234_constant/gettyimages-2155141672-612x612.png' alt='AuraSR-v2_seed1234_constant' loading='lazy'><p>3.223s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_checkboard</h4><img src='results/AuraSR-v2_seed42_checkboard/gettyimages-2155141672-612x612.png' alt='AuraSR-v2_seed42_checkboard' loading='lazy'><p>3.2494s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_constant</h4><img src='results/AuraSR-v2_seed42_constant/gettyimages-2155141672-612x612.png' alt='AuraSR-v2_seed42_constant' loading='lazy'><p>3.2159s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed77_checkboard</h4><img src='results/AuraSR-v2_seed77_checkboard/gettyimages-2155141672-612x612.png' alt='AuraSR-v2_seed77_checkboard' loading='lazy'><p>3.2553s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed7_checkboard</h4><img src='results/AuraSR-v2_seed7_checkboard/gettyimages-2155141672-612x612.png' alt='AuraSR-v2_seed7_checkboard' loading='lazy'><p>3.2527s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>gettyimages-2207333436-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/gettyimages-2207333436-612x612.jpg' alt='gettyimages-2207333436-612x612.jpg' loading='lazy'><p>gettyimages-2207333436-612x612.jpg</p></article><article class='card'><h4>AuraSR-v2_seed1234_checkboard</h4><img src='results/AuraSR-v2_seed1234_checkboard/gettyimages-2207333436-612x612.png' alt='AuraSR-v2_seed1234_checkboard' loading='lazy'><p>3.233s inference</p><p>681x1024</p></article><article class='card'><h4>AuraSR-v2_seed1234_constant</h4><img src='results/AuraSR-v2_seed1234_constant/gettyimages-2207333436-612x612.png' alt='AuraSR-v2_seed1234_constant' loading='lazy'><p>3.2517s inference</p><p>681x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_checkboard</h4><img src='results/AuraSR-v2_seed42_checkboard/gettyimages-2207333436-612x612.png' alt='AuraSR-v2_seed42_checkboard' loading='lazy'><p>3.3003s inference</p><p>681x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_constant</h4><img src='results/AuraSR-v2_seed42_constant/gettyimages-2207333436-612x612.png' alt='AuraSR-v2_seed42_constant' loading='lazy'><p>3.2915s inference</p><p>681x1024</p></article><article class='card'><h4>AuraSR-v2_seed77_checkboard</h4><img src='results/AuraSR-v2_seed77_checkboard/gettyimages-2207333436-612x612.png' alt='AuraSR-v2_seed77_checkboard' loading='lazy'><p>3.2315s inference</p><p>681x1024</p></article><article class='card'><h4>AuraSR-v2_seed7_checkboard</h4><img src='results/AuraSR-v2_seed7_checkboard/gettyimages-2207333436-612x612.png' alt='AuraSR-v2_seed7_checkboard' loading='lazy'><p>3.2252s inference</p><p>681x1024</p></article></div></section><section class='image-section'><h2>istockphoto-1180106547-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/istockphoto-1180106547-612x612.jpg' alt='istockphoto-1180106547-612x612.jpg' loading='lazy'><p>istockphoto-1180106547-612x612.jpg</p></article><article class='card'><h4>AuraSR-v2_seed1234_checkboard</h4><img src='results/AuraSR-v2_seed1234_checkboard/istockphoto-1180106547-612x612.png' alt='AuraSR-v2_seed1234_checkboard' loading='lazy'><p>3.2285s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed1234_constant</h4><img src='results/AuraSR-v2_seed1234_constant/istockphoto-1180106547-612x612.png' alt='AuraSR-v2_seed1234_constant' loading='lazy'><p>3.29s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_checkboard</h4><img src='results/AuraSR-v2_seed42_checkboard/istockphoto-1180106547-612x612.png' alt='AuraSR-v2_seed42_checkboard' loading='lazy'><p>3.2431s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_constant</h4><img src='results/AuraSR-v2_seed42_constant/istockphoto-1180106547-612x612.png' alt='AuraSR-v2_seed42_constant' loading='lazy'><p>3.2891s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed77_checkboard</h4><img src='results/AuraSR-v2_seed77_checkboard/istockphoto-1180106547-612x612.png' alt='AuraSR-v2_seed77_checkboard' loading='lazy'><p>3.2286s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed7_checkboard</h4><img src='results/AuraSR-v2_seed7_checkboard/istockphoto-1180106547-612x612.png' alt='AuraSR-v2_seed7_checkboard' loading='lazy'><p>3.2314s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>istockphoto-1184187907-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/istockphoto-1184187907-612x612.jpg' alt='istockphoto-1184187907-612x612.jpg' loading='lazy'><p>istockphoto-1184187907-612x612.jpg</p></article><article class='card'><h4>AuraSR-v2_seed1234_checkboard</h4><img src='results/AuraSR-v2_seed1234_checkboard/istockphoto-1184187907-612x612.png' alt='AuraSR-v2_seed1234_checkboard' loading='lazy'><p>3.2688s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed1234_constant</h4><img src='results/AuraSR-v2_seed1234_constant/istockphoto-1184187907-612x612.png' alt='AuraSR-v2_seed1234_constant' loading='lazy'><p>3.2647s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_checkboard</h4><img src='results/AuraSR-v2_seed42_checkboard/istockphoto-1184187907-612x612.png' alt='AuraSR-v2_seed42_checkboard' loading='lazy'><p>3.2561s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_constant</h4><img src='results/AuraSR-v2_seed42_constant/istockphoto-1184187907-612x612.png' alt='AuraSR-v2_seed42_constant' loading='lazy'><p>3.2446s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed77_checkboard</h4><img src='results/AuraSR-v2_seed77_checkboard/istockphoto-1184187907-612x612.png' alt='AuraSR-v2_seed77_checkboard' loading='lazy'><p>3.2628s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed7_checkboard</h4><img src='results/AuraSR-v2_seed7_checkboard/istockphoto-1184187907-612x612.png' alt='AuraSR-v2_seed7_checkboard' loading='lazy'><p>3.2713s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>istockphoto-1332517953-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/istockphoto-1332517953-612x612.jpg' alt='istockphoto-1332517953-612x612.jpg' loading='lazy'><p>istockphoto-1332517953-612x612.jpg</p></article><article class='card'><h4>AuraSR-v2_seed1234_checkboard</h4><img src='results/AuraSR-v2_seed1234_checkboard/istockphoto-1332517953-612x612.png' alt='AuraSR-v2_seed1234_checkboard' loading='lazy'><p>3.2553s inference</p><p>699x1024</p></article><article class='card'><h4>AuraSR-v2_seed1234_constant</h4><img src='results/AuraSR-v2_seed1234_constant/istockphoto-1332517953-612x612.png' alt='AuraSR-v2_seed1234_constant' loading='lazy'><p>3.2252s inference</p><p>699x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_checkboard</h4><img src='results/AuraSR-v2_seed42_checkboard/istockphoto-1332517953-612x612.png' alt='AuraSR-v2_seed42_checkboard' loading='lazy'><p>3.2715s inference</p><p>699x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_constant</h4><img src='results/AuraSR-v2_seed42_constant/istockphoto-1332517953-612x612.png' alt='AuraSR-v2_seed42_constant' loading='lazy'><p>3.2339s inference</p><p>699x1024</p></article><article class='card'><h4>AuraSR-v2_seed77_checkboard</h4><img src='results/AuraSR-v2_seed77_checkboard/istockphoto-1332517953-612x612.png' alt='AuraSR-v2_seed77_checkboard' loading='lazy'><p>3.2666s inference</p><p>699x1024</p></article><article class='card'><h4>AuraSR-v2_seed7_checkboard</h4><img src='results/AuraSR-v2_seed7_checkboard/istockphoto-1332517953-612x612.png' alt='AuraSR-v2_seed7_checkboard' loading='lazy'><p>3.2875s inference</p><p>699x1024</p></article></div></section><section class='image-section'><h2>istockphoto-2194356461-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/istockphoto-2194356461-612x612.jpg' alt='istockphoto-2194356461-612x612.jpg' loading='lazy'><p>istockphoto-2194356461-612x612.jpg</p></article><article class='card'><h4>AuraSR-v2_seed1234_checkboard</h4><img src='results/AuraSR-v2_seed1234_checkboard/istockphoto-2194356461-612x612.png' alt='AuraSR-v2_seed1234_checkboard' loading='lazy'><p>3.2614s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed1234_constant</h4><img src='results/AuraSR-v2_seed1234_constant/istockphoto-2194356461-612x612.png' alt='AuraSR-v2_seed1234_constant' loading='lazy'><p>3.2926s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_checkboard</h4><img src='results/AuraSR-v2_seed42_checkboard/istockphoto-2194356461-612x612.png' alt='AuraSR-v2_seed42_checkboard' loading='lazy'><p>3.2572s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_constant</h4><img src='results/AuraSR-v2_seed42_constant/istockphoto-2194356461-612x612.png' alt='AuraSR-v2_seed42_constant' loading='lazy'><p>3.2916s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed77_checkboard</h4><img src='results/AuraSR-v2_seed77_checkboard/istockphoto-2194356461-612x612.png' alt='AuraSR-v2_seed77_checkboard' loading='lazy'><p>3.3628s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed7_checkboard</h4><img src='results/AuraSR-v2_seed7_checkboard/istockphoto-2194356461-612x612.png' alt='AuraSR-v2_seed7_checkboard' loading='lazy'><p>3.2584s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>istockphoto-466708390-612x612.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/istockphoto-466708390-612x612.jpg' alt='istockphoto-466708390-612x612.jpg' loading='lazy'><p>istockphoto-466708390-612x612.jpg</p></article><article class='card'><h4>AuraSR-v2_seed1234_checkboard</h4><img src='results/AuraSR-v2_seed1234_checkboard/istockphoto-466708390-612x612.png' alt='AuraSR-v2_seed1234_checkboard' loading='lazy'><p>3.2495s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed1234_constant</h4><img src='results/AuraSR-v2_seed1234_constant/istockphoto-466708390-612x612.png' alt='AuraSR-v2_seed1234_constant' loading='lazy'><p>3.2902s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_checkboard</h4><img src='results/AuraSR-v2_seed42_checkboard/istockphoto-466708390-612x612.png' alt='AuraSR-v2_seed42_checkboard' loading='lazy'><p>3.2783s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_constant</h4><img src='results/AuraSR-v2_seed42_constant/istockphoto-466708390-612x612.png' alt='AuraSR-v2_seed42_constant' loading='lazy'><p>3.2512s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed77_checkboard</h4><img src='results/AuraSR-v2_seed77_checkboard/istockphoto-466708390-612x612.png' alt='AuraSR-v2_seed77_checkboard' loading='lazy'><p>3.2621s inference</p><p>683x1024</p></article><article class='card'><h4>AuraSR-v2_seed7_checkboard</h4><img src='results/AuraSR-v2_seed7_checkboard/istockphoto-466708390-612x612.png' alt='AuraSR-v2_seed7_checkboard' loading='lazy'><p>3.2498s inference</p><p>683x1024</p></article></div></section><section class='image-section'><h2>pngtree-confident-full-body-asian-business-man-model-full-modern-photo-image_9050792.jpg</h2><div class='grid'><article class='card'><h4>Original</h4><img src='inputs/pngtree-confident-full-body-asian-business-man-model-full-modern-photo-image_9050792.jpg' alt='pngtree-confident-full-body-asian-business-man-model-full-modern-photo-image_9050792.jpg' loading='lazy'><p>pngtree-confident-full-body-asian-business-man-model-full-modern-photo-image_9050792.jpg</p></article><article class='card'><h4>AuraSR-v2_seed1234_checkboard</h4><img src='results/AuraSR-v2_seed1234_checkboard/pngtree-confident-full-body-asian-business-man-model-full-modern-photo-image_9050792.png' alt='AuraSR-v2_seed1234_checkboard' loading='lazy'><p>1.6656s inference</p><p>684x1024</p></article><article class='card'><h4>AuraSR-v2_seed1234_constant</h4><img src='results/AuraSR-v2_seed1234_constant/pngtree-confident-full-body-asian-business-man-model-full-modern-photo-image_9050792.png' alt='AuraSR-v2_seed1234_constant' loading='lazy'><p>1.6451s inference</p><p>684x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_checkboard</h4><img src='results/AuraSR-v2_seed42_checkboard/pngtree-confident-full-body-asian-business-man-model-full-modern-photo-image_9050792.png' alt='AuraSR-v2_seed42_checkboard' loading='lazy'><p>1.6612s inference</p><p>684x1024</p></article><article class='card'><h4>AuraSR-v2_seed42_constant</h4><img src='results/AuraSR-v2_seed42_constant/pngtree-confident-full-body-asian-business-man-model-full-modern-photo-image_9050792.png' alt='AuraSR-v2_seed42_constant' loading='lazy'><p>1.7102s inference</p><p>684x1024</p></article><article class='card'><h4>AuraSR-v2_seed77_checkboard</h4><img src='results/AuraSR-v2_seed77_checkboard/pngtree-confident-full-body-asian-business-man-model-full-modern-photo-image_9050792.png' alt='AuraSR-v2_seed77_checkboard' loading='lazy'><p>1.6647s inference</p><p>684x1024</p></article><article class='card'><h4>AuraSR-v2_seed7_checkboard</h4><img src='results/AuraSR-v2_seed7_checkboard/pngtree-confident-full-body-asian-business-man-model-full-modern-photo-image_9050792.png' alt='AuraSR-v2_seed7_checkboard' loading='lazy'><p>1.664s inference</p><p>684x1024</p></article></div></section>
+  </main>
+</body>
+</html>

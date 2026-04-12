@@ -1,0 +1,390 @@
+{
+  "status": 200,
+  "data": {
+    "result": "ACCEPTED",
+    "title": "Added To Wardrobe",
+    "description": "Garment extracted successfully.",
+    "reason_codes": [
+      "SINGLE_ITEM"
+    ],
+    "selection_required": false,
+    "clothing_type": "trench coat",
+    "category_key": "trench_coats",
+    "primary_category_key": "outerwear",
+    "style": "trench coat",
+    "selected_type": "outer",
+    "selected_item": {
+      "garment_id": 0,
+      "type": "outer",
+      "garment_type": "outer",
+      "type_source": "detector",
+      "detection_source": "fashion_object_detection",
+      "promptDescription": "This trench coat features a double-breasted front with two rows of four buttons each, secured by a wide, matching belt with a rectangular buckle at the waist. The coat has a notched lapel collar with a single vent on each side of the front opening. Shoulder epaulets are present, and the sleeves are long with adjustable straps and buckles at the cuffs. The garment includes two large, angled patch pockets on the front, positioned below the belt line. The outerwear length is partially visible, extending below the hips. Seams are visible along the shoulders, sides, and pockets, contributing to the structured silhouette. The material appears smooth, with a slight sheen, and the overall construction emphasizes clean lines and functional detailing",
+      "description": "This trench coat features a double-breasted front with two rows of four buttons each, secured by a wide, matching belt with a rectangular buckle at the waist. The coat has a notched lapel collar with a single vent on each side of the front opening. Shoulder epaulets are present, and the sleeves are long with adjustable straps and buckles at the cuffs. The garment includes two large, angled patch pockets on the front, positioned below the belt line. The outerwear length is partially visible, extending below the hips. Seams are visible along the shoulders, sides, and pockets, contributing to the structured silhouette. The material appears smooth, with a slight sheen, and the overall construction emphasizes clean lines and functional detailing",
+      "style": "trench coat",
+      "category_key": "trench_coats",
+      "primary_category_key": "outerwear",
+      "url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/f362cf7f-0df8-4a24-8880-aa36d648c253.png",
+      "bbox": [
+        62,
+        327,
+        704,
+        1344
+      ],
+      "crop": {
+        "width": 642,
+        "height": 942,
+        "area_ratio": 0.5859026227678571
+      },
+      "confidence": {
+        "yolo": 0.7697478532791138,
+        "detector": 0.7697478532791138
+      },
+      "detector_label": "outer",
+      "detector_metrics": {
+        "width": 642.0,
+        "height": 942.0,
+        "aspect_ratio": 0.6815286624203821,
+        "area_ratio": 0.5859026227678571,
+        "center_x_ratio": 0.4986979166666667,
+        "center_y_ratio": 0.6495535714285714,
+        "height_ratio": 0.7008928571428571,
+        "width_ratio": 0.8359375
+      },
+      "minicpm_description": "This trench coat features a double-breasted front with two rows of four black buttons each, secured by a wide, matching belt with a rectangular buckle at the waist. The coat has a notched lapel collar with a single vent on each side of the front opening. Shoulder epaulets are present, and the sleeves are long with adjustable straps and buckles at the cuffs. The garment includes two large, angled patch pockets on the front, positioned below the belt line. The outerwear length is partially visible, extending below the hips. Seams are visible along the shoulders, sides, and pockets, contributing to the structured silhouette. The material appears smooth, with a slight sheen, and the overall construction emphasizes clean lines and functional detailing.",
+      "joycaption_description": "",
+      "baseGarmentPrompt": "A single outerwear garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The collar, lapel, shoulder structure, sleeve length, waistline, and hem match the reference exactly. Preserve the garment's original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Outerwear-only: no inner base garment, no inner base layer, no shirt underneath, no separate underlayer, and no extra garment visible below the coat or jacket. Keep the outerwear as one single layer with the original collar, lapel, opening, sleeves, and hem preserved. Do not add a second garment inside the silhouette or convert the outerwear into a layered outfit. Keep the front and body shape flat and cloth-like rather than torso-shaped. This trench coat features a double-breasted front with two rows of four buttons each, secured by a wide, matching belt with a rectangular buckle at the waist. The coat has a notched lapel collar with a single vent on each side of the front opening. Shoulder epaulets are present, and the sleeves are long with adjustable straps and buckles at the cuffs. The garment includes two large, angled patch pockets on the front, positioned below the belt line. The outerwear length is partially visible, extending below the hips. Seams are visible along the shoulders, sides, and pockets, contributing to the structured silhouette. The material appears smooth, with a slight sheen, and the overall construction emphasizes clean lines and functional detailing",
+      "extractionAvoidClause": "",
+      "promptDescriptionSource": "minicpm_direct_prompt",
+      "garmentMetadata": {
+        "schema_version": "garment_metadata.v1",
+        "prompt": {
+          "base_garment_prompt": "coverage=upper body outer layer.",
+          "prompt_description": "This trench coat features a double-breasted front with two rows of four buttons each, secured by a wide, matching belt with a rectangular buckle at the waist. The coat has a notched lapel collar with a single vent on each side of the front opening. Shoulder epaulets are present, and the sleeves are long with adjustable straps and buckles at the cuffs. The garment includes two large, angled patch pockets on the front, positioned below the belt line. The outerwear length is partially visible, extending below the hips. Seams are visible along the shoulders, sides, and pockets, contributing to the structured silhouette. The material appears smooth, with a slight sheen, and the overall construction emphasizes clean lines and functional detailing",
+          "extraction_avoid_clause": "",
+          "prompt_sections_raw": "",
+          "descriptor_raw_text": "This trench coat features a double-breasted front with two rows of four black buttons each, secured by a wide, matching belt with a rectangular buckle at the waist. The coat has a notched lapel collar with a single vent on each side of the front opening. Shoulder epaulets are present, and the sleeves are long with adjustable straps and buckles at the cuffs. The garment includes two large, angled patch pockets on the front, positioned below the belt line. The outerwear length is partially visible, extending below the hips. Seams are visible along the shoulders, sides, and pockets, contributing to the structured silhouette. The material appears smooth, with a slight sheen, and the overall construction emphasizes clean lines and functional detailing.",
+          "source": "minicpm_direct_prompt"
+        },
+        "classification": {
+          "target_type": "outer",
+          "backend_target_type": "outer",
+          "style": "jacket",
+          "primary_category_key": "outerwear",
+          "category_key": "jackets"
+        },
+        "color": {
+          "dominant_hexes": [],
+          "accent_hexes": [],
+          "color_hints": [],
+          "profile": {},
+          "mask_source": "",
+          "resolved_source": "pixel",
+          "signal_confidence": 0.48,
+          "signal_strength": "low",
+          "fashion_basecolour": {},
+          "primary_color_label": "",
+          "primary_color_family": "",
+          "secondary_color_label": "",
+          "secondary_color_family": "",
+          "primary_color_descriptor": "",
+          "secondary_color_descriptor": "",
+          "brightness": "unknown",
+          "saturation": "unknown",
+          "undertone": "unknown",
+          "descriptor_source": "profile_composition",
+          "sampling_mask": {}
+        },
+        "details": {
+          "coverage": "upper body outer layer"
+        }
+      },
+      "detector_bbox": [
+        62,
+        402,
+        704,
+        1344
+      ],
+      "bbox_geometry_source": "detector_bbox_top_recovery",
+      "extract_crop_bbox": [
+        11,
+        246,
+        755,
+        1344
+      ],
+      "extract_crop_mode": "garment_bbox_expanded",
+      "output_image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/f362cf7f-0df8-4a24-8880-aa36d648c253.png",
+      "output_image_source": "flux2_extraction",
+      "raw_image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/f362cf7f-0df8-4a24-8880-aa36d648c253.png",
+      "raw_image_source": "flux2_extraction",
+      "extraction": {
+        "pipeline": "flux2_extraction",
+        "steps": 10,
+        "seed": 23,
+        "guidance_scale": 3.5,
+        "resolution": [
+          512,
+          768
+        ],
+        "request_total_seconds": 9.942705869674683,
+        "base_garment_prompt": "A single outerwear garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The collar, lapel, shoulder structure, sleeve length, waistline, and hem match the reference exactly. Preserve the garment's original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Outerwear-only: no inner base garment, no inner base layer, no shirt underneath, no separate underlayer, and no extra garment visible below the coat or jacket. Keep the outerwear as one single layer with the original collar, lapel, opening, sleeves, and hem preserved. Do not add a second garment inside the silhouette or convert the outerwear into a layered outfit. Keep the front and body shape flat and cloth-like rather than torso-shaped. This trench coat features a double-breasted front with two rows of four buttons each, secured by a wide, matching belt with a rectangular buckle at the waist. The coat has a notched lapel collar with a single vent on each side of the front opening. Shoulder epaulets are present, and the sleeves are long with adjustable straps and buckles at the cuffs. The garment includes two large, angled patch pockets on the front, positioned below the belt line. The outerwear length is partially visible, extending below the hips. Seams are visible along the shoulders, sides, and pockets, contributing to the structured silhouette. The material appears smooth, with a slight sheen, and the overall construction emphasizes clean lines and functional detailing",
+        "prompt_description": "This trench coat features a double-breasted front with two rows of four buttons each, secured by a wide, matching belt with a rectangular buckle at the waist. The coat has a notched lapel collar with a single vent on each side of the front opening. Shoulder epaulets are present, and the sleeves are long with adjustable straps and buckles at the cuffs. The garment includes two large, angled patch pockets on the front, positioned below the belt line. The outerwear length is partially visible, extending below the hips. Seams are visible along the shoulders, sides, and pockets, contributing to the structured silhouette. The material appears smooth, with a slight sheen, and the overall construction emphasizes clean lines and functional detailing",
+        "lora_enabled": false,
+        "startup_metrics": {
+          "pipeline_init_total_seconds": 97.04002046585083,
+          "pipeline_model_load_seconds": 76.55591368675232,
+          "pipeline_lora_load_seconds": 1.976440191268921,
+          "lora_enabled": true,
+          "lora_required": true,
+          "lora_loaded": true,
+          "lora_mode": "tryon",
+          "lora_path": "/workspace/models/flux2-lora/fal-virtual-tryon",
+          "bfs_lora_path": "/workspace/models/flux2-lora/bfs-best-face-swap",
+          "lora_source_resolved": "/workspace/models/flux2-lora/fal-virtual-tryon",
+          "lora_sources_resolved": [
+            "/workspace/models/flux2-lora/fal-virtual-tryon"
+          ],
+          "lora_weight_loaded": "flux-klein-tryon.safetensors",
+          "lora_weights_loaded": [
+            "flux-klein-tryon.safetensors"
+          ],
+          "lora_adapters_loaded": [
+            "fal_tryon"
+          ],
+          "lora_scales_loaded": [
+            0.7
+          ],
+          "lora_auto_download": true,
+          "lora_downloaded": false,
+          "pipeline_optimize_seconds": 0.008476495742797852,
+          "compile_mode": "none",
+          "compile_status": "disabled",
+          "compile_vae_decode": false,
+          "channels_last": true,
+          "fuse_lora": false,
+          "runtime_lora_toggle": true,
+          "tf32_enabled": true,
+          "torch_version": "2.10.0+cu128",
+          "device": "cuda",
+          "dtype": "torch.bfloat16",
+          "pipeline_class": "Flux2KleinPipeline"
+        },
+        "path": "flux2_extraction",
+        "extraction_avoid_clause": "",
+        "prompt_sections_raw": "",
+        "descriptor_raw_text": "This trench coat features a double-breasted front with two rows of four black buttons each, secured by a wide, matching belt with a rectangular buckle at the waist. The coat has a notched lapel collar with a single vent on each side of the front opening. Shoulder epaulets are present, and the sleeves are long with adjustable straps and buckles at the cuffs. The garment includes two large, angled patch pockets on the front, positioned below the belt line. The outerwear length is partially visible, extending below the hips. Seams are visible along the shoulders, sides, and pockets, contributing to the structured silhouette. The material appears smooth, with a slight sheen, and the overall construction emphasizes clean lines and functional detailing.",
+        "negative_prompt_mode": "none"
+      },
+      "cloth_verified": true,
+      "cloth_verification_source": "flux2_extraction",
+      "promptSectionsRaw": "",
+      "promptDescriptionRaw": "This trench coat features a double-breasted front with two rows of four buttons each, secured by a wide, matching belt with a rectangular buckle at the waist. The coat has a notched lapel collar with a single vent on each side of the front opening. Shoulder epaulets are present, and the sleeves are long with adjustable straps and buckles at the cuffs. The garment includes two large, angled patch pockets on the front, positioned below the belt line. The outerwear length is partially visible, extending below the hips. Seams are visible along the shoulders, sides, and pockets, contributing to the structured silhouette. The material appears smooth, with a slight sheen, and the overall construction emphasizes clean lines and functional detailing",
+      "wardrobe_progress_id": "da757208-8506-4d3e-bac6-a424212b6f43",
+      "progress_sync": {
+        "enabled": true,
+        "synced": false,
+        "status_code": 401,
+        "id": "da757208-8506-4d3e-bac6-a424212b6f43",
+        "response": {
+          "message": "Invalid token",
+          "status": 401
+        }
+      },
+      "metadata": {
+        "garmentExtractionMeta": {
+          "pipeline": "flux2_extraction",
+          "steps": 10,
+          "seed": 23,
+          "guidance_scale": 3.5,
+          "resolution": [
+            512,
+            768
+          ],
+          "request_total_seconds": 9.942705869674683,
+          "base_garment_prompt": "A single outerwear garment displayed alone as a standalone product, centered and front-view studio product photography on a seamless pure white backdrop. Clean, uncluttered composition with only the garment visible. Soft diffused studio lighting with clear edge definition and crisp detail. The collar, lapel, shoulder structure, sleeve length, waistline, and hem match the reference exactly. Preserve the garment's original colors, print placement, and material appearance exactly as in the reference. Match the reference colors and print placement precisely. Do not recolor the garment or shift its hue, undertone, brightness, saturation, contrast, or shading. The garment structure and overall silhouette match the reference exactly. Only the garment is visible; no person, no mannequin body, no limbs, no head, no skin, no body silhouette. Ghost mannequin style is acceptable only if the mannequin is completely invisible. Flat garment presentation; hollow interior: no chest volume, no torso form, no body contours beneath the fabric. No hangers, no props, no accessories. Pure white background, clean studio product photo. Outerwear-only: no inner base garment, no inner base layer, no shirt underneath, no separate underlayer, and no extra garment visible below the coat or jacket. Keep the outerwear as one single layer with the original collar, lapel, opening, sleeves, and hem preserved. Do not add a second garment inside the silhouette or convert the outerwear into a layered outfit. Keep the front and body shape flat and cloth-like rather than torso-shaped. This trench coat features a double-breasted front with two rows of four buttons each, secured by a wide, matching belt with a rectangular buckle at the waist. The coat has a notched lapel collar with a single vent on each side of the front opening. Shoulder epaulets are present, and the sleeves are long with adjustable straps and buckles at the cuffs. The garment includes two large, angled patch pockets on the front, positioned below the belt line. The outerwear length is partially visible, extending below the hips. Seams are visible along the shoulders, sides, and pockets, contributing to the structured silhouette. The material appears smooth, with a slight sheen, and the overall construction emphasizes clean lines and functional detailing",
+          "prompt_description": "This trench coat features a double-breasted front with two rows of four buttons each, secured by a wide, matching belt with a rectangular buckle at the waist. The coat has a notched lapel collar with a single vent on each side of the front opening. Shoulder epaulets are present, and the sleeves are long with adjustable straps and buckles at the cuffs. The garment includes two large, angled patch pockets on the front, positioned below the belt line. The outerwear length is partially visible, extending below the hips. Seams are visible along the shoulders, sides, and pockets, contributing to the structured silhouette. The material appears smooth, with a slight sheen, and the overall construction emphasizes clean lines and functional detailing",
+          "lora_enabled": false,
+          "startup_metrics": {
+            "pipeline_init_total_seconds": 97.04002046585083,
+            "pipeline_model_load_seconds": 76.55591368675232,
+            "pipeline_lora_load_seconds": 1.976440191268921,
+            "lora_enabled": true,
+            "lora_required": true,
+            "lora_loaded": true,
+            "lora_mode": "tryon",
+            "lora_path": "/workspace/models/flux2-lora/fal-virtual-tryon",
+            "bfs_lora_path": "/workspace/models/flux2-lora/bfs-best-face-swap",
+            "lora_source_resolved": "/workspace/models/flux2-lora/fal-virtual-tryon",
+            "lora_sources_resolved": [
+              "/workspace/models/flux2-lora/fal-virtual-tryon"
+            ],
+            "lora_weight_loaded": "flux-klein-tryon.safetensors",
+            "lora_weights_loaded": [
+              "flux-klein-tryon.safetensors"
+            ],
+            "lora_adapters_loaded": [
+              "fal_tryon"
+            ],
+            "lora_scales_loaded": [
+              0.7
+            ],
+            "lora_auto_download": true,
+            "lora_downloaded": false,
+            "pipeline_optimize_seconds": 0.008476495742797852,
+            "compile_mode": "none",
+            "compile_status": "disabled",
+            "compile_vae_decode": false,
+            "channels_last": true,
+            "fuse_lora": false,
+            "runtime_lora_toggle": true,
+            "tf32_enabled": true,
+            "torch_version": "2.10.0+cu128",
+            "device": "cuda",
+            "dtype": "torch.bfloat16",
+            "pipeline_class": "Flux2KleinPipeline"
+          },
+          "path": "flux2_extraction",
+          "extraction_avoid_clause": "",
+          "prompt_sections_raw": "",
+          "descriptor_raw_text": "This trench coat features a double-breasted front with two rows of four black buttons each, secured by a wide, matching belt with a rectangular buckle at the waist. The coat has a notched lapel collar with a single vent on each side of the front opening. Shoulder epaulets are present, and the sleeves are long with adjustable straps and buckles at the cuffs. The garment includes two large, angled patch pockets on the front, positioned below the belt line. The outerwear length is partially visible, extending below the hips. Seams are visible along the shoulders, sides, and pockets, contributing to the structured silhouette. The material appears smooth, with a slight sheen, and the overall construction emphasizes clean lines and functional detailing.",
+          "negative_prompt_mode": "none"
+        },
+        "garmentMetadata": {
+          "schema_version": "garment_metadata.v1",
+          "prompt": {
+            "base_garment_prompt": "coverage=upper body outer layer.",
+            "prompt_description": "This trench coat features a double-breasted front with two rows of four buttons each, secured by a wide, matching belt with a rectangular buckle at the waist. The coat has a notched lapel collar with a single vent on each side of the front opening. Shoulder epaulets are present, and the sleeves are long with adjustable straps and buckles at the cuffs. The garment includes two large, angled patch pockets on the front, positioned below the belt line. The outerwear length is partially visible, extending below the hips. Seams are visible along the shoulders, sides, and pockets, contributing to the structured silhouette. The material appears smooth, with a slight sheen, and the overall construction emphasizes clean lines and functional detailing",
+            "extraction_avoid_clause": "",
+            "prompt_sections_raw": "",
+            "descriptor_raw_text": "This trench coat features a double-breasted front with two rows of four black buttons each, secured by a wide, matching belt with a rectangular buckle at the waist. The coat has a notched lapel collar with a single vent on each side of the front opening. Shoulder epaulets are present, and the sleeves are long with adjustable straps and buckles at the cuffs. The garment includes two large, angled patch pockets on the front, positioned below the belt line. The outerwear length is partially visible, extending below the hips. Seams are visible along the shoulders, sides, and pockets, contributing to the structured silhouette. The material appears smooth, with a slight sheen, and the overall construction emphasizes clean lines and functional detailing.",
+            "source": "minicpm_direct_prompt"
+          },
+          "classification": {
+            "target_type": "outer",
+            "backend_target_type": "outer",
+            "style": "jacket",
+            "primary_category_key": "outerwear",
+            "category_key": "jackets"
+          },
+          "color": {
+            "dominant_hexes": [],
+            "accent_hexes": [],
+            "color_hints": [],
+            "profile": {},
+            "mask_source": "",
+            "resolved_source": "pixel",
+            "signal_confidence": 0.48,
+            "signal_strength": "low",
+            "fashion_basecolour": {},
+            "primary_color_label": "",
+            "primary_color_family": "",
+            "secondary_color_label": "",
+            "secondary_color_family": "",
+            "primary_color_descriptor": "",
+            "secondary_color_descriptor": "",
+            "brightness": "unknown",
+            "saturation": "unknown",
+            "undertone": "unknown",
+            "descriptor_source": "profile_composition",
+            "sampling_mask": {}
+          },
+          "details": {
+            "coverage": "upper body outer layer"
+          }
+        },
+        "progressSync": {
+          "enabled": true,
+          "synced": false,
+          "status_code": 401,
+          "id": "da757208-8506-4d3e-bac6-a424212b6f43",
+          "response": {
+            "message": "Invalid token",
+            "status": 401
+          }
+        }
+      },
+      "imageUrl": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/f362cf7f-0df8-4a24-8880-aa36d648c253.png",
+      "outputImage": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/f362cf7f-0df8-4a24-8880-aa36d648c253.png"
+    },
+    "garmentMetadata": {
+      "schema_version": "garment_metadata.v1",
+      "prompt": {
+        "base_garment_prompt": "coverage=upper body outer layer.",
+        "prompt_description": "This trench coat features a double-breasted front with two rows of four buttons each, secured by a wide, matching belt with a rectangular buckle at the waist. The coat has a notched lapel collar with a single vent on each side of the front opening. Shoulder epaulets are present, and the sleeves are long with adjustable straps and buckles at the cuffs. The garment includes two large, angled patch pockets on the front, positioned below the belt line. The outerwear length is partially visible, extending below the hips. Seams are visible along the shoulders, sides, and pockets, contributing to the structured silhouette. The material appears smooth, with a slight sheen, and the overall construction emphasizes clean lines and functional detailing",
+        "extraction_avoid_clause": "",
+        "prompt_sections_raw": "",
+        "descriptor_raw_text": "This trench coat features a double-breasted front with two rows of four black buttons each, secured by a wide, matching belt with a rectangular buckle at the waist. The coat has a notched lapel collar with a single vent on each side of the front opening. Shoulder epaulets are present, and the sleeves are long with adjustable straps and buckles at the cuffs. The garment includes two large, angled patch pockets on the front, positioned below the belt line. The outerwear length is partially visible, extending below the hips. Seams are visible along the shoulders, sides, and pockets, contributing to the structured silhouette. The material appears smooth, with a slight sheen, and the overall construction emphasizes clean lines and functional detailing.",
+        "source": "minicpm_direct_prompt"
+      },
+      "classification": {
+        "target_type": "outer",
+        "backend_target_type": "outer",
+        "style": "jacket",
+        "primary_category_key": "outerwear",
+        "category_key": "jackets"
+      },
+      "color": {
+        "dominant_hexes": [],
+        "accent_hexes": [],
+        "color_hints": [],
+        "profile": {},
+        "mask_source": "",
+        "resolved_source": "pixel",
+        "signal_confidence": 0.48,
+        "signal_strength": "low",
+        "fashion_basecolour": {},
+        "primary_color_label": "",
+        "primary_color_family": "",
+        "secondary_color_label": "",
+        "secondary_color_family": "",
+        "primary_color_descriptor": "",
+        "secondary_color_descriptor": "",
+        "brightness": "unknown",
+        "saturation": "unknown",
+        "undertone": "unknown",
+        "descriptor_source": "profile_composition",
+        "sampling_mask": {}
+      },
+      "details": {
+        "coverage": "upper body outer layer"
+      }
+    },
+    "cloth_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/f362cf7f-0df8-4a24-8880-aa36d648c253.png",
+    "output_image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/f362cf7f-0df8-4a24-8880-aa36d648c253.png",
+    "extraction_path": "flux2_extraction",
+    "promptDescription": "This trench coat features a double-breasted front with two rows of four buttons each, secured by a wide, matching belt with a rectangular buckle at the waist. The coat has a notched lapel collar with a single vent on each side of the front opening. Shoulder epaulets are present, and the sleeves are long with adjustable straps and buckles at the cuffs. The garment includes two large, angled patch pockets on the front, positioned below the belt line. The outerwear length is partially visible, extending below the hips. Seams are visible along the shoulders, sides, and pockets, contributing to the structured silhouette. The material appears smooth, with a slight sheen, and the overall construction emphasizes clean lines and functional detailing",
+    "wardrobe_progress_id": "da757208-8506-4d3e-bac6-a424212b6f43",
+    "multipart_data": {
+      "format": "multipart-data",
+      "parts": [
+        {
+          "part_name": "extracted_cloth",
+          "kind": "cloth",
+          "mime_type": "image/png",
+          "image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/f362cf7f-0df8-4a24-8880-aa36d648c253.png"
+        }
+      ]
+    },
+    "total_garments_found": 1,
+    "latencies": {
+      "total": 20.6752,
+      "gpu_queue_wait": 0.0,
+      "stages": {
+        "read_input_s": 0.0003,
+        "blur_check_s": 0.0,
+        "yolo_detect_s": 0.0274,
+        "yolo_crop_s": 0.0,
+        "caption_total_s": 0.0,
+        "primary_type_total_s": 0.0,
+        "extract_total_s": 10.9973,
+        "progress_sync_s": 0.972,
+        "minicpm_s": 8.6222,
+        "joycaption_s": 0.0
+      }
+    },
+    "processing_time_ms": 20675,
+    "imageUrl": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/f362cf7f-0df8-4a24-8880-aa36d648c253.png",
+    "progressId": "da757208-8506-4d3e-bac6-a424212b6f43"
+  },
+  "message": ""
+}

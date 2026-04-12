@@ -1,0 +1,21 @@
+{
+  "summary": {
+    "case_id": "WXLWZYWL-Fall-Savings-Day-Clearance-2024-Women-Casual-Turn-Down-Dress-Vintage-3-4-Sleeve-Maxi-Dresses-Pretty-Floral-Print-Summer-Dress_57887428-c8e1-4838-9fff-7678fba11345.48ac2e7c66741bae2d5b53885cfb32d7__dress",
+    "target_type": "dress",
+    "source_image": "/workspace/codex_test_garments_full_20260410/WXLWZYWL-Fall-Savings-Day-Clearance-2024-Women-Casual-Turn-Down-Dress-Vintage-3-4-Sleeve-Maxi-Dresses-Pretty-Floral-Print-Summer-Dress_57887428-c8e1-4838-9fff-7678fba11345.48ac2e7c66741bae2d5b53885cfb32d7.png",
+    "probe_status_code": 200,
+    "probe_selection_required": false,
+    "final_status_code": 200,
+    "final_selection_required": false,
+    "selected_type": "dress",
+    "prompt_description": "This garment is a long dress with a continuous bodice-to-skirt transition. The upper edge features a V-neckline with a pointed collar and a button closure extending down the front. The shoulder layout includes three-quarter length sleeves with cuffs. The waist transition is marked by a self-tie belt with a bow at the front, creating a gathered effect on the skirt. The skirt silhouette is asymmetrical, with a high-low hem that is shorter in the front and longer in the back, revealing an inner lining. The closure consists of a series of buttons along the front placket. The dress has a floral print with flowers and leaves, and the fabric appears to have a smooth texture. The skirt panels are pleated, contributing to the volume and flow of the garment. The hemline is uneven, with the front edge shorter than the back, and the inner lining extends beyond the outer fabric at the front. The dress is constructed as a single piece, with the bodice and skirt seamlessly integrated",
+    "output_image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/d97918ce-8637-4e73-ba5d-0abc5fdb8e5e.png",
+    "probe_latency_s": 25.9076,
+    "final_latency_s": 25.8476
+  },
+  "source_image": "/workspace/codex_test_garments_full_20260410/WXLWZYWL-Fall-Savings-Day-Clearance-2024-Women-Casual-Turn-Down-Dress-Vintage-3-4-Sleeve-Maxi-Dresses-Pretty-Floral-Print-Summer-Dress_57887428-c8e1-4838-9fff-7678fba11345.48ac2e7c66741bae2d5b53885cfb32d7.png",
+  "working_input": "/workspace/codex_test_garments_full_20260410/WXLWZYWL-Fall-Savings-Day-Clearance-2024-Women-Casual-Turn-Down-Dress-Vintage-3-4-Sleeve-Maxi-Dresses-Pretty-Floral-Print-Summer-Dress_57887428-c8e1-4838-9fff-7678fba11345.48ac2e7c66741bae2d5b53885cfb32d7.png",
+  "chosen_probe_item": null,
+  "probe_response_path": "/workspace/analyze_batch_results_20260410/full_autotype_001/dress/WXLWZYWL-Fall-Savings-Day-Clearance-2024-Women-Casual-Turn-Down-Dress-Vintage-3-4-Sleeve-Maxi-Dresses-Pretty-Floral-Print-Summer-Dress_57887428-c8e1-4838-9fff-7678fba11345.48ac2e7c66741bae2d5b53885cfb32d7__dress/probe_response.json",
+  "final_response_path": "/workspace/analyze_batch_results_20260410/full_autotype_001/dress/WXLWZYWL-Fall-Savings-Day-Clearance-2024-Women-Casual-Turn-Down-Dress-Vintage-3-4-Sleeve-Maxi-Dresses-Pretty-Floral-Print-Summer-Dress_57887428-c8e1-4838-9fff-7678fba11345.48ac2e7c66741bae2d5b53885cfb32d7__dress/final_response.json"
+}

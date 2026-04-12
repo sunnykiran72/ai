@@ -1,0 +1,25 @@
+{
+  "base_url": "http://127.0.0.1:8000",
+  "input_dir": "/workspace/codex_top_case",
+  "output_dir": "/workspace/analyze_batch_results_20260410/top_single",
+  "types": [
+    "top"
+  ],
+  "cases": [
+    {
+      "case_id": "Screenshot-2026-04-09-at-8.08.17-PM__top",
+      "target_type": "top",
+      "source_image": "/workspace/codex_top_case/Screenshot 2026-04-09 at 8.08.17\u202fPM.png",
+      "probe_status_code": 400,
+      "probe_selection_required": true,
+      "final_status_code": 200,
+      "final_selection_required": false,
+      "selected_type": "top",
+      "prompt_description": "This garment is a bra. The upper edge features a V-neckline with a central front opening. The shoulder panels are wide and extend down to the bust line, covering the upper chest area. The straps are narrow and positioned at the outer edges of the shoulders. The bust panel is a single, continuous piece that extends from the underbust to the neckline, forming a smooth, seamless front. A decorative bow closure is centered at the bottom of the front opening, adorned with a textured, beaded trim. The hem endpoint is not fully visible, but the garment appears to end at the underbust level. The construction includes a central seam running vertically down the front, aligning with the bow closure. The fabric has a smooth, satin-like texture, and the bow trim adds a three-dimensional element to the otherwise flat front panel. The overall design prioritizes a fitted silhouette with minimal visible seams aside from the central front seam and the edges of the shoulder panels",
+      "output_image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/a2c9d1f8-8cda-4a0b-87f6-6d1b32c034c4.png",
+      "probe_latency_s": 0.6393,
+      "final_latency_s": 17.2613
+    }
+  ],
+  "failures": []
+}

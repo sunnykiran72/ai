@@ -1,0 +1,21 @@
+{
+  "summary": {
+    "case_id": "WhatsApp-Image-2026-02-12-at-15.51.25-1__dress",
+    "target_type": "dress",
+    "source_image": "/workspace/codex_test_garments_full_20260410/WhatsApp Image 2026-02-12 at 15.51.25 (1).jpeg",
+    "probe_status_code": 200,
+    "probe_selection_required": false,
+    "final_status_code": 200,
+    "final_selection_required": false,
+    "selected_type": "dress",
+    "prompt_description": "This garment is a long, ankle-length dress with a continuous bodice-to-skirt transition. The upper edge features a V-neckline with a small central opening, secured by a drawstring closure with tassels. The shoulder layout includes long sleeves with flared cuffs, each adorned with a narrow trim along the outer edge. The dress has a fitted bodice that extends seamlessly into a full, flowing skirt, creating a single garment piece. The skirt silhouette is voluminous, with a slight A-line shape, and the hemline reaches the ankles. The dress is constructed from a single fabric panel, with visible seams running vertically along the sides of the bodice and skirt, and a horizontal seam at the waistline. The pattern consists of repeating paisley motifs in and , evenly distributed across the entire fabric. The drawstring closure is positioned at the center of the neckline, with two tassels hanging down. The sleeves are attached to the bodice at the shoulders and flare out towards the cuffs, which are finished with a contrasting trim. The dress appears to be made from a lightweight, draping fabric, allowing the skirt to flow naturally",
+    "output_image_url": "https://glamifydevstorage.blob.core.windows.net/wardrobe-outputs/727762f9-0931-403a-8510-c1b9c6959d4c.png",
+    "probe_latency_s": 26.4881,
+    "final_latency_s": 26.4832
+  },
+  "source_image": "/workspace/codex_test_garments_full_20260410/WhatsApp Image 2026-02-12 at 15.51.25 (1).jpeg",
+  "working_input": "/workspace/codex_test_garments_full_20260410/WhatsApp Image 2026-02-12 at 15.51.25 (1).jpeg",
+  "chosen_probe_item": null,
+  "probe_response_path": "/workspace/analyze_batch_results_20260410/full_autotype_001/dress/WhatsApp-Image-2026-02-12-at-15.51.25-1__dress/probe_response.json",
+  "final_response_path": "/workspace/analyze_batch_results_20260410/full_autotype_001/dress/WhatsApp-Image-2026-02-12-at-15.51.25-1__dress/final_response.json"
+}

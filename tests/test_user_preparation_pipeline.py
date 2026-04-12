@@ -1,3 +1,4 @@
+import io
 import unittest
 
 from PIL import Image
@@ -122,6 +123,8 @@ class TestUserPreparationPipeline(unittest.TestCase):
         self.assertNotIn("error", result)
         self.assertEqual(result["url"], "https://example.com/prepared.png")
         self.assertEqual(result["meta"]["detect"].get("backend"), "grounding_dino")
+        self.assertEqual(result["meta"]["prepared_image_size"], {"width": 400, "height": 600})
+        self.assertEqual(result["meta"]["prepared_image_mode"], "original_full_frame")
 
     def test_rejects_when_grounding_detector_is_missing(self):
         image = Image.new("RGB", (320, 480), "white")
@@ -314,6 +317,55 @@ class TestUserPreparationPipeline(unittest.TestCase):
         self.assertNotIn("error", result)
         self.assertEqual(called["anchor"], 1)
         self.assertTrue(result["meta"]["detect"].get("person_anchor_used"))
+
+    def test_prepare_core_uses_prepared_image_fn_for_upload(self):
+        image = Image.new("RGB", (538, 800), "white")
+        uploaded = {}
+
+        def grounding_detector_fn(_image, _prompts):
+            return [
+                {"label": "person", "bbox": [40, 20, 500, 780], "score": 0.82, "source": "grounding_dino"},
+                {"label": "face", "bbox": [180, 40, 300, 180], "score": 0.74, "source": "grounding_dino"},
+                {"label": "upper body", "bbox": [120, 160, 420, 420], "score": 0.65, "source": "grounding_dino"},
+                {"label": "lower body", "bbox": [120, 420, 430, 780], "score": 0.68, "source": "grounding_dino"},
+            ]
+
+        def verifier_fn(_image, _prompt):
+            return {
+                "single_person": True,
+                "face_visible": True,
+                "upper_body_visible": True,
+                "lower_body_visible": True,
+                "clear_human": True,
+                "reason": "ok",
+            }
+
+        def prepared_image_fn(source_image):
+            self.assertEqual(source_image.size, (538, 800))
+            return source_image.resize((689, 1024))
+
+        def upload_fn(payload):
+            uploaded["bytes"] = payload
+            prepared = Image.open(io.BytesIO(payload))
+            uploaded["size"] = prepared.size
+            return "https://example.com/prepared-upscaled.jpg"
+
+        result = prepare_user_image_core(
+            image,
+            grounding_detector_fn=grounding_detector_fn,
+            verifier_fn=verifier_fn,
+            description_fn=lambda _img: "A young woman with brown long loose hair and slim body build.",
+            prepared_image_fn=prepared_image_fn,
+            upload_fn=upload_fn,
+            blur_check_enabled=False,
+            verification_required=True,
+        )
+
+        self.assertNotIn("error", result)
+        self.assertEqual(uploaded["size"], (689, 1024))
+        self.assertEqual(result["meta"]["prepared_source_image_size"], {"width": 538, "height": 800})
+        self.assertEqual(result["meta"]["prepared_image_size"], {"width": 689, "height": 1024})
+        self.assertEqual(result["meta"]["prepared_image_mode"], "upscaled_full_frame")
 
 
 if __name__ == "__main__":
