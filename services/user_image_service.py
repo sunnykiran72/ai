@@ -37,6 +37,7 @@ class UserImageService:
         self,
         upload,
         authorization: Optional[str] = None,
+        resize_method: Optional[str] = None,
     ):
         """
         Prepare user image.
@@ -51,6 +52,8 @@ class UserImageService:
         minicpm_runner = getattr(self.engine, "minicpm", None)
         grounding_dino = getattr(self.engine, "grounding_dino", None)
         realesrgan = getattr(self.engine, "realesrgan", None)
+        gfpgan = getattr(self.engine, "gfpgan", None)
+        resolved_resize_method = resize_method or self.config.app.user_prep_resize_method
 
         def _grounding_detector_fn(image, prompts):
             if grounding_dino is None:
@@ -73,13 +76,31 @@ class UserImageService:
             except Exception:
                 return ""
 
-        def _prepared_image_fn(image):
-            if realesrgan is None or not bool(self.config.app.user_prep_upscale_enabled):
-                return image
-            target_max_edge = max(512, int(self.config.app.user_prep_upscale_target_max_edge))
-            if max(image.size) >= target_max_edge:
-                return image
-            return realesrgan.upscale(image, target_max_edge=target_max_edge)
+        prepared_image_fn = None
+        if realesrgan is not None and bool(self.config.app.user_prep_upscale_enabled):
+            def _prepared_image_fn(image):
+                keep_long_edge_min = max(256, int(self.config.app.user_prep_keep_long_edge_min))
+                target_long_edge = max(512, int(self.config.app.user_prep_target_height))
+                if max(image.size) >= max(keep_long_edge_min, target_long_edge):
+                    return image
+                result = image
+                passes = 0
+                while max(result.size) < target_long_edge and passes < 2:
+                    candidate = realesrgan.upscale(result, target_max_edge=None)
+                    if not isinstance(candidate, Image.Image) or candidate.size == result.size:
+                        break
+                    result = candidate.convert("RGB")
+                    passes += 1
+                if passes > 0 and bool(self.config.app.user_prep_face_enhance_enabled):
+                    if gfpgan is None or not gfpgan.is_available:
+                        raise RuntimeError("GFPGAN face enhancement requested but unavailable.")
+                    face_weight = float(self.config.app.user_prep_face_enhance_weight)
+                    enhanced = gfpgan.enhance(result, weight=face_weight)
+                    if not isinstance(enhanced, Image.Image):
+                        raise RuntimeError("GFPGAN did not return a valid image.")
+                    result = enhanced.convert("RGB")
+                return result
+            prepared_image_fn = _prepared_image_fn
 
         return await prepare_user_image_pipeline(
             upload,
@@ -87,8 +108,16 @@ class UserImageService:
             verifier_fn=_verification_fn,
             description_fn=_description_fn,
             fallback_description_fn=lambda image: main_mod._describe_user_image_for_prepare(image, description_backend=None),
-            prepared_image_fn=_prepared_image_fn,
+            prepared_image_fn=prepared_image_fn,
             upload_fn=main_mod._upload_or_raise,
+            min_input_height=int(self.config.app.user_prep_min_input_height),
+            target_height=int(self.config.app.user_prep_target_height),
+            keep_long_edge_min=int(self.config.app.user_prep_keep_long_edge_min),
+            output_max_long_edge=int(self.config.app.user_prep_output_max_long_edge),
+            output_max_bytes=int(self.config.app.user_prep_output_max_bytes),
+            jpeg_quality=int(self.config.app.user_prep_jpeg_quality),
+            jpeg_min_quality=int(self.config.app.user_prep_jpeg_min_quality),
+            resize_method=str(resolved_resize_method),
             blur_check_enabled=bool(self.config.analyze.blur_check_enabled),
             blur_min_focus_score=float(self.config.analyze.blur_min_focus_score),
             blur_focus_max_edge=int(self.config.analyze.blur_focus_max_edge),

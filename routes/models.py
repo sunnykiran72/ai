@@ -10,7 +10,9 @@ Models provide:
 """
 
 from typing import Optional, List, Dict, Any, Union
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from utils.user_preparation import DEFAULT_USER_PREP_RESIZE_METHOD, normalize_prepare_resize_method
 
 
 # ── Base Models ──
@@ -246,8 +248,18 @@ class ExtractResponse(SuccessResponse):
 
 class UserPrepRequest(BaseModel):
     """Request model for user image preparation."""
-    # File upload handled by FastAPI, no additional fields needed
-    pass
+    model_config = ConfigDict(populate_by_name=True)
+
+    resize_method: str = Field(
+        default=DEFAULT_USER_PREP_RESIZE_METHOD,
+        alias="resizeMethod",
+        description="Optional resize backend override: libvips or pillow_lanczos",
+    )
+
+    @field_validator("resize_method")
+    @classmethod
+    def _validate_resize_method(cls, value: str) -> str:
+        return normalize_prepare_resize_method(value)
 
 
 class UserPrepResponse(SuccessResponse):

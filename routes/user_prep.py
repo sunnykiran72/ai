@@ -10,7 +10,7 @@ Delegates business logic to UserImageService.
 
 import logging
 from typing import Optional
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Depends
 from starlette.responses import Response
 from pydantic import ValidationError
 
@@ -36,6 +36,8 @@ def get_user_prep_service() -> UserImageService:
 async def prepare_user_image_endpoint(
     file: Optional[UploadFile] = File(None),
     image: Optional[UploadFile] = File(None),
+    resize_method: Optional[str] = Form(None),
+    resizeMethod: Optional[str] = Form(None),
     user_prep_service: UserImageService = Depends(get_user_prep_service)
 ) -> UserPrepResponse:
     """
@@ -65,10 +67,18 @@ async def prepare_user_image_endpoint(
         if upload is None:
             raise HTTPException(status_code=422, detail="Provide one image file using 'file' or 'image'")
         
+        resize_method_value = resizeMethod if resizeMethod is not None else resize_method
+        prep_request = UserPrepRequest(
+            **({"resizeMethod": resize_method_value} if resize_method_value is not None else {})
+        )
+
         logger.info("User image preparation request")
         
         # Delegate to service layer
-        result = await user_prep_service.prepare_user_image(upload=upload)
+        result = await user_prep_service.prepare_user_image(
+            upload=upload,
+            resize_method=prep_request.resize_method,
+        )
 
         # Pass through legacy response objects
         if isinstance(result, Response):

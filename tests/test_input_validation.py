@@ -317,7 +317,7 @@ class TestInputValidation:
             user_image_url="https://example.com/user.jpg",
             garment_image_url="https://example.com/garment.jpg"
         )
-        
+
         # Optional fields should have default values
         assert minimal_tryon.garment_type is None
         assert minimal_tryon.prompt_description is None
@@ -326,6 +326,16 @@ class TestInputValidation:
         assert minimal_tryon.seed == 42   # Default value
         assert minimal_tryon.use_second_pass is None
         assert minimal_tryon.color_lock_enabled is None
+
+    def test_user_prep_request_resize_method_defaults_and_normalizes(self):
+        request = UserPrepRequest()
+        assert request.resize_method == "libvips"
+
+        request = UserPrepRequest(resizeMethod="pillow")
+        assert request.resize_method == "pillow_lanczos"
+
+        with pytest.raises(ValidationError):
+            UserPrepRequest(resizeMethod="imagemagick")
     
     def test_field_type_validation(self):
         """

@@ -213,6 +213,8 @@ class AnalyzeService:
                 extractor = GarmentExtractor(
                     config=GarmentExtractionConfig(
                         force_bbox_crop=bool(self.config.extract_force_bbox_crop),
+                        crop_pad_ratio_x=float(self.config.extract_crop_pad_ratio_x),
+                        crop_pad_ratio_y=float(self.config.extract_crop_pad_ratio_y),
                         crop_pad_ratio=float(self.config.extract_crop_pad_ratio),
                         crop_pad_ratio_dress=float(self.config.extract_crop_pad_ratio_dress),
                         crop_bottom_extra_ratio_dress=float(self.config.extract_crop_bottom_extra_ratio_dress),

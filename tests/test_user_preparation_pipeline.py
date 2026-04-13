@@ -1,4 +1,5 @@
 import io
+import shutil
 import unittest
 
 from PIL import Image
@@ -8,6 +9,8 @@ from utils.user_preparation import (
     _build_user_prepare_prompt,
     _extract_user_prepare_prompt_bundle,
 )
+
+TEST_RESIZE_METHOD = "pillow_lanczos"
 
 
 class TestUserPreparationPipeline(unittest.TestCase):
@@ -89,7 +92,7 @@ class TestUserPreparationPipeline(unittest.TestCase):
         self.assertEqual(prompt, "A young woman with multi-tone medium hair and average body build.")
 
     def test_accepts_with_grounding_dino_and_verifier(self):
-        image = Image.new("RGB", (400, 600), "white")
+        image = Image.new("RGB", (800, 1200), "white")
 
         def grounding_detector_fn(_image, prompts):
             self.assertIn("person", prompts)
@@ -112,6 +115,7 @@ class TestUserPreparationPipeline(unittest.TestCase):
 
         result = prepare_user_image_core(
             image,
+            resize_method=TEST_RESIZE_METHOD,
             grounding_detector_fn=grounding_detector_fn,
             verifier_fn=verifier_fn,
             description_fn=lambda _img: "identity: test subject. face: clear.",
@@ -123,13 +127,17 @@ class TestUserPreparationPipeline(unittest.TestCase):
         self.assertNotIn("error", result)
         self.assertEqual(result["url"], "https://example.com/prepared.png")
         self.assertEqual(result["meta"]["detect"].get("backend"), "grounding_dino")
-        self.assertEqual(result["meta"]["prepared_image_size"], {"width": 400, "height": 600})
-        self.assertEqual(result["meta"]["prepared_image_mode"], "original_full_frame")
+        self.assertEqual(result["meta"]["prepared_source_image_size"], {"width": 800, "height": 1200})
+        self.assertEqual(result["meta"]["prepared_image_size"], {"width": 683, "height": 1024})
+        self.assertEqual(result["meta"]["prepared_image_mode"], "resized_down_full_frame")
+        self.assertTrue(result["meta"]["prepare_policy"]["jpeg"]["within_budget"])
+        self.assertEqual(result["meta"]["prepare_policy"]["target_long_edge"], 1024)
 
     def test_rejects_when_grounding_detector_is_missing(self):
-        image = Image.new("RGB", (320, 480), "white")
+        image = Image.new("RGB", (800, 1200), "white")
         result = prepare_user_image_core(
             image,
+            resize_method=TEST_RESIZE_METHOD,
             grounding_detector_fn=None,
             verifier_fn=None,
             description_fn=None,
@@ -141,7 +149,7 @@ class TestUserPreparationPipeline(unittest.TestCase):
         self.assertEqual(int(result["status_code"]), 503)
 
     def test_rejects_multiple_people_from_grounding_gate(self):
-        image = Image.new("RGB", (400, 600), "white")
+        image = Image.new("RGB", (800, 1200), "white")
         called = {"verifier": 0}
 
         def grounding_detector_fn(_image, _prompts):
@@ -159,6 +167,7 @@ class TestUserPreparationPipeline(unittest.TestCase):
 
         result = prepare_user_image_core(
             image,
+            resize_method=TEST_RESIZE_METHOD,
             grounding_detector_fn=grounding_detector_fn,
             verifier_fn=verifier_fn,
             description_fn=None,
@@ -171,7 +180,7 @@ class TestUserPreparationPipeline(unittest.TestCase):
         self.assertEqual(called["verifier"], 0)
 
     def test_rejects_when_face_is_missing_in_detection_gate(self):
-        image = Image.new("RGB", (400, 600), "white")
+        image = Image.new("RGB", (800, 1200), "white")
 
         def grounding_detector_fn(_image, _prompts):
             return [
@@ -182,6 +191,7 @@ class TestUserPreparationPipeline(unittest.TestCase):
 
         result = prepare_user_image_core(
             image,
+            resize_method=TEST_RESIZE_METHOD,
             grounding_detector_fn=grounding_detector_fn,
             verifier_fn=None,
             description_fn=None,
@@ -193,7 +203,7 @@ class TestUserPreparationPipeline(unittest.TestCase):
         self.assertEqual(result["error"], "face_hidden")
 
     def test_rejects_when_bottom_is_missing_in_detection_gate(self):
-        image = Image.new("RGB", (400, 600), "white")
+        image = Image.new("RGB", (800, 1200), "white")
         called = {"verifier": 0}
 
         def grounding_detector_fn(_image, _prompts):
@@ -209,6 +219,7 @@ class TestUserPreparationPipeline(unittest.TestCase):
 
         result = prepare_user_image_core(
             image,
+            resize_method=TEST_RESIZE_METHOD,
             grounding_detector_fn=grounding_detector_fn,
             verifier_fn=verifier_fn,
             description_fn=None,
@@ -221,7 +232,7 @@ class TestUserPreparationPipeline(unittest.TestCase):
         self.assertEqual(called["verifier"], 0)
 
     def test_rejects_when_verifier_reports_lower_body_not_visible(self):
-        image = Image.new("RGB", (400, 600), "white")
+        image = Image.new("RGB", (800, 1200), "white")
 
         def grounding_detector_fn(_image, _prompts):
             return [
@@ -243,6 +254,7 @@ class TestUserPreparationPipeline(unittest.TestCase):
 
         result = prepare_user_image_core(
             image,
+            resize_method=TEST_RESIZE_METHOD,
             grounding_detector_fn=grounding_detector_fn,
             verifier_fn=verifier_fn,
             description_fn=None,
@@ -254,7 +266,7 @@ class TestUserPreparationPipeline(unittest.TestCase):
         self.assertEqual(result["error"], "bottom_section_not_visible")
 
     def test_rejects_when_verifier_is_required_but_missing(self):
-        image = Image.new("RGB", (400, 600), "white")
+        image = Image.new("RGB", (800, 1200), "white")
 
         def grounding_detector_fn(_image, _prompts):
             return [
@@ -266,6 +278,7 @@ class TestUserPreparationPipeline(unittest.TestCase):
 
         result = prepare_user_image_core(
             image,
+            resize_method=TEST_RESIZE_METHOD,
             grounding_detector_fn=grounding_detector_fn,
             verifier_fn=None,
             description_fn=None,
@@ -278,7 +291,7 @@ class TestUserPreparationPipeline(unittest.TestCase):
         self.assertEqual(int(result["status_code"]), 503)
 
     def test_accepts_with_grounding_person_anchor_fallback_when_primary_has_no_person_label(self):
-        image = Image.new("RGB", (400, 600), "white")
+        image = Image.new("RGB", (800, 1200), "white")
         called = {"anchor": 0}
 
         def grounding_detector_fn(_image, prompts):
@@ -306,6 +319,7 @@ class TestUserPreparationPipeline(unittest.TestCase):
 
         result = prepare_user_image_core(
             image,
+            resize_method=TEST_RESIZE_METHOD,
             grounding_detector_fn=grounding_detector_fn,
             verifier_fn=verifier_fn,
             description_fn=None,
@@ -352,6 +366,7 @@ class TestUserPreparationPipeline(unittest.TestCase):
 
         result = prepare_user_image_core(
             image,
+            resize_method=TEST_RESIZE_METHOD,
             grounding_detector_fn=grounding_detector_fn,
             verifier_fn=verifier_fn,
             description_fn=lambda _img: "A young woman with brown long loose hair and slim body build.",
@@ -365,7 +380,169 @@ class TestUserPreparationPipeline(unittest.TestCase):
         self.assertEqual(uploaded["size"], (689, 1024))
         self.assertEqual(result["meta"]["prepared_source_image_size"], {"width": 538, "height": 800})
         self.assertEqual(result["meta"]["prepared_image_size"], {"width": 689, "height": 1024})
-        self.assertEqual(result["meta"]["prepared_image_mode"], "upscaled_full_frame")
+        self.assertEqual(result["meta"]["prepared_image_mode"], "ai_upscaled_normalized_full_frame")
+        self.assertTrue(result["meta"]["prepare_policy"]["upscale"]["used"])
+        self.assertEqual(result["meta"]["prepare_policy"]["jpeg"]["format"], "jpg")
+
+    def test_rejects_when_longest_side_is_below_minimum(self):
+        image = Image.new("RGB", (412, 634), "white")
+
+        result = prepare_user_image_core(
+            image,
+            resize_method=TEST_RESIZE_METHOD,
+            grounding_detector_fn=lambda *_args, **_kwargs: [],
+            verifier_fn=None,
+            description_fn=None,
+            upload_fn=lambda _bytes: "https://example.com/prepared.png",
+            blur_check_enabled=False,
+            verification_required=False,
+        )
+
+        self.assertEqual(result["error"], "image_too_small")
+        self.assertEqual(result["meta"]["source_long_edge"], 634)
+        self.assertEqual(result["meta"]["min_required_long_edge"], 768)
+
+    def test_accepts_when_short_side_is_below_768_but_long_side_meets_minimum(self):
+        image = Image.new("RGB", (1248, 720), "white")
+
+        def grounding_detector_fn(_image, _prompts):
+            return [
+                {"label": "person", "bbox": [140, 30, 1080, 700], "score": 0.82, "source": "grounding_dino"},
+                {"label": "face", "bbox": [460, 50, 760, 220], "score": 0.74, "source": "grounding_dino"},
+                {"label": "upper body", "bbox": [350, 210, 860, 430], "score": 0.65, "source": "grounding_dino"},
+                {"label": "lower body", "bbox": [360, 420, 860, 700], "score": 0.68, "source": "grounding_dino"},
+            ]
+
+        def verifier_fn(_image, _prompt):
+            return {
+                "single_person": True,
+                "face_visible": True,
+                "upper_body_visible": True,
+                "lower_body_visible": True,
+                "clear_human": True,
+                "reason": "ok",
+            }
+
+        result = prepare_user_image_core(
+            image,
+            resize_method=TEST_RESIZE_METHOD,
+            grounding_detector_fn=grounding_detector_fn,
+            verifier_fn=verifier_fn,
+            description_fn=lambda _img: "A young woman with brown long loose hair and slim body build.",
+            upload_fn=lambda _bytes: "https://example.com/prepared.png",
+            blur_check_enabled=False,
+            verification_required=True,
+        )
+
+        self.assertNotIn("error", result)
+        self.assertEqual(result["meta"]["prepared_source_image_size"], {"width": 1248, "height": 720})
+        self.assertEqual(result["meta"]["prepared_image_size"], {"width": 1024, "height": 591})
+        self.assertEqual(result["meta"]["prepare_policy"]["source_long_edge"], 1248)
+        self.assertEqual(result["meta"]["prepared_image_mode"], "resized_down_full_frame")
+
+    def test_prepare_core_adapts_jpeg_quality_to_size_budget(self):
+        image = Image.effect_noise((1024, 1536), 100).convert("RGB")
+        uploaded = {}
+
+        def grounding_detector_fn(_image, _prompts):
+            return [
+                {"label": "person", "bbox": [120, 40, 900, 1490], "score": 0.82, "source": "grounding_dino"},
+                {"label": "face", "bbox": [320, 80, 650, 360], "score": 0.74, "source": "grounding_dino"},
+                {"label": "upper body", "bbox": [220, 300, 760, 760], "score": 0.65, "source": "grounding_dino"},
+                {"label": "lower body", "bbox": [220, 760, 800, 1480], "score": 0.68, "source": "grounding_dino"},
+            ]
+
+        def verifier_fn(_image, _prompt):
+            return {
+                "single_person": True,
+                "face_visible": True,
+                "upper_body_visible": True,
+                "lower_body_visible": True,
+                "clear_human": True,
+                "reason": "ok",
+            }
+
+        def upload_fn(payload):
+            uploaded["bytes"] = len(payload)
+            uploaded["magic"] = payload[:3]
+            return "https://example.com/prepared-budget.jpg"
+
+        result = prepare_user_image_core(
+            image,
+            resize_method=TEST_RESIZE_METHOD,
+            grounding_detector_fn=grounding_detector_fn,
+            verifier_fn=verifier_fn,
+            description_fn=lambda _img: "A young woman with brown long loose hair and slim body build.",
+            upload_fn=upload_fn,
+            output_max_bytes=250 * 1024,
+            jpeg_quality=92,
+            jpeg_min_quality=52,
+            blur_check_enabled=False,
+            verification_required=True,
+        )
+
+        self.assertNotIn("error", result)
+        self.assertEqual(uploaded["magic"], b"\xff\xd8\xff")
+        self.assertLessEqual(uploaded["bytes"], 250 * 1024)
+        self.assertLess(result["meta"]["prepare_policy"]["jpeg"]["quality"], 92)
+        self.assertTrue(result["meta"]["prepare_policy"]["jpeg"]["within_budget"])
+
+    def test_rejects_invalid_resize_method(self):
+        image = Image.new("RGB", (800, 1200), "white")
+
+        result = prepare_user_image_core(
+            image,
+            resize_method="imagemagick",
+            grounding_detector_fn=lambda *_args, **_kwargs: [
+                {"label": "person", "bbox": [60, 20, 340, 580], "score": 0.82, "source": "grounding_dino"},
+                {"label": "face", "bbox": [150, 40, 240, 140], "score": 0.74, "source": "grounding_dino"},
+                {"label": "upper body", "bbox": [100, 120, 310, 320], "score": 0.65, "source": "grounding_dino"},
+                {"label": "lower body", "bbox": [100, 300, 320, 570], "score": 0.68, "source": "grounding_dino"},
+            ],
+            verifier_fn=lambda *_args, **_kwargs: {
+                "single_person": True,
+                "face_visible": True,
+                "upper_body_visible": True,
+                "lower_body_visible": True,
+                "clear_human": True,
+            },
+            description_fn=lambda _img: "A young woman with brown long loose hair and slim body build.",
+            upload_fn=lambda _bytes: "https://example.com/prepared.png",
+            blur_check_enabled=False,
+            verification_required=True,
+        )
+
+        self.assertEqual(result["error"], "invalid_resize_method")
+
+    @unittest.skipUnless(shutil.which("vipsthumbnail"), "libvips CLI is required for this test")
+    def test_accepts_with_explicit_libvips_resize_backend(self):
+        image = Image.new("RGB", (800, 1200), "white")
+
+        result = prepare_user_image_core(
+            image,
+            resize_method="libvips",
+            grounding_detector_fn=lambda *_args, **_kwargs: [
+                {"label": "person", "bbox": [60, 20, 340, 580], "score": 0.82, "source": "grounding_dino"},
+                {"label": "face", "bbox": [150, 40, 240, 140], "score": 0.74, "source": "grounding_dino"},
+                {"label": "upper body", "bbox": [100, 120, 310, 320], "score": 0.65, "source": "grounding_dino"},
+                {"label": "lower body", "bbox": [100, 300, 320, 570], "score": 0.68, "source": "grounding_dino"},
+            ],
+            verifier_fn=lambda *_args, **_kwargs: {
+                "single_person": True,
+                "face_visible": True,
+                "upper_body_visible": True,
+                "lower_body_visible": True,
+                "clear_human": True,
+            },
+            description_fn=lambda _img: "identity: test subject. face: clear.",
+            upload_fn=lambda _bytes: "https://example.com/prepared.jpg",
+            blur_check_enabled=False,
+            verification_required=True,
+        )
+
+        self.assertNotIn("error", result)
+        self.assertEqual(result["meta"]["prepare_policy"]["resize"]["used"], "libvips")
+        self.assertEqual(result["meta"]["prepare_policy"]["jpeg"]["backend"], "libvips")
 
 
 if __name__ == "__main__":

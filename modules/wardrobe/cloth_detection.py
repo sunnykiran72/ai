@@ -76,7 +76,7 @@ _NON_GARMENT_LABELS = {
 
 @dataclass
 class ClothDetectionConfig:
-    detector_threshold: float = 0.30
+    detector_threshold: float = 0.275
     strong_confidence_threshold: float = 0.50
     ambiguity_margin: float = 0.08
     duplicate_iou_threshold: float = 0.72

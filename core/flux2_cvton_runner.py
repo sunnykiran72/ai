@@ -404,14 +404,30 @@ class Flux2CVTONRunner:
             except Exception:
                 tryon_max_edge = max(self.width, self.height)
         else:
-            tryon_max_edge_raw = str(os.getenv("FLUX2_TRYON_MAX_EDGE", "")).strip()
+            keep_min_raw = str(os.getenv("FLUX2_TRYON_KEEP_MIN_EDGE", "1024")).strip()
+            keep_max_raw = str(os.getenv("FLUX2_TRYON_KEEP_MAX_EDGE", "2048")).strip()
             try:
-                tryon_max_edge = int(tryon_max_edge_raw) if tryon_max_edge_raw else max(self.width, self.height)
+                keep_min = int(keep_min_raw) if keep_min_raw else 1024
             except Exception:
-                tryon_max_edge = max(self.width, self.height)
+                keep_min = 1024
+            try:
+                keep_max = int(keep_max_raw) if keep_max_raw else 2048
+            except Exception:
+                keep_max = 2048
+            if keep_min > keep_max:
+                keep_min = keep_max
+
+            src_long_edge = max(src_w, src_h)
+            if keep_min <= src_long_edge <= keep_max:
+                tryon_max_edge = src_long_edge
+            elif src_long_edge > keep_max:
+                tryon_max_edge = keep_max
+            else:
+                tryon_max_edge = keep_min
+
         tryon_max_edge = max(256, int(tryon_max_edge))
 
-        scale = min(1.0, float(tryon_max_edge) / float(max(src_w, src_h)))
+        scale = float(tryon_max_edge) / float(max(src_w, src_h))
         out_w = max(64, int(round((src_w * scale) / 8.0)) * 8)
         out_h = max(64, int(round((src_h * scale) / 8.0)) * 8)
         return out_w, out_h

@@ -27,10 +27,11 @@ def _ensure_torchvision_functional_tensor_compat() -> None:
 
 
 class RealESRGANRunner:
-    """Optional RealESRGAN x2 runner for user-image/prepare upscaling."""
+    """Optional RealESRGAN runner for user-image/prepare upscaling."""
 
     MODEL_URLS = {
         "RealESRGAN_x2plus": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.1/RealESRGAN_x2plus.pth",
+        "RealESRGAN_x4plus": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth",
     }
 
     def __init__(
@@ -81,13 +82,21 @@ class RealESRGANRunner:
                 "RealESRGAN dependencies are not installed. Install `realesrgan` and `basicsr` to enable user-image upscaling."
             ) from exc
 
-        if self.model_name != "RealESRGAN_x2plus":
+        if self.model_name not in self.MODEL_URLS:
             raise ValueError(f"Unsupported RealESRGAN model: {self.model_name}")
 
-        model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=2)
+        scale = 2 if self.model_name == "RealESRGAN_x2plus" else 4
+        model = RRDBNet(
+            num_in_ch=3,
+            num_out_ch=3,
+            num_feat=64,
+            num_block=23,
+            num_grow_ch=32,
+            scale=scale,
+        )
         model_path = self.model_path or self.MODEL_URLS[self.model_name]
         return RealESRGANer(
-            scale=2,
+            scale=scale,
             model_path=model_path,
             model=model,
             tile=self.tile,

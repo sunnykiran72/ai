@@ -38,6 +38,14 @@ class TestAppConfigDefaults(unittest.TestCase):
             self.assertEqual(config.wardrobe_progress_api_base_url, "")
             self.assertEqual(config.wardrobe_progress_sync_timeout_s, 20)
             self.assertFalse(config.wardrobe_progress_include_input_image)
+            self.assertEqual(config.user_prep_min_input_height, 768)
+            self.assertEqual(config.user_prep_target_height, 1024)
+            self.assertEqual(config.user_prep_output_max_long_edge, 2048)
+            self.assertEqual(config.user_prep_output_max_bytes, 1572864)
+            self.assertEqual(config.user_prep_jpeg_quality, 92)
+            self.assertEqual(config.user_prep_jpeg_min_quality, 72)
+            self.assertEqual(config.user_prep_resize_method, "libvips")
+            self.assertFalse(config.user_prep_upscale_enabled)
 
 
 class TestAppConfigEnvironmentVariables(unittest.TestCase):
@@ -163,6 +171,15 @@ class TestAppConfigEnvironmentVariables(unittest.TestCase):
             "WARDROBE_PROGRESS_API_BASE_URL": "https://test.api",
             "WARDROBE_PROGRESS_SYNC_TIMEOUT_S": "25",
             "WARDROBE_PROGRESS_INCLUDE_INPUT_IMAGE": "1",
+            "USER_PREP_MIN_INPUT_HEIGHT": "900",
+            "USER_PREP_TARGET_HEIGHT": "1280",
+            "USER_PREP_KEEP_LONG_EDGE_MIN": "1100",
+            "USER_PREP_OUTPUT_MAX_LONG_EDGE": "1800",
+            "USER_PREP_OUTPUT_MAX_BYTES": "1234567",
+            "USER_PREP_JPEG_QUALITY": "88",
+            "USER_PREP_JPEG_MIN_QUALITY": "60",
+            "USER_PREP_RESIZE_METHOD": "pillow",
+            "USER_PREP_UPSCALE_ENABLED": "1",
         }):
             config = AppConfig.from_env()
             self.assertEqual(config.gpu_concurrency, 2)
@@ -179,6 +196,15 @@ class TestAppConfigEnvironmentVariables(unittest.TestCase):
             self.assertEqual(config.wardrobe_progress_api_base_url, "https://test.api")
             self.assertEqual(config.wardrobe_progress_sync_timeout_s, 25)
             self.assertTrue(config.wardrobe_progress_include_input_image)
+            self.assertEqual(config.user_prep_min_input_height, 900)
+            self.assertEqual(config.user_prep_target_height, 1280)
+            self.assertEqual(config.user_prep_keep_long_edge_min, 1100)
+            self.assertEqual(config.user_prep_output_max_long_edge, 1800)
+            self.assertEqual(config.user_prep_output_max_bytes, 1234567)
+            self.assertEqual(config.user_prep_jpeg_quality, 88)
+            self.assertEqual(config.user_prep_jpeg_min_quality, 60)
+            self.assertEqual(config.user_prep_resize_method, "pillow_lanczos")
+            self.assertTrue(config.user_prep_upscale_enabled)
 
 
 class TestAppConfigFieldCount(unittest.TestCase):
@@ -189,8 +215,7 @@ class TestAppConfigFieldCount(unittest.TestCase):
         config = AppConfig.from_env()
         field_count = len(AppConfig.model_fields)
         
-        # Design spec shows 14 fields for AppConfig
-        self.assertEqual(field_count, 14, "Should have exactly 14 configuration fields")
+        self.assertEqual(field_count, 29, "Should have exactly 29 configuration fields")
     
     def test_all_fields_have_descriptions(self):
         """Test that all fields have description metadata."""

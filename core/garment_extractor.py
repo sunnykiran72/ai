@@ -10,6 +10,8 @@ from PIL import Image
 @dataclass(frozen=True)
 class GarmentExtractionConfig:
     force_bbox_crop: bool = True
+    crop_pad_ratio_x: float = 0.30
+    crop_pad_ratio_y: float = 0.10
     crop_pad_ratio: float = 0.18
     crop_pad_ratio_dress: float = 0.28
     crop_bottom_extra_ratio_dress: float = 0.32
@@ -153,30 +155,15 @@ class GarmentExtractor:
             garment_type=request.garment_type,
         )
 
-        gt = _normalize_garment_type(request.garment_type)
         x0, y0, x1, y1 = anchor_bbox
         bw = max(1, x1 - x0)
         bh = max(1, y1 - y0)
-        pad_ratio = self.config.crop_pad_ratio_dress if gt == "dress" else self.config.crop_pad_ratio
-        pad_ratio = max(0.0, min(0.8, float(pad_ratio)))
-        x_pad = int(bw * pad_ratio)
-        y_pad_top = int(bh * pad_ratio)
-        y_pad_bottom = int(bh * pad_ratio)
-
-        if gt == "dress":
-            y_pad_bottom = int(bh * max(pad_ratio, self.config.crop_bottom_extra_ratio_dress))
-        elif gt in {"top", "outer"} and int(request.total_items) > 1:
-            y_pad_bottom = min(
-                y_pad_bottom,
-                int(bh * max(0.0, self.config.crop_bottom_extra_ratio_top_multi)),
-            )
-        elif gt == "bottom":
-            top_extra_ratio = max(0.0, self.config.crop_top_extra_ratio_bottom)
-            if int(request.total_items) > 1:
-                top_extra_ratio = min(top_extra_ratio, max(0.0, self.config.crop_top_extra_ratio_bottom_multi))
-                y_pad_top = min(y_pad_top, int(bh * top_extra_ratio))
-            else:
-                y_pad_top = max(y_pad_top, int(bh * top_extra_ratio))
+        # Uniform ratio-based padding for every garment type.
+        x_pad_ratio = max(0.0, min(0.8, float(self.config.crop_pad_ratio_x)))
+        y_pad_ratio = max(0.0, min(0.8, float(self.config.crop_pad_ratio_y)))
+        x_pad = int(bw * x_pad_ratio)
+        y_pad_top = int(bh * y_pad_ratio)
+        y_pad_bottom = int(bh * y_pad_ratio)
 
         extract_bbox = _clamp_bbox(
             [x0 - x_pad, y0 - y_pad_top, x1 + x_pad, y1 + y_pad_bottom],

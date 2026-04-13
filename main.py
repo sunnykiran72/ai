@@ -50,6 +50,8 @@ from routes import (
     tryon_lab_router,
     tryon_lora_multi_lab_router,
     bulk_tryon_gallery_router,
+    qwen_extract_outfit_router,
+    upscaler_test_router,
 )
 
 # Shared utilities
@@ -134,6 +136,8 @@ app.include_router(user_prep_router, tags=["user-prep"])
 app.include_router(tryon_lab_router, tags=["tryon-lab"])
 app.include_router(tryon_lora_multi_lab_router, tags=["tryon-lora-multi-lab"])
 app.include_router(bulk_tryon_gallery_router, tags=["bulk-tryon-gallery"])
+app.include_router(qwen_extract_outfit_router, tags=["qwen-extract-outfit"])
+app.include_router(upscaler_test_router, tags=["upscaler-test"])
 
 # Dependency injection helpers
 def get_tryon_service() -> TryonService:
@@ -187,6 +191,32 @@ async def startup_event():
                 logger.warning("VTO background preload failed: %s", exc)
 
         asyncio.create_task(_background_preload())
+
+    # Optional Qwen extract-outfit preload/warmup.
+    # Controlled via env flags to avoid forcing heavy startup work.
+    qwen_preload_enabled = str(os.getenv("QWEN_IMAGE_EDIT_PRELOAD", "0")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if qwen_preload_enabled:
+        qwen_warmup_enabled = str(os.getenv("QWEN_IMAGE_EDIT_PRELOAD_WARMUP", "1")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        async def _background_qwen_preload() -> None:
+            try:
+                from routes.qwen_extract_outfit import preload_qwen_extract_outfit_runner
+
+                await asyncio.to_thread(preload_qwen_extract_outfit_runner, run_warmup=qwen_warmup_enabled)
+                logger.info("Qwen extract-outfit preload completed (warmup=%s).", qwen_warmup_enabled)
+            except Exception as exc:
+                logger.warning("Qwen extract-outfit preload failed: %s", exc)
+
+        asyncio.create_task(_background_qwen_preload())
 
     global gpu_semaphore
     if gpu_semaphore is None:

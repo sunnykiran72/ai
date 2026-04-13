@@ -21,7 +21,7 @@ class FashionDetectionRunner:
     def __init__(self, model_path: Optional[str] = None, device: Optional[str] = None):
         self.model_path = model_path or os.getenv("FASHION_DETECTION_MODEL_PATH", "yainage90/fashion-object-detection")
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        self.score_threshold = self._env_float("FASHION_DETECTION_SCORE_THRESHOLD", 0.30)
+        self.score_threshold = self._env_float("FASHION_DETECTION_SCORE_THRESHOLD", 0.275)
         self._processor = None
         self._model = None
         self._id2label: Dict[int, str] = {}

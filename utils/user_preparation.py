@@ -11,10 +11,12 @@ from __future__ import annotations
 import io
 import json
 import re
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from PIL import Image, UnidentifiedImageError
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 try:  # Optional local-only dependency for fast face visibility checks.
     import cv2
@@ -28,6 +30,16 @@ from utils.validation import validate_image_quality
 
 DEFAULT_USER_DESCRIPTION = "A person with balanced body build."
 ALLOWED_WORN_TYPES = ("top", "bottom", "outer", "dress")
+DEFAULT_USER_PREP_MIN_INPUT_HEIGHT = 768
+DEFAULT_USER_PREP_TARGET_HEIGHT = 1024
+DEFAULT_USER_PREP_KEEP_LONG_EDGE_MIN = 1024
+DEFAULT_USER_PREP_OUTPUT_MAX_LONG_EDGE = 2048
+DEFAULT_USER_PREP_OUTPUT_MAX_BYTES = 2621440
+DEFAULT_USER_PREP_JPEG_QUALITY = 92
+DEFAULT_USER_PREP_JPEG_MIN_QUALITY = 72
+DEFAULT_USER_PREP_RESIZE_METHOD = "pyvips"
+ALLOWED_USER_PREP_RESIZE_METHODS = ("libvips", "pyvips", "pillow_lanczos")
+_LANCZOS = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
 
 _USER_PROMPT_CLOTHING_TERMS = (
     "wearing", "wears", "dressed", "outfit", "clothing", "garment", "dress", "gown", "top", "shirt",
@@ -879,6 +891,17 @@ class FaceCandidate:
     source: str = "face_detector"
 
 
+@dataclass(frozen=True)
+class PreparedImageBundle:
+    image: Image.Image
+    image_bytes: bytes
+    meta: Dict[str, Any]
+
+
+class PreparedImageError(RuntimeError):
+    """Raised when strict prepared-image processing fails."""
+
+
 def _clamp(value: int, lower: int, upper: int) -> int:
     return max(lower, min(value, upper))
 
@@ -1483,18 +1506,342 @@ def _call_optional_image_text_fn(
     return result
 
 
-def _prepare_image_bytes(image: Image.Image) -> bytes:
+def normalize_prepare_resize_method(value: Optional[str]) -> str:
+    cleaned = str(value or DEFAULT_USER_PREP_RESIZE_METHOD).strip().lower().replace("-", "_")
+    aliases = {
+        "vips": "libvips",
+        "libvips": "libvips",
+        "pyvips": "pyvips",
+        "pillow": "pillow_lanczos",
+        "lanczos": "pillow_lanczos",
+        "pillow_lanczos": "pillow_lanczos",
+    }
+    normalized = aliases.get(cleaned, cleaned)
+    if normalized not in ALLOWED_USER_PREP_RESIZE_METHODS:
+        allowed = ", ".join(ALLOWED_USER_PREP_RESIZE_METHODS)
+        raise ValueError(f"Unsupported resize_method '{value}'. Use one of: {allowed}.")
+    return normalized
+
+
+def _run_subprocess_strict(argv: Sequence[str], *, error_prefix: str) -> None:
+    try:
+        subprocess.run(
+            list(argv),
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except FileNotFoundError as exc:
+        raise PreparedImageError(f"{error_prefix}: required command '{argv[0]}' is not installed.") from exc
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or b"").decode("utf-8", errors="ignore").strip() or str(exc)
+        raise PreparedImageError(f"{error_prefix}: {detail}") from exc
+
+
+def _resize_with_libvips(image: Image.Image, target_long_edge: int) -> Image.Image:
+    target_long_edge = max(1, int(target_long_edge))
+    with tempfile.TemporaryDirectory(prefix="user_prep_vips_resize_") as tmpdir:
+        input_path = f"{tmpdir}/input.png"
+        output_path = f"{tmpdir}/output.png"
+        image.convert("RGB").save(input_path, format="PNG", compress_level=0)
+        _run_subprocess_strict(
+            ["vipsthumbnail", input_path, "-a", "-s", str(target_long_edge), "-o", output_path],
+            error_prefix="libvips resize failed",
+        )
+        with Image.open(output_path) as prepared:
+            return prepared.convert("RGB")
+
+
+def _resize_with_pyvips(image: Image.Image, target_long_edge: int) -> Image.Image:
+    target_long_edge = max(1, int(target_long_edge))
+    try:
+        import pyvips
+    except Exception as exc:  # pragma: no cover
+        raise PreparedImageError(
+            "pyvips resize requested but pyvips is not installed. Install pyvips or switch resize_method."
+        ) from exc
+    rgb = image.convert("RGB")
+    vips = pyvips.Image.new_from_memory(rgb.tobytes(), rgb.width, rgb.height, 3, "uchar")
+    scale = float(target_long_edge) / float(max(vips.width, vips.height))
+    resized = vips.resize(scale, kernel="lanczos3")
+    return Image.frombytes("RGB", (resized.width, resized.height), resized.write_to_memory())
+
+
+def _resize_image_to_long_edge(
+    image: Image.Image,
+    target_long_edge: int,
+    *,
+    resize_method: str = DEFAULT_USER_PREP_RESIZE_METHOD,
+) -> Image.Image:
+    resize_method = normalize_prepare_resize_method(resize_method)
+    target_long_edge = max(1, int(target_long_edge))
+    current_long_edge = max(image.size)
+    if current_long_edge == target_long_edge:
+        return image
+    scale = float(target_long_edge) / float(max(1, current_long_edge))
+    resized = (
+        max(1, int(round(image.width * scale))),
+        max(1, int(round(image.height * scale))),
+    )
+    if resized == image.size:
+        return image
+    if resize_method == "libvips":
+        return _resize_with_libvips(image, target_long_edge)
+    if resize_method == "pyvips":
+        return _resize_with_pyvips(image, target_long_edge)
+    return image.resize(resized, _LANCZOS)
+
+
+def _shrink_image_to_long_edge_cap(
+    image: Image.Image,
+    max_long_edge: int,
+    *,
+    resize_method: str = DEFAULT_USER_PREP_RESIZE_METHOD,
+) -> Image.Image:
+    max_long_edge = max(1, int(max_long_edge))
+    long_edge = max(image.size)
+    if long_edge <= max_long_edge:
+        return image
+    scale = float(max_long_edge) / float(long_edge)
+    resized = (
+        max(1, int(round(image.width * scale))),
+        max(1, int(round(image.height * scale))),
+    )
+    if resized == image.size:
+        return image
+    resolved = normalize_prepare_resize_method(resize_method)
+    if resolved == "libvips":
+        return _resize_with_libvips(image, max_long_edge)
+    if resolved == "pyvips":
+        return _resize_with_pyvips(image, max_long_edge)
+    return image.resize(resized, _LANCZOS)
+
+
+def _encode_jpeg_bytes_pillow(image: Image.Image, quality: int) -> bytes:
     buf = io.BytesIO()
-    # Upload prepared user images as high-quality JPEG to keep transfer size low.
     image.convert("RGB").save(
         buf,
         format="JPEG",
-        quality=92,
+        quality=max(1, min(100, int(quality))),
         subsampling=0,
         optimize=True,
         progressive=True,
     )
     return buf.getvalue()
+
+
+def _encode_jpeg_bytes_libvips(image: Image.Image, quality: int) -> bytes:
+    current_long_edge = max(image.size)
+    with tempfile.TemporaryDirectory(prefix="user_prep_vips_encode_") as tmpdir:
+        input_path = f"{tmpdir}/input.png"
+        output_path = f"{tmpdir}/output.jpg"
+        image.convert("RGB").save(input_path, format="PNG", compress_level=0)
+        _run_subprocess_strict(
+            [
+                "vipsthumbnail",
+                input_path,
+                "-a",
+                "-s",
+                str(current_long_edge),
+                "-o",
+                f"{output_path}[Q={max(1, min(100, int(quality)))},optimize_coding,interlace,strip,subsample_mode=off]",
+            ],
+            error_prefix="libvips jpeg encode failed",
+        )
+        with open(output_path, "rb") as handle:
+            return handle.read()
+
+
+def _encode_jpeg_bytes_pyvips(image: Image.Image, quality: int) -> bytes:
+    try:
+        import pyvips
+    except Exception as exc:  # pragma: no cover
+        raise PreparedImageError(
+            "pyvips jpeg encode requested but pyvips is not installed. Install pyvips or switch resize_method."
+        ) from exc
+    rgb = image.convert("RGB")
+    vips = pyvips.Image.new_from_memory(rgb.tobytes(), rgb.width, rgb.height, 3, "uchar")
+    return vips.write_to_buffer(
+        ".jpg",
+        Q=max(1, min(100, int(quality))),
+        optimize_coding=True,
+        interlace=True,
+        strip=True,
+        subsample_mode="off",
+    )
+
+
+def _encode_jpeg_bytes(
+    image: Image.Image,
+    quality: int,
+    *,
+    resize_method: str = DEFAULT_USER_PREP_RESIZE_METHOD,
+) -> bytes:
+    resolved = normalize_prepare_resize_method(resize_method)
+    if resolved == "libvips":
+        return _encode_jpeg_bytes_libvips(image, quality)
+    if resolved == "pyvips":
+        return _encode_jpeg_bytes_pyvips(image, quality)
+    return _encode_jpeg_bytes_pillow(image, quality)
+
+
+def _prepare_image_bytes(
+    image: Image.Image,
+    *,
+    max_bytes: int = DEFAULT_USER_PREP_OUTPUT_MAX_BYTES,
+    quality: int = DEFAULT_USER_PREP_JPEG_QUALITY,
+    min_quality: int = DEFAULT_USER_PREP_JPEG_MIN_QUALITY,
+    resize_method: str = DEFAULT_USER_PREP_RESIZE_METHOD,
+) -> Tuple[bytes, Dict[str, Any]]:
+    resize_method = normalize_prepare_resize_method(resize_method)
+    max_bytes = max(1, int(max_bytes))
+    quality = max(40, min(100, int(quality)))
+    min_quality = max(30, min(quality, int(min_quality)))
+
+    quality_candidates: List[int] = []
+    current = quality
+    while current >= min_quality:
+        quality_candidates.append(current)
+        current -= 4
+    if quality_candidates[-1] != min_quality:
+        quality_candidates.append(min_quality)
+
+    chosen_quality = quality_candidates[0]
+    payload = b""
+    for candidate_quality in quality_candidates:
+        payload = _encode_jpeg_bytes(image, candidate_quality, resize_method=resize_method)
+        chosen_quality = candidate_quality
+        if len(payload) <= max_bytes:
+            break
+
+    return payload, {
+        "format": "jpg",
+        "bytes": len(payload),
+        "max_bytes": max_bytes,
+        "within_budget": len(payload) <= max_bytes,
+        "quality": chosen_quality,
+        "quality_start": quality,
+        "quality_floor": min_quality,
+        "subsampling": "4:4:4",
+        "optimize": True,
+        "progressive": True,
+        "backend": resize_method,
+    }
+
+
+def _build_prepared_image_bundle(
+    image: Image.Image,
+    *,
+    prepared_image_fn: Optional[Callable[[Image.Image], Image.Image]] = None,
+    min_input_height: int = DEFAULT_USER_PREP_MIN_INPUT_HEIGHT,
+    target_height: int = DEFAULT_USER_PREP_TARGET_HEIGHT,
+    keep_long_edge_min: int = DEFAULT_USER_PREP_KEEP_LONG_EDGE_MIN,
+    max_long_edge: int = DEFAULT_USER_PREP_OUTPUT_MAX_LONG_EDGE,
+    max_output_bytes: int = DEFAULT_USER_PREP_OUTPUT_MAX_BYTES,
+    jpeg_quality: int = DEFAULT_USER_PREP_JPEG_QUALITY,
+    jpeg_min_quality: int = DEFAULT_USER_PREP_JPEG_MIN_QUALITY,
+    resize_method: str = DEFAULT_USER_PREP_RESIZE_METHOD,
+) -> PreparedImageBundle:
+    resolved_resize_method = normalize_prepare_resize_method(resize_method)
+    normalized = ImageOps.exif_transpose(image).convert("RGB")
+    source_width, source_height = normalized.size
+    source_long_edge = max(source_width, source_height)
+    min_input_height = max(256, int(min_input_height))
+    target_height = max(512, int(target_height))
+    keep_long_edge_min = max(256, int(keep_long_edge_min))
+    if keep_long_edge_min > target_height:
+        keep_long_edge_min = target_height
+    max_long_edge = max(512, int(max_long_edge))
+    actions: List[str] = []
+    upscale_meta: Dict[str, Any] = {
+        "attempted": False,
+        "used": False,
+        "backend": "none",
+        "passes": 0,
+    }
+
+    working = normalized
+    if source_long_edge < keep_long_edge_min and prepared_image_fn is not None:
+        upscale_meta["attempted"] = True
+        try:
+            candidate = prepared_image_fn(normalized)
+        except Exception as exc:
+            raise PreparedImageError(f"Configured upscaler failed: {exc}") from exc
+        if not isinstance(candidate, Image.Image):
+            raise PreparedImageError("Configured upscaler did not return a valid image.")
+        candidate_rgb = ImageOps.exif_transpose(candidate).convert("RGB")
+        if max(candidate_rgb.size) <= max(working.size):
+            raise PreparedImageError("Configured upscaler did not increase image resolution.")
+        working = candidate_rgb
+        upscale_meta["used"] = True
+        upscale_meta["backend"] = "prepared_image_fn"
+        upscale_meta["passes"] = 1
+        actions.append("ai_upscaled")
+
+    working_long_edge = max(working.size)
+    desired_long_edge = working_long_edge
+    if working_long_edge < keep_long_edge_min:
+        desired_long_edge = keep_long_edge_min
+    elif working_long_edge > max_long_edge:
+        desired_long_edge = max_long_edge
+
+    if desired_long_edge != working_long_edge:
+        if desired_long_edge > working_long_edge:
+            actions.append("resized_up")
+        else:
+            actions.append("resized_down")
+        working = _resize_image_to_long_edge(working, desired_long_edge, resize_method=resolved_resize_method)
+
+    if max(working.size) > max_long_edge:
+        before_size = working.size
+        working = _shrink_image_to_long_edge_cap(working, max_long_edge, resize_method=resolved_resize_method)
+        if working.size != before_size:
+            actions.append("long_edge_capped")
+
+    image_bytes, jpeg_meta = _prepare_image_bytes(
+        working,
+        max_bytes=max_output_bytes,
+        quality=jpeg_quality,
+        min_quality=jpeg_min_quality,
+        resize_method=resolved_resize_method,
+    )
+    actions.append("jpeg_encoded")
+
+    prepared_mode = "original_full_frame"
+    if "ai_upscaled" in actions:
+        prepared_mode = "ai_upscaled_normalized_full_frame"
+    elif "resized_up" in actions and "resized_down" in actions:
+        prepared_mode = "normalized_full_frame"
+    elif "resized_up" in actions:
+        prepared_mode = "resized_up_full_frame"
+    elif "resized_down" in actions:
+        prepared_mode = "resized_down_full_frame"
+
+    return PreparedImageBundle(
+        image=working,
+        image_bytes=image_bytes,
+        meta={
+            "prepared_source_image_size": {"width": int(source_width), "height": int(source_height)},
+            "prepared_image_size": {"width": int(working.width), "height": int(working.height)},
+            "prepared_image_mode": prepared_mode,
+            "prepare_policy": {
+                "min_input_long_edge": min_input_height,
+                "keep_long_edge_min": keep_long_edge_min,
+                "target_long_edge": target_height,
+                "max_long_edge": max_long_edge,
+                "source_long_edge": int(source_long_edge),
+                "input_below_recommended_min": bool(source_long_edge < min_input_height),
+                "actions": actions,
+                "resize": {
+                    "requested": resolved_resize_method,
+                    "used": resolved_resize_method,
+                    "supported": list(ALLOWED_USER_PREP_RESIZE_METHODS),
+                },
+                "upscale": upscale_meta,
+                "jpeg": jpeg_meta,
+            },
+        },
+    )
 
 
 def _error_payload(error: str, message: str, *, meta: Optional[Dict[str, Any]] = None, status_code: int = 422) -> Dict[str, Any]:
@@ -1517,6 +1864,15 @@ def prepare_user_image_core(
     fallback_description_fn: Optional[Callable[..., Any]] = None,
     prepared_image_fn: Optional[Callable[[Image.Image], Image.Image]] = None,
     upload_fn: Optional[Callable[[bytes], str]] = None,
+    source_upload_bytes: Optional[int] = None,
+    min_input_height: int = DEFAULT_USER_PREP_MIN_INPUT_HEIGHT,
+    target_height: int = DEFAULT_USER_PREP_TARGET_HEIGHT,
+    keep_long_edge_min: int = DEFAULT_USER_PREP_KEEP_LONG_EDGE_MIN,
+    output_max_long_edge: int = DEFAULT_USER_PREP_OUTPUT_MAX_LONG_EDGE,
+    output_max_bytes: int = DEFAULT_USER_PREP_OUTPUT_MAX_BYTES,
+    jpeg_quality: int = DEFAULT_USER_PREP_JPEG_QUALITY,
+    jpeg_min_quality: int = DEFAULT_USER_PREP_JPEG_MIN_QUALITY,
+    resize_method: str = DEFAULT_USER_PREP_RESIZE_METHOD,
     blur_check_enabled: bool = False,
     blur_min_focus_score: float = 22.0,
     blur_focus_max_edge: int = 1024,
@@ -1526,6 +1882,19 @@ def prepare_user_image_core(
         return _error_payload("invalid_image", "Expected a valid image.", status_code=422)
 
     width, height = image.size
+    longest_side = max(width, height)
+    if longest_side < max(256, int(min_input_height)):
+        return _error_payload(
+            "image_too_small",
+            "Image is too small. The longest side must be at least 768px.",
+            meta={
+                "source_image_size": {"width": int(width), "height": int(height)},
+                "source_long_edge": int(longest_side),
+                "min_required_long_edge": int(max(256, int(min_input_height))),
+            },
+            status_code=422,
+        )
+
     candidates: List[Dict[str, Any]] = []
     detect_meta: Dict[str, Any] = {"backend": "none", "count": 0}
     primary_candidate: Optional[Dict[str, Any]] = None
@@ -1644,22 +2013,35 @@ def prepare_user_image_core(
             status_code=503,
         )
 
-    prepared_image = image.convert("RGB")
-    prepared_image_mode = "original_full_frame"
-    if prepared_image_fn is not None:
-        try:
-            candidate = prepared_image_fn(image)
-            if isinstance(candidate, Image.Image):
-                prepared_image = candidate.convert("RGB")
-        except Exception:
-            prepared_image = image.convert("RGB")
-        if prepared_image.size != image.size:
-            prepared_image_mode = "upscaled_full_frame"
-
-    prepared_width, prepared_height = prepared_image.size
-    prepared_bytes = _prepare_image_bytes(prepared_image)
     try:
-        url = str(upload_fn(prepared_bytes))
+        prepared_bundle = _build_prepared_image_bundle(
+            image,
+            prepared_image_fn=prepared_image_fn,
+            min_input_height=min_input_height,
+            target_height=target_height,
+            keep_long_edge_min=keep_long_edge_min,
+            max_long_edge=output_max_long_edge,
+            max_output_bytes=output_max_bytes,
+            jpeg_quality=jpeg_quality,
+            jpeg_min_quality=jpeg_min_quality,
+            resize_method=resize_method,
+        )
+    except ValueError as exc:
+        return _error_payload(
+            "invalid_resize_method",
+            str(exc),
+            meta={"detect": detect_meta, "face": face_meta, "verification": verification_meta},
+            status_code=422,
+        )
+    except PreparedImageError as exc:
+        return _error_payload(
+            "image_prepare_failed",
+            str(exc),
+            meta={"detect": detect_meta, "face": face_meta, "verification": verification_meta},
+            status_code=500,
+        )
+    try:
+        url = str(upload_fn(prepared_bundle.image_bytes))
     except Exception as exc:
         return _error_payload(
             "upload_failed",
@@ -1693,9 +2075,13 @@ def prepare_user_image_core(
         "meta": {
             "person_bbox": bbox,
             "analysis_crop_size": {"width": int(crop.width), "height": int(crop.height)},
-            "prepared_source_image_size": {"width": int(width), "height": int(height)},
-            "prepared_image_size": {"width": int(prepared_width), "height": int(prepared_height)},
-            "prepared_image_mode": prepared_image_mode,
+            **prepared_bundle.meta,
+            "source_upload": {
+                "bytes": int(source_upload_bytes or 0),
+                "megabytes": round(float(source_upload_bytes or 0) / float(1024 * 1024), 4),
+                "large_upload_threshold_bytes": 7 * 1024 * 1024,
+                "above_large_upload_threshold": bool((source_upload_bytes or 0) >= (7 * 1024 * 1024)),
+            },
             "detect": detect_meta,
             "face": face_meta,
             "verification": verification_meta,
@@ -1713,6 +2099,14 @@ async def prepare_user_image_pipeline(
     fallback_description_fn: Optional[Callable[..., Any]] = None,
     prepared_image_fn: Optional[Callable[[Image.Image], Image.Image]] = None,
     upload_fn: Optional[Callable[[bytes], str]] = None,
+    min_input_height: int = DEFAULT_USER_PREP_MIN_INPUT_HEIGHT,
+    target_height: int = DEFAULT_USER_PREP_TARGET_HEIGHT,
+    keep_long_edge_min: int = DEFAULT_USER_PREP_KEEP_LONG_EDGE_MIN,
+    output_max_long_edge: int = DEFAULT_USER_PREP_OUTPUT_MAX_LONG_EDGE,
+    output_max_bytes: int = DEFAULT_USER_PREP_OUTPUT_MAX_BYTES,
+    jpeg_quality: int = DEFAULT_USER_PREP_JPEG_QUALITY,
+    jpeg_min_quality: int = DEFAULT_USER_PREP_JPEG_MIN_QUALITY,
+    resize_method: str = DEFAULT_USER_PREP_RESIZE_METHOD,
     blur_check_enabled: bool = False,
     blur_min_focus_score: float = 22.0,
     blur_focus_max_edge: int = 1024,
@@ -1727,7 +2121,7 @@ async def prepare_user_image_pipeline(
         return _error_payload("upload_read_failed", f"Failed to read upload: {exc}", status_code=422)
 
     try:
-        image = Image.open(io.BytesIO(payload)).convert("RGB")
+        image = ImageOps.exif_transpose(Image.open(io.BytesIO(payload))).convert("RGB")
     except UnidentifiedImageError:
         return _error_payload("invalid_image", "The uploaded file is not a valid image.", status_code=422)
     except Exception as exc:
@@ -1741,6 +2135,15 @@ async def prepare_user_image_pipeline(
         fallback_description_fn=fallback_description_fn,
         prepared_image_fn=prepared_image_fn,
         upload_fn=upload_fn,
+        source_upload_bytes=len(payload),
+        min_input_height=min_input_height,
+        target_height=target_height,
+        keep_long_edge_min=keep_long_edge_min,
+        output_max_long_edge=output_max_long_edge,
+        output_max_bytes=output_max_bytes,
+        jpeg_quality=jpeg_quality,
+        jpeg_min_quality=jpeg_min_quality,
+        resize_method=resize_method,
         blur_check_enabled=blur_check_enabled,
         blur_min_focus_score=blur_min_focus_score,
         blur_focus_max_edge=blur_focus_max_edge,

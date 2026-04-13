@@ -12,14 +12,19 @@ transformers==5.3.0
 accelerate
 peft
 safetensors
+huggingface_hub
 sentencepiece
 pillow
+pyvips
 numpy
 opencv-python-headless
 rembg
 ultralytics
 einops
 timm
+basicsr
+realesrgan
+gfpgan
 # Optional accel (Linux only). If build fails, install manually:
 # pip install --no-build-isolation flash-attn
 flash-attn; platform_system == "Linux"
