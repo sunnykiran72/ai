@@ -575,13 +575,12 @@ class AnalyzeService:
             minicpm_desc = await run_minicpm()
             description_time = round(time.time() - t_description, 4)
             if not " ".join(str(minicpm_desc or "").split()).strip():
-                payload = build_error_payload(
-                    title="Description Failed",
-                    description="Could not generate a garment description. Please retry with a clearer image.",
-                    reason_codes=["DESCRIPTOR_GENERATION_FAILED"],
-                    status_code=502,
-                )
-                return multipart_form_response(payload)
+                fallback_desc = " ".join(str(selected_item.get("promptDescription") or "").split()).strip()
+                if not fallback_desc:
+                    fallback_type = normalize_garment_type(str(selected_item.get("type") or "")) or "garment"
+                    fallback_desc = f"Detected {fallback_type} garment."
+                minicpm_desc = fallback_desc
+                selected_item["minicpm_descriptor_fallback_used"] = True
 
             selected_item["minicpm_description"] = minicpm_desc
             selected_item["joycaption_description"] = ""
