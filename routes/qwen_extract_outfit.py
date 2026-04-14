@@ -8,13 +8,15 @@ import io
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from PIL import Image
 
 from core.qwen_image_edit_runner import QwenImageEditRunner
 from core.qwen_extract_outfit_service import (
     DEFAULT_QWEN_EXTRACT_OUTFIT_PROMPT,
+    PROMPT_GENERATION_FAILED_CODE,
+    PromptGenerationFailedError,
     build_qwen_extract_outfit_request,
     execute_qwen_extract_outfit_request,
 )
@@ -24,6 +26,7 @@ logger = logging.getLogger("glamify-ai")
 router = APIRouter()
 
 _RUNNER: Optional[QwenImageEditRunner] = None
+_MINICPM_RUNNER = None
 
 
 def _get_runner() -> QwenImageEditRunner:
@@ -31,6 +34,19 @@ def _get_runner() -> QwenImageEditRunner:
     if _RUNNER is None:
         _RUNNER = QwenImageEditRunner()
     return _RUNNER
+
+
+def _get_minicpm_runner(request: Optional[Request] = None):
+    global _MINICPM_RUNNER
+    if _MINICPM_RUNNER is not None:
+        return _MINICPM_RUNNER
+    if request is not None:
+        engine = getattr(getattr(request.app, "state", object()), "ai_engine", None)
+        runner = getattr(engine, "minicpm", None)
+        if runner is not None:
+            _MINICPM_RUNNER = runner
+            return _MINICPM_RUNNER
+    return None
 
 
 def preload_qwen_extract_outfit_runner(*, run_warmup: bool = True) -> None:
@@ -60,6 +76,7 @@ def _load_uploaded_image(upload: UploadFile, field_name: str) -> Image.Image:
 
 def _run_qwen_extract_outfit(
     *,
+    app_request: Optional[Request],
     upload: UploadFile,
     prompt: Optional[str],
     steps: int,
@@ -77,7 +94,7 @@ def _run_qwen_extract_outfit(
     upload_output: bool,
     include_base64: bool,
 ) -> dict:
-    request = build_qwen_extract_outfit_request(
+    qwen_request = build_qwen_extract_outfit_request(
         prompt=prompt,
         steps=steps,
         seed=seed,
@@ -96,15 +113,17 @@ def _run_qwen_extract_outfit(
     )
     source = _load_uploaded_image(upload, field_name="image")
     return execute_qwen_extract_outfit_request(
-        request=request,
+        request=qwen_request,
         source_image=source,
         runner=_get_runner(),
+        minicpm_runner=_get_minicpm_runner(app_request),
         upload_image_fn=storage.upload_image,
     )
 
 
 @router.post("/v1/qwen/extract-outfit")
 async def qwen_extract_outfit_endpoint(
+    request: Request,
     file: Optional[UploadFile] = File(None),
     image: Optional[UploadFile] = File(None),
     prompt: str = Form(DEFAULT_QWEN_EXTRACT_OUTFIT_PROMPT),
@@ -129,6 +148,7 @@ async def qwen_extract_outfit_endpoint(
 
     try:
         data = _run_qwen_extract_outfit(
+            app_request=request,
             upload=upload,
             prompt=prompt,
             steps=steps,
@@ -148,6 +168,15 @@ async def qwen_extract_outfit_endpoint(
         )
     except HTTPException:
         raise
+    except PromptGenerationFailedError as exc:
+        logger.warning("Qwen extract-outfit prompt generation failed: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": str(exc),
+                "reason_codes": [PROMPT_GENERATION_FAILED_CODE],
+            },
+        ) from exc
     except Exception as exc:
         logger.exception("Qwen extract-outfit run failed")
         raise HTTPException(status_code=500, detail=f"Qwen extract-outfit failed: {exc}") from exc
@@ -362,8 +391,16 @@ async def qwen_extract_outfit_lab_page() -> HTMLResponse:
         </div>
         <div class="meta">
           <div>
-            <label>Prompt Used</label>
+            <label>Generated Prompt (MiniCPM)</label>
+            <div id="prompt-generated" class="prompt-box"></div>
+          </div>
+          <div>
+            <label>Input Prompt Sent To Qwen</label>
             <div id="prompt-used" class="prompt-box"></div>
+          </div>
+          <div>
+            <label>Latency Breakdown</label>
+            <div id="latency-breakdown" class="prompt-box"></div>
           </div>
           <div>
             <label>Metadata / JSON</label>
@@ -378,6 +415,8 @@ async def qwen_extract_outfit_lab_page() -> HTMLResponse:
     const statusEl = document.getElementById("status");
     const rawEl = document.getElementById("raw-json");
     const promptUsedEl = document.getElementById("prompt-used");
+    const promptGeneratedEl = document.getElementById("prompt-generated");
+    const latencyEl = document.getElementById("latency-breakdown");
     const runBtn = document.getElementById("run-btn");
     const longPromptBtn = document.getElementById("long-prompt-btn");
     const shortPromptBtn = document.getElementById("short-prompt-btn");
@@ -435,6 +474,8 @@ async def qwen_extract_outfit_lab_page() -> HTMLResponse:
       setStatus("Running extraction...");
       rawEl.textContent = "";
       promptUsedEl.textContent = "";
+      promptGeneratedEl.textContent = "";
+      latencyEl.textContent = "";
       imgOutput.src = "";
 
       try {{
@@ -452,10 +493,26 @@ async def qwen_extract_outfit_lab_page() -> HTMLResponse:
         if (base64Image) {{
           imgOutput.src = `data:image/png;base64,${{base64Image}}`;
         }}
+        promptGeneratedEl.textContent = payload?.data?.promptDescription || "(empty)";
         promptUsedEl.textContent = payload?.data?.metadata?.prompt || "(empty)";
         rawEl.textContent = JSON.stringify(payload, null, 2);
-        const elapsed = payload?.data?.metadata?.elapsed_seconds;
-        setStatus(`Success. Latency: ${{elapsed ?? "n/a"}} sec`);
+        const minicpmElapsed = payload?.data?.minicpmElapsedSeconds
+          ?? payload?.data?.promptElapsedSeconds
+          ?? payload?.data?.metadata?.minicpm_elapsed_seconds;
+        const qwenElapsed = payload?.data?.qwenElapsedSeconds
+          ?? payload?.data?.metadata?.qwen_elapsed_seconds
+          ?? payload?.data?.metadata?.elapsed_seconds;
+        const totalElapsed = payload?.data?.totalElapsedSeconds
+          ?? payload?.data?.metadata?.total_elapsed_seconds;
+        const promptSource = payload?.data?.promptDescriptionSource || "n/a";
+        const fallbackUsed = payload?.data?.promptFallbackUsed ? "yes" : "no";
+        latencyEl.textContent =
+          `MiniCPM: ${{minicpmElapsed ?? "n/a"}} sec\\n` +
+          `Qwen: ${{qwenElapsed ?? "n/a"}} sec\\n` +
+          `Total: ${{totalElapsed ?? "n/a"}} sec\\n` +
+          `Prompt source: ${{promptSource}}\\n` +
+          `Fallback used: ${{fallbackUsed}}`;
+        setStatus(`Success. Total: ${{totalElapsed ?? "n/a"}} sec | MiniCPM: ${{minicpmElapsed ?? "n/a"}} sec | Qwen: ${{qwenElapsed ?? "n/a"}} sec`);
       }} catch (error) {{
         setStatus(`Run failed: ${{error.message}}`, true);
       }} finally {{
@@ -471,6 +528,7 @@ async def qwen_extract_outfit_lab_page() -> HTMLResponse:
 
 @router.post("/dev/qwen/extract-outfit-lab/run")
 async def qwen_extract_outfit_lab_run(
+    request: Request,
     file: Optional[UploadFile] = File(None),
     image: Optional[UploadFile] = File(None),
     prompt: str = Form(DEFAULT_QWEN_EXTRACT_OUTFIT_PROMPT),
@@ -494,6 +552,7 @@ async def qwen_extract_outfit_lab_run(
         raise HTTPException(status_code=422, detail="Provide one image using 'file' or 'image'.")
     try:
         data = _run_qwen_extract_outfit(
+            app_request=request,
             upload=upload,
             prompt=prompt,
             steps=steps,
@@ -513,6 +572,15 @@ async def qwen_extract_outfit_lab_run(
         )
     except HTTPException:
         raise
+    except PromptGenerationFailedError as exc:
+        logger.warning("Qwen extract-outfit lab prompt generation failed: %s", exc)
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": str(exc),
+                "reason_codes": [PROMPT_GENERATION_FAILED_CODE],
+            },
+        ) from exc
     except Exception as exc:
         logger.exception("Qwen extract-outfit lab run failed")
         raise HTTPException(status_code=500, detail=f"Qwen extract-outfit failed: {exc}") from exc

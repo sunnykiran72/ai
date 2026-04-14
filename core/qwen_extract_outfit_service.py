@@ -251,6 +251,7 @@ def execute_qwen_extract_outfit_request(
     Independent function #2:
     Execute one normalized request and return a reusable API payload block.
     """
+    request_started_at = time.time()
     source = _resize_to_max_edge(source_image.convert("RGB"), request.max_input_edge)
     minicpm_garment_type = _infer_garment_type(request.prompt)
     output_width, output_height = _resolve_output_size(
@@ -259,20 +260,23 @@ def execute_qwen_extract_outfit_request(
         max_edge=request.output_max_edge,
         output_aspect_ratio=request.output_aspect_ratio,
     )
-    prompt_started_at = time.time()
+    minicpm_elapsed_seconds = 0.0
     input_prompt_error = None
     try:
+        minicpm_started_at = time.time()
         # Match /analyze behavior: run MiniCPM as its own stage (no Qwen GPU contention).
         input_prompt_description = _run_minicpm_prompt(
             minicpm_runner=minicpm_runner,
             image=source,
             garment_type=minicpm_garment_type,
         )
+        minicpm_elapsed_seconds += max(0.0, time.time() - minicpm_started_at)
     except Exception as exc:
+        minicpm_elapsed_seconds += max(0.0, time.time() - locals().get("minicpm_started_at", time.time()))
         input_prompt_description = ""
         input_prompt_error = exc
 
-    started_at = time.time()
+    qwen_started_at = time.time()
     output_image, meta = runner.run_edit(
         source,
         prompt=request.prompt,
@@ -283,8 +287,7 @@ def execute_qwen_extract_outfit_request(
         output_width=output_width,
         output_height=output_height,
     )
-
-    elapsed = time.time() - started_at
+    qwen_elapsed_seconds = max(0.0, time.time() - qwen_started_at)
 
     prompt_description = ""
     prompt_source = ""
@@ -296,12 +299,15 @@ def execute_qwen_extract_outfit_request(
         prompt_fallback_used = True
         fallback_error = None
         try:
+            fallback_started_at = time.time()
             fallback_prompt_description = _run_minicpm_prompt(
                 minicpm_runner=minicpm_runner,
                 image=output_image,
                 garment_type=minicpm_garment_type,
             )
+            minicpm_elapsed_seconds += max(0.0, time.time() - fallback_started_at)
         except Exception as exc:
+            minicpm_elapsed_seconds += max(0.0, time.time() - locals().get("fallback_started_at", time.time()))
             fallback_prompt_description = ""
             fallback_error = exc
         if _is_prompt_usable(fallback_prompt_description):
@@ -321,7 +327,8 @@ def execute_qwen_extract_outfit_request(
             raise PromptGenerationFailedError(
                 f"{PROMPT_GENERATION_FAILED_CODE}: failed to generate usable prompt ({detail})"
             )
-    prompt_elapsed_seconds = round(float(time.time() - prompt_started_at), 3)
+    prompt_elapsed_seconds = round(float(minicpm_elapsed_seconds), 3)
+    total_elapsed_seconds = round(float(time.time() - request_started_at), 3)
     garment_metadata = _build_analyze_style_garment_metadata(
         prompt_description=prompt_description,
         prompt_source=prompt_source,
@@ -360,10 +367,13 @@ def execute_qwen_extract_outfit_request(
     response_meta["input_size"] = {"width": int(source.width), "height": int(source.height)}
     response_meta["requested_output_size"] = {"width": int(output_width), "height": int(output_height)}
     response_meta["output_size"] = {"width": int(output_image.width), "height": int(output_image.height)}
-    response_meta["elapsed_seconds"] = round(float(elapsed), 3)
+    response_meta["elapsed_seconds"] = round(float(qwen_elapsed_seconds), 3)
     response_meta["max_input_edge"] = int(request.max_input_edge)
     response_meta["max_output_edge"] = int(request.output_max_edge)
     response_meta["output_aspect_ratio"] = str(request.output_aspect_ratio or "")
+    response_meta["minicpm_elapsed_seconds"] = round(float(minicpm_elapsed_seconds), 3)
+    response_meta["qwen_elapsed_seconds"] = round(float(qwen_elapsed_seconds), 3)
+    response_meta["total_elapsed_seconds"] = total_elapsed_seconds
 
     return {
         "output_url": output_url,
@@ -374,6 +384,9 @@ def execute_qwen_extract_outfit_request(
         "garmentMetadata": garment_metadata,
         "promptElapsedSeconds": prompt_elapsed_seconds,
         "promptFallbackUsed": bool(prompt_fallback_used),
+        "minicpmElapsedSeconds": round(float(minicpm_elapsed_seconds), 3),
+        "qwenElapsedSeconds": round(float(qwen_elapsed_seconds), 3),
+        "totalElapsedSeconds": total_elapsed_seconds,
         "metadata": response_meta,
     }
 
