@@ -102,27 +102,40 @@ class UserImageService:
                 return result
             prepared_image_fn = _prepared_image_fn
 
-        return await prepare_user_image_pipeline(
-            upload,
-            grounding_detector_fn=_grounding_detector_fn,
-            verifier_fn=_verification_fn,
-            description_fn=_description_fn,
-            fallback_description_fn=lambda image: main_mod._describe_user_image_for_prepare(image, description_backend=None),
-            prepared_image_fn=prepared_image_fn,
-            upload_fn=main_mod._upload_or_raise,
-            min_input_height=int(self.config.app.user_prep_min_input_height),
-            target_height=int(self.config.app.user_prep_target_height),
-            keep_long_edge_min=int(self.config.app.user_prep_keep_long_edge_min),
-            output_max_long_edge=int(self.config.app.user_prep_output_max_long_edge),
-            output_max_bytes=int(self.config.app.user_prep_output_max_bytes),
-            jpeg_quality=int(self.config.app.user_prep_jpeg_quality),
-            jpeg_min_quality=int(self.config.app.user_prep_jpeg_min_quality),
-            resize_method=str(resolved_resize_method),
-            blur_check_enabled=bool(self.config.analyze.blur_check_enabled),
-            blur_min_focus_score=float(self.config.analyze.blur_min_focus_score),
-            blur_focus_max_edge=int(self.config.analyze.blur_focus_max_edge),
-            verification_required=True,
-        )
+        async def _run_prepare(method: str):
+            return await prepare_user_image_pipeline(
+                upload,
+                grounding_detector_fn=_grounding_detector_fn,
+                verifier_fn=_verification_fn,
+                description_fn=_description_fn,
+                fallback_description_fn=lambda image: main_mod._describe_user_image_for_prepare(image, description_backend=None),
+                prepared_image_fn=prepared_image_fn,
+                upload_fn=main_mod._upload_or_raise,
+                min_input_height=int(self.config.app.user_prep_min_input_height),
+                target_height=int(self.config.app.user_prep_target_height),
+                keep_long_edge_min=int(self.config.app.user_prep_keep_long_edge_min),
+                output_max_long_edge=int(self.config.app.user_prep_output_max_long_edge),
+                output_max_bytes=int(self.config.app.user_prep_output_max_bytes),
+                jpeg_quality=int(self.config.app.user_prep_jpeg_quality),
+                jpeg_min_quality=int(self.config.app.user_prep_jpeg_min_quality),
+                resize_method=str(method),
+                blur_check_enabled=bool(self.config.analyze.blur_check_enabled),
+                blur_min_focus_score=float(self.config.analyze.blur_min_focus_score),
+                blur_focus_max_edge=int(self.config.analyze.blur_focus_max_edge),
+                verification_required=True,
+            )
+
+        result = await _run_prepare(str(resolved_resize_method))
+        if isinstance(result, dict) and result.get("error"):
+            method_name = str(resolved_resize_method or "").strip().lower().replace("-", "_")
+            message = str(result.get("message") or "").lower()
+            fallback_needed = (
+                method_name in {"pyvips", "libvips", "vips"}
+                and any(token in message for token in {"pyvips", "libvips", "vipsthumbnail"})
+            )
+            if fallback_needed:
+                result = await _run_prepare("pillow_lanczos")
+        return result
     
     async def _validate_image_quality(self, image: Image.Image) -> Dict[str, object]:
         """Validate image quality (blur, resolution, etc.)."""
