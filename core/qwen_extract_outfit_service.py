@@ -7,15 +7,20 @@ from __future__ import annotations
 import base64
 import io
 import os
+import re
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from PIL import Image
 
 from core.qwen_image_edit_runner import QwenImageEditRunner
+from shared.category_mapping import infer_style_from_text, wardrobe_category_from_garment_type
+from utils.prompt_generation import parse_structured_descriptor
+from utils.runtime_compat import _build_garment_metadata
+from utils.validation import normalize_garment_type
 
 DEFAULT_QWEN_EXTRACT_OUTFIT_PROMPT = (
     "Extract the clothing from the image and convert it into a clean, standalone mockup. "
@@ -25,6 +30,16 @@ DEFAULT_QWEN_EXTRACT_OUTFIT_PROMPT = (
     "maintaining photorealistic detail and sharp edges."
 )
 DEFAULT_QWEN_EXTRACT_OUTFIT_GUIDANCE = None
+PROMPT_GENERATION_FAILED_CODE = "PROMPT_GENERATION_FAILED"
+PROMPT_SOURCE_INPUT_PARALLEL = "minicpm_input_parallel"
+PROMPT_SOURCE_EXTRACTED_FALLBACK = "minicpm_extracted_fallback"
+_INVALID_PROMPT_TOKENS = {"none", "n/a", "unknown", "no garment"}
+
+
+class PromptGenerationFailedError(RuntimeError):
+    def __init__(self, message: str):
+        super().__init__(message)
+        self.reason_code = PROMPT_GENERATION_FAILED_CODE
 
 
 def _is_truthy(value: str) -> bool:
@@ -44,6 +59,125 @@ class QwenExtractOutfitRequest:
     output_aspect_ratio: Optional[str]
     upload_output: bool
     include_base64: bool
+
+
+def _normalize_text(value: Any) -> str:
+    return " ".join(str(value or "").split()).strip()
+
+
+def _is_prompt_usable(prompt_text: str) -> bool:
+    normalized = _normalize_text(prompt_text)
+    if not normalized:
+        return False
+    if len(normalized) < 24:
+        return False
+    collapsed = normalized.lower().strip(" .,:;!?")
+    if collapsed in _INVALID_PROMPT_TOKENS:
+        return False
+    alphabetic_words = re.findall(r"[A-Za-z]+", normalized)
+    if len(alphabetic_words) < 5:
+        return False
+    return True
+
+
+def _infer_garment_type(prompt_text: str) -> str:
+    normalized_prompt = _normalize_text(prompt_text)
+    parsed = parse_structured_descriptor(normalized_prompt)
+    candidates = [
+        parsed.get("type"),
+        parsed.get("category"),
+        normalized_prompt,
+    ]
+    for candidate in candidates:
+        normalized = normalize_garment_type(str(candidate or ""))
+        if normalized in {"top", "bottom", "dress", "outer"}:
+            return normalized
+    lowered = normalized_prompt.lower()
+    if any(token in lowered for token in {"dress", "gown", "jumpsuit", "romper"}):
+        return "dress"
+    if any(token in lowered for token in {"jacket", "coat", "hoodie", "blazer", "outerwear"}):
+        return "outer"
+    if any(token in lowered for token in {"jeans", "pants", "trousers", "shorts", "skirt", "bottom"}):
+        return "bottom"
+    return "top"
+
+
+def _build_analyze_style_garment_metadata(*, prompt_description: str, prompt_source: str) -> Dict[str, object]:
+    target_type = _infer_garment_type(prompt_description)
+    style = infer_style_from_text(prompt_description, garment_type=target_type)
+    category = wardrobe_category_from_garment_type(target_type, style=style)
+    try:
+        return _build_garment_metadata(
+            base_garment_prompt=prompt_description,
+            extraction_avoid_clause="",
+            prompt_sections_raw="",
+            descriptor_raw_text=prompt_description,
+            prompt_description=prompt_description,
+            prompt_source=prompt_source,
+            target_type=target_type,
+            backend_target_type=target_type,
+            style=category.get("style", ""),
+            primary_category_key=category.get("primary_category_key", ""),
+            category_key=category.get("category_key", ""),
+            dominant_hexes=[],
+            accent_hexes=[],
+            color_hints=[],
+            color_profile={},
+            color_mask_source="",
+            fashion_color_classifier={},
+            color_sampling_mask_meta={},
+        )
+    except Exception:
+        return {
+            "schema_version": "garment_metadata.v1",
+            "prompt": {
+                "base_garment_prompt": prompt_description,
+                "prompt_description": prompt_description,
+                "extraction_avoid_clause": "",
+                "prompt_sections_raw": "",
+                "descriptor_raw_text": prompt_description,
+                "source": prompt_source,
+            },
+            "classification": {
+                "target_type": target_type,
+                "backend_target_type": target_type,
+                "style": str(category.get("style", "") or ""),
+                "primary_category_key": str(category.get("primary_category_key", "") or ""),
+                "category_key": str(category.get("category_key", "") or ""),
+            },
+            "color": {
+                "dominant_hexes": [],
+                "accent_hexes": [],
+                "color_hints": [],
+                "profile": {},
+                "mask_source": "",
+                "resolved_source": "",
+                "signal_confidence": 0.0,
+                "signal_strength": "",
+                "fashion_basecolour": {},
+                "rich": {},
+            },
+            "details": {},
+        }
+
+
+def _run_minicpm_prompt(
+    *,
+    minicpm_runner: Any,
+    image: Image.Image,
+    garment_type: Optional[str],
+) -> str:
+    if minicpm_runner is None:
+        raise PromptGenerationFailedError("MiniCPM runner is unavailable for prompt generation.")
+    try:
+        described = minicpm_runner.describe_garment(
+            image=image.convert("RGB"),
+            garment_type=garment_type,
+            prompt_override=None,
+        )
+    except Exception as exc:
+        raise PromptGenerationFailedError(f"MiniCPM prompt generation failed: {exc}") from exc
+    return _normalize_text(described)
 
 
 def build_qwen_extract_outfit_request(
@@ -109,6 +243,7 @@ def execute_qwen_extract_outfit_request(
     request: QwenExtractOutfitRequest,
     source_image: Image.Image,
     runner: QwenImageEditRunner,
+    minicpm_runner: Optional[Any],
     upload_image_fn: Optional[Callable[..., str]] = None,
     output_dir: str = "/tmp/qwen_extract_outfit_outputs",
 ) -> Dict[str, object]:
@@ -117,12 +252,26 @@ def execute_qwen_extract_outfit_request(
     Execute one normalized request and return a reusable API payload block.
     """
     source = _resize_to_max_edge(source_image.convert("RGB"), request.max_input_edge)
+    minicpm_garment_type = _infer_garment_type(request.prompt)
     output_width, output_height = _resolve_output_size(
         source_width=source.width,
         source_height=source.height,
         max_edge=request.output_max_edge,
         output_aspect_ratio=request.output_aspect_ratio,
     )
+    prompt_started_at = time.time()
+    input_prompt_error = None
+    try:
+        # Match /analyze behavior: run MiniCPM as its own stage (no Qwen GPU contention).
+        input_prompt_description = _run_minicpm_prompt(
+            minicpm_runner=minicpm_runner,
+            image=source,
+            garment_type=minicpm_garment_type,
+        )
+    except Exception as exc:
+        input_prompt_description = ""
+        input_prompt_error = exc
+
     started_at = time.time()
     output_image, meta = runner.run_edit(
         source,
@@ -134,7 +283,49 @@ def execute_qwen_extract_outfit_request(
         output_width=output_width,
         output_height=output_height,
     )
+
     elapsed = time.time() - started_at
+
+    prompt_description = ""
+    prompt_source = ""
+    prompt_fallback_used = False
+    if _is_prompt_usable(input_prompt_description):
+        prompt_description = input_prompt_description
+        prompt_source = PROMPT_SOURCE_INPUT_PARALLEL
+    else:
+        prompt_fallback_used = True
+        fallback_error = None
+        try:
+            fallback_prompt_description = _run_minicpm_prompt(
+                minicpm_runner=minicpm_runner,
+                image=output_image,
+                garment_type=minicpm_garment_type,
+            )
+        except Exception as exc:
+            fallback_prompt_description = ""
+            fallback_error = exc
+        if _is_prompt_usable(fallback_prompt_description):
+            prompt_description = fallback_prompt_description
+            prompt_source = PROMPT_SOURCE_EXTRACTED_FALLBACK
+        else:
+            reasons = []
+            if input_prompt_error is not None:
+                reasons.append(f"input_prompt_error={input_prompt_error}")
+            else:
+                reasons.append("input_prompt_invalid")
+            if fallback_error is not None:
+                reasons.append(f"fallback_prompt_error={fallback_error}")
+            else:
+                reasons.append("fallback_prompt_invalid")
+            detail = ", ".join(reasons)
+            raise PromptGenerationFailedError(
+                f"{PROMPT_GENERATION_FAILED_CODE}: failed to generate usable prompt ({detail})"
+            )
+    prompt_elapsed_seconds = round(float(time.time() - prompt_started_at), 3)
+    garment_metadata = _build_analyze_style_garment_metadata(
+        prompt_description=prompt_description,
+        prompt_source=prompt_source,
+    )
 
     save_local_output = _is_truthy(os.getenv("QWEN_EXTRACT_OUTFIT_SAVE_LOCAL", "0"))
     need_output_bytes = bool(request.upload_output or request.include_base64 or save_local_output)
@@ -178,6 +369,11 @@ def execute_qwen_extract_outfit_request(
         "output_url": output_url,
         "local_path": local_path,
         "image_base64": image_base64,
+        "promptDescription": prompt_description,
+        "promptDescriptionSource": prompt_source,
+        "garmentMetadata": garment_metadata,
+        "promptElapsedSeconds": prompt_elapsed_seconds,
+        "promptFallbackUsed": bool(prompt_fallback_used),
         "metadata": response_meta,
     }
 
