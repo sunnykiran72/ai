@@ -28,7 +28,6 @@ from shared.security import verify_bearer_token
 from shared.image_ops import download_image
 from shared.category_mapping import wardrobe_category_from_garment_type, infer_style_from_text
 from utils.validation import normalize_garment_type, sanitize_garment_description
-from utils.metadata_extraction import strip_descriptor_color_clause
 from utils.scoring import (
     dedupe_items_by_iou,
     calculate_bbox_prior,
@@ -50,7 +49,6 @@ from modules.wardrobe.extraction.detection_stage import (
     build_selection_required_response,
 )
 from modules.wardrobe.extraction.generation_stage import run_selected_item_extraction_or_response
-from modules.wardrobe.extraction.prompting_stage import apply_selected_item_prompting
 from modules.wardrobe.extraction.postprocess_stage import sync_selected_item_progress
 from modules.wardrobe.extraction.debug_artifacts import maybe_save_debug_artifacts
 
@@ -236,10 +234,6 @@ class AnalyzeService:
                     "image": full_image.crop((x0, y0, x1, y1)).convert("RGB"),
                 }]
 
-            # MiniCPM: Generates detailed garment description for metadata
-            # JoyCaption: Generates additional context for negative prompts
-            minicpm_runner = getattr(self.engine, "minicpm", None)  # Fixed: was minicpm_runner
-
             # Helper functions for extraction
             def _prepare_extract_source_image(
                 *,
@@ -281,49 +275,6 @@ class AnalyzeService:
                 bg = Image.new("RGB", image.size, (255, 255, 255))
                 bg.paste(image, mask=image.split()[-1])
                 return bg
-
-            def _product_prompt_description(
-                text: str,
-                *,
-                garment_type: Optional[str] = None,
-                style: Optional[str] = None,
-                category_key: Optional[str] = None,
-            ) -> str:
-                desc = sanitize_garment_description(text or "")
-                lowered = desc.lower()
-                human_terms = (
-                    " woman ",
-                    " man ",
-                    " person ",
-                    " model ",
-                    " mannequin ",
-                    " showroom ",
-                    " wearing ",
-                    " posing ",
-                    " standing ",
-                )
-                padded = f" {lowered} "
-                if any(term in padded for term in human_terms):
-                    preferred = (style or "").strip()
-                    if not preferred or preferred.lower() in {"top", "bottom", "dress", "outerwear", "unknown"}:
-                        ck = (category_key or "").strip().replace("_", " ")
-                        if ck and ck.lower() not in {"top", "bottom", "dress", "outerwear", "unknown"}:
-                            preferred = ck
-                        else:
-                            gt = normalize_garment_type(garment_type) or "top"
-                            preferred = {
-                                "top": "Top",
-                                "bottom": "Bottom",
-                                "dress": "Dress",
-                                "outer": "Outerwear",
-                            }.get(gt, "Garment")
-                    preferred = " ".join(preferred.split())
-                    if preferred:
-                        return f"{preferred[0].upper() + preferred[1:]} .".replace(" .", ".")
-                    return "Garment."
-                if desc and not desc.endswith("."):
-                    desc = f"{desc}."
-                return desc or "Garment."
 
             def _run_qwen_extraction(**kwargs) -> Dict[str, object]:
                 """
@@ -405,6 +356,8 @@ class AnalyzeService:
                 
                 # Build metadata
                 metadata = dict(qwen_data.get("metadata") or {})
+                garment_metadata_obj = qwen_data.get("garmentMetadata")
+                qwen_garment_metadata = garment_metadata_obj if isinstance(garment_metadata_obj, dict) else {}
                 prompt_description = str(qwen_data.get("promptDescription") or "").strip()
                 if not prompt_description:
                     prompt_description = str(kwargs.get("prompt_description") or "").strip()
@@ -429,6 +382,7 @@ class AnalyzeService:
                     "qwen_steps": ANALYZE_QWEN_DEFAULT_STEPS,
                     "qwen_seed": ANALYZE_QWEN_DEFAULT_SEED,
                     "prefer_extracted_prompt": True,
+                    "garment_metadata": qwen_garment_metadata,
                 })
 
                 return {
@@ -436,6 +390,7 @@ class AnalyzeService:
                     "raw_url": url,
                     "_processed_image_bytes": processed_bytes,
                     "meta": metadata,
+                    "garment_metadata": qwen_garment_metadata,
                 }
 
             def _suppress_auxiliary_instances(
@@ -540,65 +495,12 @@ class AnalyzeService:
             if selected_item_response is not None:
                 return selected_item_response
 
-            # Stage: MiniCPM (Single descriptor backend)
-            # Determine which image to use for description
-            if isinstance(selected_item.get("_image_obj"), Image.Image):
-                desc_image = selected_item.get("_image_obj")
-            elif "bbox" in selected_item and selected_item["bbox"]:
-                bbox = selected_item["bbox"]
-                x1, y1, x2, y2 = bbox
-                desc_image = image.crop((x1, y1, x2, y2))
-            else:
-                desc_image = image
-
-            # Run MiniCPM for garment description
-            minicpm_garment_type = requested_type or normalize_garment_type(str(selected_item.get("type") or "")) or None
-            async def run_minicpm():
-                if not minicpm_runner:
-                    return ""
-                try:
-                    loop = asyncio.get_event_loop()
-                    description = await loop.run_in_executor(
-                        None,
-                        lambda: minicpm_runner.describe_garment(
-                            image=desc_image,
-                            garment_type=minicpm_garment_type,
-                            prompt_override=None,
-                        )
-                    )
-                    return description
-                except Exception as e:
-                    logger.warning(f"MiniCPM description failed: {e}")
-                    return ""
-
-            t_description = time.time()
-            minicpm_desc = await run_minicpm()
-            description_time = round(time.time() - t_description, 4)
-            if not " ".join(str(minicpm_desc or "").split()).strip():
-                fallback_desc = " ".join(str(selected_item.get("promptDescription") or "").split()).strip()
-                if not fallback_desc:
-                    fallback_type = normalize_garment_type(str(selected_item.get("type") or "")) or "garment"
-                    fallback_desc = f"Detected {fallback_type} garment."
-                minicpm_desc = fallback_desc
-                selected_item["minicpm_descriptor_fallback_used"] = True
-
-            selected_item["minicpm_description"] = minicpm_desc
+            # Qwen extraction now generates prompt/metadata; skip pre-extraction MiniCPM/prompting in analyze.
+            selected_item["minicpm_description"] = str(selected_item.get("minicpm_description") or "").strip()
             selected_item["joycaption_description"] = ""
-            analyze_stage_timings["minicpm_s"] = description_time
+            analyze_stage_timings["minicpm_s"] = 0.0
             analyze_stage_timings["joycaption_s"] = 0.0
-
-            # Stage: Prompting (Generate Flux2 prompts based on type and MiniCPM description)
-            selected_item, prompting_context = apply_selected_item_prompting(
-                selected_item=selected_item,
-                requested_type=requested_type,
-                analyze_prompt_from_extracted=bool(self.config.prompt_from_extracted),
-                normalize_garment_type=normalize_garment_type,
-                infer_style_from_text=infer_style_from_text,
-                wardrobe_category_from_garment_type=wardrobe_category_from_garment_type,
-                product_prompt_description=_product_prompt_description,
-                build_garment_metadata=main_mod._build_garment_metadata,
-                strip_descriptor_color_clause=strip_descriptor_color_clause,
-            )
+            prompting_context: Dict[str, object] = {}
 
             # Stage: Extraction (Run Flux2 extraction with prompts)
             selected_item, extraction_response = run_selected_item_extraction_or_response(
@@ -631,6 +533,54 @@ class AnalyzeService:
             )
             if extraction_response is not None:
                 return extraction_response
+
+            # Build sync context from final extraction output fields.
+            final_selected_type = normalize_garment_type(
+                str(selected_item.get("type") or requested_type or "")
+            ) or "top"
+            extraction_meta_obj = selected_item.get("extraction")
+            extraction_meta = extraction_meta_obj if isinstance(extraction_meta_obj, dict) else {}
+            final_prompt_description = " ".join(
+                str(
+                    selected_item.get("promptDescription")
+                    or extraction_meta.get("prompt_description")
+                    or selected_item.get("description")
+                    or ""
+                ).split()
+            ).strip()
+            final_prompt_source = str(
+                selected_item.get("promptDescriptionSource")
+                or extraction_meta.get("prompt_source")
+                or ""
+            ).strip()
+            final_style = str(selected_item.get("style") or "").strip()
+            if not final_style and final_prompt_description:
+                inferred_style = infer_style_from_text(final_prompt_description, garment_type=final_selected_type)
+                final_style = str(inferred_style or "").strip()
+            final_sync_category = wardrobe_category_from_garment_type(
+                final_selected_type, style=final_style or None
+            )
+            selected_item["style"] = final_sync_category["style"]
+            selected_item["category_key"] = final_sync_category["category_key"]
+            selected_item["primary_category_key"] = final_sync_category["primary_category_key"]
+
+            garment_meta_obj = selected_item.get("garmentMetadata")
+            final_garment_metadata = garment_meta_obj if isinstance(garment_meta_obj, dict) else {}
+            if not final_garment_metadata:
+                extraction_garment_meta = extraction_meta.get("garment_metadata")
+                if isinstance(extraction_garment_meta, dict):
+                    final_garment_metadata = extraction_garment_meta
+                    selected_item["garmentMetadata"] = extraction_garment_meta
+
+            prompting_context = {
+                "selected_type": final_selected_type,
+                "prompt_description": final_prompt_description,
+                "avoid_prompt": "",
+                "sync_category": final_sync_category,
+                "garment_metadata": final_garment_metadata,
+                "prompt_source": final_prompt_source,
+                "minicpm_description": str(selected_item.get("minicpm_description") or ""),
+            }
 
             # Stage: Sync Progress
             def _sync_wardrobe_progress_dispatch(

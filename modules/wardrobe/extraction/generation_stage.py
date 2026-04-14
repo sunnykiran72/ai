@@ -240,6 +240,11 @@ def run_selected_item_extraction_or_response(
     selected_item["raw_image_url"] = str(fallback.get("raw_url") or extracted_url)
     selected_item["raw_image_source"] = str(extraction_meta.get("pipeline") or "extract")
     selected_item["extraction"] = extraction_meta
+    extraction_garment_meta = fallback.get("garment_metadata")
+    if not isinstance(extraction_garment_meta, dict):
+        extraction_garment_meta = extraction_meta.get("garment_metadata")
+    if isinstance(extraction_garment_meta, dict) and extraction_garment_meta:
+        selected_item["garmentMetadata"] = dict(extraction_garment_meta)
     selected_item["_extracted_image_bytes"] = extracted_image_bytes
     selected_item["cloth_verified"] = bool(extracted_url)
     selected_item["cloth_verification_source"] = "flux2_extraction"
