@@ -18,6 +18,21 @@ def _env_value(*names: str, default: str) -> str:
     return default
 
 
+class _MiniCPMTokenizerAdapter:
+    """
+    Proxy wrapper for tokenizer implementations that do not expose mutable
+    attributes required by MiniCPM remote-code chat paths.
+    """
+
+    def __init__(self, base_tokenizer: Any, *, im_start_id: Optional[int], im_end_id: Optional[int]) -> None:
+        self._base = base_tokenizer
+        self.im_start_id = im_start_id
+        self.im_end_id = im_end_id
+
+    def __getattr__(self, item: str) -> Any:
+        return getattr(self._base, item)
+
+
 class MiniCPMVRunner:
     """
     MiniCPM-V descriptor runner for garment and person prompt descriptions.
@@ -95,7 +110,75 @@ class MiniCPMVRunner:
         # PreTrainedModel is patched to expose all_tied_weights_keys via property.
         model = model.eval()
 
-        tokenizer = AutoTokenizer.from_pretrained(self.model_id, trust_remote_code=True)
+        tokenizer = None
+        tokenizer_errors = []
+        for use_fast in (False, True):
+            try:
+                tokenizer = AutoTokenizer.from_pretrained(
+                    self.model_id,
+                    trust_remote_code=True,
+                    use_fast=use_fast,
+                )
+                break
+            except TypeError as exc:
+                tokenizer_errors.append(exc)
+                # Older transformer builds may not accept `use_fast`.
+                if use_fast:
+                    continue
+                try:
+                    tokenizer = AutoTokenizer.from_pretrained(self.model_id, trust_remote_code=True)
+                    break
+                except Exception as nested_exc:
+                    tokenizer_errors.append(nested_exc)
+            except Exception as exc:
+                tokenizer_errors.append(exc)
+
+        if tokenizer is None:
+            raise RuntimeError(f"Failed to load MiniCPM tokenizer: {tokenizer_errors[-1] if tokenizer_errors else 'unknown'}")
+
+        # Some MiniCPM remote-code releases expect these ids on tokenizer objects.
+        # `TokenizersBackend` can be immutable, so wrap when direct assignment is not possible.
+        resolved_special_ids = {}
+        for attr_name, token_candidates in (
+            ("im_start_id", ("<|im_start|>", "<im_start>")),
+            ("im_end_id", ("<|im_end|>", "<im_end>")),
+        ):
+            current_value = getattr(tokenizer, attr_name, None)
+            if isinstance(current_value, int) and current_value >= 0:
+                resolved_special_ids[attr_name] = current_value
+                continue
+
+            resolved_id = None
+            for token in token_candidates:
+                try:
+                    token_id = tokenizer.convert_tokens_to_ids(token)
+                except Exception:
+                    token_id = None
+                if isinstance(token_id, int) and token_id >= 0:
+                    resolved_id = token_id
+                    break
+            resolved_special_ids[attr_name] = resolved_id
+
+            if resolved_id is None:
+                continue
+            try:
+                setattr(tokenizer, attr_name, resolved_id)
+            except Exception:
+                # Immutable tokenizer object; handled by adapter below.
+                pass
+
+        needs_adapter = (
+            getattr(tokenizer, "im_start_id", None) is None and resolved_special_ids.get("im_start_id") is not None
+        ) or (
+            getattr(tokenizer, "im_end_id", None) is None and resolved_special_ids.get("im_end_id") is not None
+        )
+        if needs_adapter:
+            tokenizer = _MiniCPMTokenizerAdapter(
+                tokenizer,
+                im_start_id=resolved_special_ids.get("im_start_id"),
+                im_end_id=resolved_special_ids.get("im_end_id"),
+            )
+
         self._model = model
         self._tokenizer = tokenizer
 
