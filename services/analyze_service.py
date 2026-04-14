@@ -5,8 +5,9 @@ This module provides the AnalyzeService class that orchestrates garment
 analysis workflows using the modular extraction pipeline.
 """
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, TYPE_CHECKING
 import asyncio
+import base64
 import inspect
 import logging
 import time
@@ -55,6 +56,37 @@ from modules.wardrobe.extraction.debug_artifacts import maybe_save_debug_artifac
 
 logger = logging.getLogger("glamify-ai")
 
+if TYPE_CHECKING:
+    from core.qwen_image_edit_runner import QwenImageEditRunner
+
+ANALYZE_QWEN_TYPE_PROMPTS = {
+    "top": (
+        "Extract the clothing and create a flat mockup for the top garment into a clean, standalone white background mockup. "
+        "Preserve the original fabric texture, stitching, folds, patterns, and color accuracy. "
+        "Remove the model, other garments and accessories completely, keeping the garment's natural shape and proportions intact."
+    ),
+    "bottom": (
+        "Extract the clothing and create a flat mockup for the bottom garment into a clean, standalone white background mockup. "
+        "Preserve the original fabric texture, stitching, folds, patterns, and color accuracy. "
+        "Remove the model, other garments and accessories completely, keeping the garment's natural shape and proportions intact."
+    ),
+    "dress": (
+        "Extract the clothing and create a flat mockup for the dress garment into a clean, standalone white background mockup. "
+        "Preserve the original fabric texture, stitching, folds, patterns, and color accuracy. "
+        "Remove the model, other garments and accessories completely, keeping the garment's natural shape and proportions intact."
+    ),
+    "outer": (
+        "Extract the clothing and create a flat mockup for the outer garment into a clean, standalone white background mockup. "
+        "Preserve the original fabric texture, stitching, folds, patterns, and color accuracy. "
+        "Remove the model, other garments and accessories completely, keeping the garment's natural shape and proportions intact."
+    ),
+}
+ANALYZE_QWEN_DEFAULT_STEPS = 14
+ANALYZE_QWEN_DEFAULT_SEED = 123
+ANALYZE_QWEN_MAX_INPUT_EDGE = 512
+ANALYZE_QWEN_MAX_OUTPUT_EDGE = 768
+ANALYZE_QWEN_OUTPUT_ASPECT_RATIO = "2:3"
+
 try:
     import jwt as _jwt
 except Exception:  # pragma: no cover - optional dependency
@@ -76,6 +108,14 @@ class AnalyzeService:
     def __init__(self, engine: AIEngine, config: AnalyzeConfig):
         self.engine = engine
         self.config = config
+        self._qwen_extract_runner: Optional["QwenImageEditRunner"] = None
+
+    def _get_qwen_extract_runner(self) -> "QwenImageEditRunner":
+        from core.qwen_image_edit_runner import QwenImageEditRunner
+
+        if self._qwen_extract_runner is None:
+            self._qwen_extract_runner = QwenImageEditRunner()
+        return self._qwen_extract_runner
 
     async def analyze_image(
         self,
@@ -285,60 +325,63 @@ class AnalyzeService:
                     desc = f"{desc}."
                 return desc or "Garment."
 
-            def _run_flux2_extraction(**kwargs) -> Dict[str, object]:
+            def _run_qwen_extraction(**kwargs) -> Dict[str, object]:
                 """
-                Run Flux2 extraction directly (no HTTP calls).
-                Uses the Flux2CVTONRunner.run_extraction() method.
+                Run Qwen extract-outfit directly (no HTTP calls).
+                Keeps the same return contract used by extraction stage.
                 """
-                flux_runner = (
-                    self.engine.get_flux2_for_analyze()
-                    if hasattr(self.engine, "get_flux2_for_analyze")
-                    else getattr(self.engine, "flux2", None)
+                from core.qwen_extract_outfit_service import (
+                    build_qwen_extract_outfit_request,
+                    execute_qwen_extract_outfit_request,
                 )
-                if flux_runner is None:
-                    raise RuntimeError("Flux2 runner not available")
-                
+
                 source_image = kwargs.get("source_image")
                 if source_image is None:
                     raise RuntimeError("source_image is required for extraction")
-                
-                base_prompt = str(kwargs.get("base_prompt") or "").strip()
-                if not base_prompt:
-                    base_prompt = "garment"
-                
-                steps = kwargs.get("steps")
-                if steps is None:
-                    steps = int(self.config.flux2_single_garment_extract_default_steps)
-                
-                seed = kwargs.get("seed")
-                if seed is None:
-                    seed = int(self.config.flux2_single_garment_extract_default_seed)
-                
-                # Run Flux2 extraction
-                result = flux_runner.run_extraction(
-                    garment_image=source_image,
-                    prompt=base_prompt,
-                    steps=int(steps),
-                    seed=int(seed),
+
+                selected_type = normalize_garment_type(str(kwargs.get("garment_type") or "")) or "top"
+                qwen_prompt = ANALYZE_QWEN_TYPE_PROMPTS.get(selected_type, ANALYZE_QWEN_TYPE_PROMPTS["top"])
+                qwen_request = build_qwen_extract_outfit_request(
+                    prompt=qwen_prompt,
+                    steps=ANALYZE_QWEN_DEFAULT_STEPS,
+                    seed=ANALYZE_QWEN_DEFAULT_SEED,
+                    guidance_scale=None,
+                    guidance_scale_alias=None,
+                    negative_prompt="",
+                    negative_prompt_alias=None,
+                    max_input_edge=ANALYZE_QWEN_MAX_INPUT_EDGE,
+                    max_input_edge_alias=None,
+                    output_max_edge=ANALYZE_QWEN_MAX_OUTPUT_EDGE,
+                    output_max_edge_alias=None,
+                    output_aspect_ratio=ANALYZE_QWEN_OUTPUT_ASPECT_RATIO,
+                    output_aspect_ratio_alias=None,
+                    upload_output=False,
+                    include_base64=True,
                 )
-                
-                # Upload extracted image to storage
-                extracted_image = result.get("image")
-                if not isinstance(extracted_image, Image.Image):
-                    raise RuntimeError("Flux2 extraction did not return a valid image")
-                
+                qwen_data = execute_qwen_extract_outfit_request(
+                    request=qwen_request,
+                    source_image=source_image,
+                    runner=self._get_qwen_extract_runner(),
+                    minicpm_runner=getattr(self.engine, "minicpm", None),
+                    upload_image_fn=None,
+                )
+                image_base64 = str(qwen_data.get("image_base64") or "").strip()
+                if not image_base64:
+                    raise RuntimeError("Qwen extraction did not return image_base64.")
+                extracted_image = Image.open(io.BytesIO(base64.b64decode(image_base64))).convert("RGB")
+
                 # Apply postprocessing if enabled
                 output_image = extracted_image
                 if bool(self.config.garment_postprocess_enabled):
                     output_image = main_mod._enhance_image(output_image)
-                
+
                 # Pad to target aspect ratio
                 output_image = main_mod._pad_image(
                     output_image,
                     int(self.config.garment_target_aspect_w),
                     int(self.config.garment_target_aspect_h),
                 )
-                
+
                 # Handle background format (white vs transparent)
                 if str(self.config.garment_output_background).lower() == "white":
                     if output_image.mode != "RGBA":
@@ -361,22 +404,33 @@ class AnalyzeService:
                     url = ""
                 
                 # Build metadata
-                metadata = result.get("metadata") or {}
-                prompt_description = str(kwargs.get("prompt_description") or "").strip()
+                metadata = dict(qwen_data.get("metadata") or {})
+                prompt_description = str(qwen_data.get("promptDescription") or "").strip()
                 if not prompt_description:
-                    prompt_description = base_prompt
+                    prompt_description = str(kwargs.get("prompt_description") or "").strip()
+                if not prompt_description:
+                    prompt_description = qwen_prompt
 
                 metadata.update({
-                    "path": "flux2_extraction",
-                    "pipeline": "flux2_extraction",
-                    "base_garment_prompt": base_prompt,
+                    "path": "qwen_extract_outfit",
+                    "pipeline": "qwen_extract_outfit",
+                    "base_garment_prompt": qwen_prompt,
                     "extraction_avoid_clause": "",
                     "prompt_description": prompt_description,
                     "prompt_sections_raw": "",
-                    "descriptor_raw_text": str(kwargs.get("minicpm_description") or "").strip(),
+                    "descriptor_raw_text": str(qwen_data.get("promptDescription") or kwargs.get("minicpm_description") or "").strip(),
                     "negative_prompt_mode": "none",
+                    "negative_prompt_supplied": False,
+                    "prompt_source": str(qwen_data.get("promptDescriptionSource") or ""),
+                    "prompt_fallback_used": bool(qwen_data.get("promptFallbackUsed")),
+                    "prompt_elapsed_seconds": qwen_data.get("promptElapsedSeconds"),
+                    "qwen_elapsed_seconds": qwen_data.get("qwenElapsedSeconds"),
+                    "total_elapsed_seconds": qwen_data.get("totalElapsedSeconds"),
+                    "qwen_steps": ANALYZE_QWEN_DEFAULT_STEPS,
+                    "qwen_seed": ANALYZE_QWEN_DEFAULT_SEED,
+                    "prefer_extracted_prompt": True,
                 })
-                
+
                 return {
                     "url": url,
                     "raw_url": url,
@@ -567,7 +621,7 @@ class AnalyzeService:
                 prepare_extract_source_image=_prepare_extract_source_image,
                 build_error_payload=build_error_payload,
                 multipart_form_response=multipart_form_response,
-                run_flux2_cloth_only_extract=_run_flux2_extraction,
+                run_flux2_cloth_only_extract=_run_qwen_extraction,
                 descriptor_is_weak=main_mod._descriptor_is_weak,
                 caption_non_garment_signal=lambda _text: False,
                 download_image=download_image,

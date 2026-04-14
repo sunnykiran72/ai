@@ -250,7 +250,11 @@ def run_selected_item_extraction_or_response(
     if analyze_prompt_from_extracted:
         prompt_desc = ""
         prompt_source = str(selected_item.get("promptDescriptionSource") or "").strip()
-        if prompt_bundle_desc:
+        prefer_extracted_prompt = bool(extraction_meta.get("prefer_extracted_prompt"))
+        if prefer_extracted_prompt and extracted_prompt_desc:
+            prompt_desc = extracted_prompt_desc
+            selected_item["promptDescriptionSource"] = prompt_source or str(extraction_meta.get("pipeline") or "extracted_descriptor")
+        elif prompt_bundle_desc:
             prompt_desc = prompt_bundle_desc
             selected_item["promptDescriptionSource"] = prompt_source or "minicpm_direct_prompt"
         elif extracted_prompt_desc:
