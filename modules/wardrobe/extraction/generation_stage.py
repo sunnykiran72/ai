@@ -106,14 +106,17 @@ def run_selected_item_extraction_or_response(
             selected_item["extract_crop_bbox"] = list(extract_plan.extract_bbox)
             selected_item["extract_crop_mode"] = str(extract_plan.crop_mode)
             extract_source_image = extract_plan.image
-    except Exception:
-        payload = build_error_payload(
-            title="Invalid Image",
-            description="Could not process the image. Please upload a clearer photo.",
-            reason_codes=["INVALID_IMAGE"],
-            status_code=400,
+    except Exception as prep_err:
+        logger.warning(
+            "Extract source preparation failed (type=%s, bbox=%s): %s. Falling back to full image.",
+            selected_type,
+            selected_item.get("bbox"),
+            prep_err,
         )
-        return None, multipart_form_response(payload)
+        selected_item["bbox_geometry_source"] = "extract_prepare_failed_full_image"
+        selected_item["extract_crop_bbox"] = [0, 0, full_image.width, full_image.height]
+        selected_item["extract_crop_mode"] = "full_image_fallback"
+        extract_source_image = full_image.copy()
 
     if isinstance(extract_source_image, Image.Image):
         selected_item["_extract_source_image"] = extract_source_image.copy()
