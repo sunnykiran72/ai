@@ -33,6 +33,7 @@ def get_user_prep_service() -> UserImageService:
 
 @router.post("/v1/user-image/prepare", response_model=UserPrepResponse)
 @router.post("/v1/flux2/prepare-user-image", response_model=UserPrepResponse)
+@router.post("/user-image/prepare", response_model=UserPrepResponse)  # Compatibility alias
 async def prepare_user_image_endpoint(
     file: Optional[UploadFile] = File(None),
     image: Optional[UploadFile] = File(None),
