@@ -788,7 +788,11 @@ async def analyze_detection_lab_run(
     t0 = time.perf_counter()
     backend = "fashion_object_detection"
     try:
-        candidates = detector.detect_fashion_candidates(pil, requested_type=garment_type)
+        candidates = detector.detect_fashion_candidates(
+            pil,
+            requested_type=garment_type,
+            threshold=float(min_confidence),
+        )
     except Exception:
         # Offline/local fallback: use local YOLO cropper candidates.
         yolo_cropper = getattr(engine, "yolo", None)
@@ -874,6 +878,13 @@ async def analyze_detection_lab_run(
             continue
         filtered.append(item)
 
+    fashion_runner = getattr(engine, "fashion_detection_runner", None)
+    detector_runtime = {
+        "model_path": str(getattr(fashion_runner, "model_path", "") or ""),
+        "score_threshold_config": float(getattr(fashion_runner, "score_threshold", 0.0) or 0.0),
+        "threshold_used_for_predict": float(threshold),
+    }
+
     return {
         "status": "ok",
         "data": {
@@ -887,6 +898,7 @@ async def analyze_detection_lab_run(
             "image_size": {"width": pil.width, "height": pil.height},
             "raw_count": len(candidates or []),
             "filtered_count": len(filtered),
+            "detector_runtime": detector_runtime,
             "raw_items": raw_items,
             "dropped_items": dropped_items,
             "items": filtered,
