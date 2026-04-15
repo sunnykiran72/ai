@@ -12,7 +12,7 @@ from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
 from PIL import Image
 
-from core.qwen_image_edit_runner import QwenImageEditRunner
+from core.qwen_extract_shared_runner import get_shared_qwen_extract_runner
 from core.qwen_extract_outfit_service import (
     DEFAULT_QWEN_EXTRACT_OUTFIT_PROMPT,
     PROMPT_GENERATION_FAILED_CODE,
@@ -25,15 +25,11 @@ from shared.azure_storage import storage
 logger = logging.getLogger("glamify-ai")
 router = APIRouter()
 
-_RUNNER: Optional[QwenImageEditRunner] = None
 _MINICPM_RUNNER = None
 
 
-def _get_runner() -> QwenImageEditRunner:
-    global _RUNNER
-    if _RUNNER is None:
-        _RUNNER = QwenImageEditRunner()
-    return _RUNNER
+def _get_runner():
+    return get_shared_qwen_extract_runner()
 
 
 def _get_minicpm_runner(request: Optional[Request] = None):

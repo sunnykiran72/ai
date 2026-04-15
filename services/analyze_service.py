@@ -5,7 +5,7 @@ This module provides the AnalyzeService class that orchestrates garment
 analysis workflows using the modular extraction pipeline.
 """
 
-from typing import Dict, List, Optional, TYPE_CHECKING
+from typing import Dict, List, Optional
 import asyncio
 import base64
 import inspect
@@ -51,11 +51,9 @@ from modules.wardrobe.extraction.detection_stage import (
 from modules.wardrobe.extraction.generation_stage import run_selected_item_extraction_or_response
 from modules.wardrobe.extraction.postprocess_stage import sync_selected_item_progress
 from modules.wardrobe.extraction.debug_artifacts import maybe_save_debug_artifacts
+from core.qwen_extract_shared_runner import get_shared_qwen_extract_runner
 
 logger = logging.getLogger("glamify-ai")
-
-if TYPE_CHECKING:
-    from core.qwen_image_edit_runner import QwenImageEditRunner
 
 ANALYZE_QWEN_TYPE_PROMPTS = {
     "top": (
@@ -107,14 +105,9 @@ class AnalyzeService:
     def __init__(self, engine: AIEngine, config: AnalyzeConfig):
         self.engine = engine
         self.config = config
-        self._qwen_extract_runner: Optional["QwenImageEditRunner"] = None
 
-    def _get_qwen_extract_runner(self) -> "QwenImageEditRunner":
-        from core.qwen_image_edit_runner import QwenImageEditRunner
-
-        if self._qwen_extract_runner is None:
-            self._qwen_extract_runner = QwenImageEditRunner()
-        return self._qwen_extract_runner
+    def _get_qwen_extract_runner(self):
+        return get_shared_qwen_extract_runner()
 
     async def analyze_image(
         self,
