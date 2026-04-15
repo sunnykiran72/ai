@@ -33,6 +33,7 @@ from .tryon_lora_multi_lab import router as tryon_lora_multi_lab_router
 from .bulk_tryon_gallery import router as bulk_tryon_gallery_router
 from .qwen_extract_outfit import router as qwen_extract_outfit_router
 from .upscaler_test import router as upscaler_test_router
+from .analyze_detection_lab import router as analyze_detection_lab_router
 
 __all__ = [
     "tryon_router",
@@ -45,4 +46,5 @@ __all__ = [
     "bulk_tryon_gallery_router",
     "qwen_extract_outfit_router",
     "upscaler_test_router",
+    "analyze_detection_lab_router",
 ]

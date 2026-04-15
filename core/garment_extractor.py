@@ -10,7 +10,7 @@ from PIL import Image
 @dataclass(frozen=True)
 class GarmentExtractionConfig:
     force_bbox_crop: bool = True
-    crop_pad_ratio_x: float = 0.30
+    crop_pad_ratio_x: float = 0.35
     crop_pad_ratio_y: float = 0.10
     crop_pad_ratio: float = 0.18
     crop_pad_ratio_dress: float = 0.28

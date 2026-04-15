@@ -42,8 +42,7 @@ def run_selected_item_extraction_or_response(
     if not selected_item or not analyze_extract_cloth:
         return selected_item, None
 
-    forced_type = requested_type if requested_type in {"top", "bottom", "dress", "outer"} else None
-    selected_type = forced_type or normalize_garment_type(str(selected_item.get("type")))
+    selected_type = normalize_garment_type(str(selected_item.get("type")))
     if not selected_type:
         payload = build_error_payload(
             title="Type Required",
@@ -53,70 +52,24 @@ def run_selected_item_extraction_or_response(
         )
         return None, multipart_form_response(payload)
 
-    original_selected_type = normalize_garment_type(str(selected_item.get("type")))
-    if (
-        forced_type
-        and original_selected_type not in {None, "", forced_type}
-        and original_selected_type in {"top", "bottom", "dress", "outer"}
-    ):
-        selected_item["requested_type_mismatch"] = {
-            "requested_type": forced_type,
-            "detected_type": original_selected_type,
-            "detector_label": str(selected_item.get("detector_label") or ""),
-        }
-        payload = build_error_payload(
-            title="Requested Garment Not Found",
-            description=f"Could not find a clear {forced_type} in this image. The detected garment looks like {original_selected_type}.",
-            reason_codes=["REQUESTED_TYPE_NOT_FOUND"],
-            status_code=400,
-        )
-        payload.setdefault("data", {})["selected_item"] = {
-            "type": original_selected_type,
-            "detector_label": str(selected_item.get("detector_label") or ""),
-            "bbox": list(selected_item.get("bbox") or []),
-        }
-        return None, multipart_form_response(payload)
-
-    if forced_type and str(selected_item.get("type")) != forced_type:
-        selected_item["type_original"] = selected_item.get("type")
-        selected_item["type"] = forced_type
-        selected_item["garment_type"] = forced_type
-        selected_item["type_source"] = "requested_type"
-
-    try:
+    prebuilt_source = selected_item.get("_extract_source_image")
+    prebuilt_bbox = selected_item.get("extract_crop_bbox")
+    if isinstance(prebuilt_source, Image.Image) and isinstance(prebuilt_bbox, list) and len(prebuilt_bbox) == 4:
+        extract_source_image = prebuilt_source.copy()
+    else:
         if direct_requested_type_mode:
             selected_item["bbox_geometry_source"] = "requested_type_direct_full_image"
             selected_item["extract_crop_bbox"] = [0, 0, full_image.width, full_image.height]
             selected_item["extract_crop_mode"] = "full_image_direct"
             extract_source_image = full_image.copy()
         else:
-            extract_plan = prepare_extract_source_image(
-                full_image=full_image,
-                bbox=selected_item.get("bbox"),
-                garment_type=selected_type,
-                total_items=all_items_count,
-                detector_mask=selected_item.get("_mask_obj"),
+            payload = build_error_payload(
+                title="Extraction Failed",
+                description="Missing prepared crop for selected garment. Please retry.",
+                reason_codes=["EXTRACTION_PREP_MISSING"],
+                status_code=500,
             )
-            if selected_item.get("bbox") != extract_plan.anchor_bbox:
-                selected_item["detector_bbox"] = list(selected_item.get("bbox") or [])
-                selected_item["bbox"] = list(extract_plan.anchor_bbox)
-            selected_item["bbox_geometry_source"] = str(extract_plan.geometry_source)
-            if extract_plan.mask_bbox:
-                selected_item["mask_bbox"] = list(extract_plan.mask_bbox)
-            selected_item["extract_crop_bbox"] = list(extract_plan.extract_bbox)
-            selected_item["extract_crop_mode"] = str(extract_plan.crop_mode)
-            extract_source_image = extract_plan.image
-    except Exception as prep_err:
-        logger.warning(
-            "Extract source preparation failed (type=%s, bbox=%s): %s. Falling back to full image.",
-            selected_type,
-            selected_item.get("bbox"),
-            prep_err,
-        )
-        selected_item["bbox_geometry_source"] = "extract_prepare_failed_full_image"
-        selected_item["extract_crop_bbox"] = [0, 0, full_image.width, full_image.height]
-        selected_item["extract_crop_mode"] = "full_image_fallback"
-        extract_source_image = full_image.copy()
+            return None, multipart_form_response(payload)
 
     if isinstance(extract_source_image, Image.Image):
         selected_item["_extract_source_image"] = extract_source_image.copy()
@@ -285,8 +238,5 @@ def run_selected_item_extraction_or_response(
             selected_item["style"] = extracted_category["style"]
             selected_item["category_key"] = extracted_category["category_key"]
             selected_item["primary_category_key"] = extracted_category["primary_category_key"]
-
-    if forced_type:
-        selected_item["extract_type_forced"] = forced_type
 
     return selected_item, None

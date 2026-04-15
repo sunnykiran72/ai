@@ -130,6 +130,7 @@ def run_detection_stage_or_response(
     analyze_caption_mode: str,
     analyze_primary_type_with_florence: bool,
     analyze_auto_select_multi_dress: bool,
+    prepare_extract_source_image: Callable[..., object],
 ) -> Tuple[Optional[Dict[str, object]], Optional[object]]:
     direct_requested_type_mode = False
     parser_split_used = False
@@ -138,43 +139,48 @@ def run_detection_stage_or_response(
     items: List[Dict[str, object]] = []
     normalized_requested = normalize_garment_type(requested_type)
 
-    def _build_direct_requested_item() -> Dict[str, object]:
-        fallback_type = normalized_requested or "top"
-        category_meta = wardrobe_category_from_garment_type(fallback_type, style=None)
-        prompt_desc = _build_detector_prompt_description(
-            str(requested_type or fallback_type or "garment"),
-            fallback_type,
-        )
-        return {
+    # Strict direct-request flow:
+    # if user provides a valid type, skip detector stage entirely and
+    # pass a single full-image candidate to next generation step.
+    if normalized_requested in {"top", "bottom", "dress", "outer"}:
+        prompt_desc = _build_detector_prompt_description(normalized_requested, normalized_requested)
+        style_infer = infer_style_from_text(normalized_requested, garment_type=normalized_requested)
+        category_meta = wardrobe_category_from_garment_type(normalized_requested, style=style_infer)
+        full_bbox = [0, 0, int(image.width), int(image.height)]
+        full_item: Dict[str, object] = {
             "garment_id": 0,
-            "type": fallback_type,
-            "garment_type": fallback_type,
-            "type_source": "requested_type_direct",
-            "detection_source": "requested_type_direct_full_image",
+            "type": normalized_requested,
+            "garment_type": normalized_requested,
             "promptDescription": prompt_desc,
             "description": prompt_desc,
             "style": category_meta["style"],
             "category_key": category_meta["category_key"],
             "primary_category_key": category_meta["primary_category_key"],
             "url": None,
-            "bbox": [0, 0, image.width, image.height],
+            "bbox": full_bbox,
             "crop": {
-                "width": image.width,
-                "height": image.height,
+                "width": int(image.width),
+                "height": int(image.height),
                 "area_ratio": 1.0,
             },
             "confidence": {
-                "yolo": 0.01,
-                "detector": 0.01,
-                "hybrid": 0.01,
+                "yolo": 1.0,
+                "detector": 1.0,
+                "hybrid": 1.0,
             },
             "_image_obj": image.copy(),
             "_mask_obj": None,
-            "detector_label": str(requested_type or fallback_type or "garment"),
-            "detector_metrics": {
-                "fallback": "direct_requested_type_full_image",
-            },
+            "detector_label": normalized_requested,
+            "detector_metrics": {},
         }
+        return {
+            "items": [full_item],
+            "direct_requested_type_mode": True,
+            "raw_detected_count": 1,
+            "parser_split_used": False,
+            "heuristic_split_used": False,
+            "auto_selected_index": 0,
+        }, None
 
     t_stage = time.time()
     detector = getattr(engine, "cloth_detector", None)
@@ -191,20 +197,6 @@ def run_detection_stage_or_response(
     stage_timings["yolo_crop_s"] = 0.0
 
     if not detector_candidates:
-        if normalized_requested in {"top", "bottom", "dress", "outer"}:
-            direct_requested_type_mode = True
-            items = [_build_direct_requested_item()]
-            raw_detected_count = 0
-        else:
-            payload = build_error_payload(
-                title="No Clothing Found",
-                description="No clothing item was detected in the uploaded image.",
-                reason_codes=["NO_CLOTHING"],
-                status_code=400,
-            )
-            return None, multipart_form_response(payload)
-
-    if not detector_candidates and not items:
         payload = build_error_payload(
             title="No Clothing Found",
             description="No clothing item was detected in the uploaded image.",
@@ -228,99 +220,13 @@ def run_detection_stage_or_response(
             items.append(item)
 
     if not items:
-        if normalized_requested in {"top", "bottom", "dress", "outer"}:
-            direct_requested_type_mode = True
-            items = [_build_direct_requested_item()]
-        else:
-            payload = build_error_payload(
-                title="No Clothing Found",
-                description="No clothing item was detected in the uploaded image.",
-                reason_codes=["NO_CLOTHING"],
-                status_code=400,
-            )
-            return None, multipart_form_response(payload)
-
-    # For explicit typed requests, always let parser prerouting challenge a bad detector pick.
-    # This stays narrow because we only keep parser candidates when they score materially better.
-    if normalized_requested in {"top", "bottom", "dress", "outer"}:
-        try:
-            parser_instances = parser_preroute_instances(image, requested_type=requested_type)
-        except Exception as parser_err:
-            logger.warning(f"Parser preroute failed during typed selection assist: {parser_err}")
-            parser_instances = []
-
-        parser_items: List[Dict[str, object]] = []
-        for parser_idx, inst in enumerate(parser_instances):
-            item = _candidate_to_item(
-                inst=inst,
-                idx=len(items) + parser_idx,
-                image=image,
-                normalize_garment_type=normalize_garment_type,
-                infer_style_from_text=infer_style_from_text,
-                wardrobe_category_from_garment_type=wardrobe_category_from_garment_type,
-            )
-            if item is not None:
-                parser_items.append(item)
-
-        if parser_items:
-            detector_same = [it for it in items if normalize_garment_type(str(it.get("type"))) == normalized_requested]
-            parser_same = [it for it in parser_items if normalize_garment_type(str(it.get("type"))) == normalized_requested]
-            if parser_same:
-                best_parser = max(
-                    parser_same,
-                    key=lambda it: requested_type_geometry_score(it, normalized_requested or "", image.height),
-                )
-                best_detector = max(
-                    detector_same,
-                    key=lambda it: requested_type_geometry_score(it, normalized_requested or "", image.height),
-                ) if detector_same else None
-                parser_score = requested_type_geometry_score(best_parser, normalized_requested or "", image.height)
-                detector_score = requested_type_geometry_score(best_detector, normalized_requested or "", image.height) if best_detector else float("-inf")
-                if (best_detector is None) or (parser_score > detector_score + 0.12):
-                    parser_split_used = True
-                    items.extend(parser_same)
-
-    if normalized_requested in {"top", "bottom"}:
-        same_type_items = [
-            it for it in items if normalize_garment_type(str(it.get("type"))) == normalized_requested
-        ]
-        if not same_type_items:
-            base_item = largest_instance(items) if items else None
-            if base_item is not None:
-                heuristic_base = {
-                    "bbox": [0, 0, image.width, image.height],
-                    "confidence": float(
-                        (base_item.get("confidence") or {}).get("detector")
-                        if isinstance(base_item.get("confidence"), dict)
-                        else 0.0
-                    ),
-                }
-                try:
-                    heuristic_instances = heuristic_split_candidates(image, heuristic_base)
-                except Exception as heuristic_err:
-                    logger.warning(f"Heuristic split failed during typed selection assist: {heuristic_err}")
-                    heuristic_instances = []
-
-                heuristic_items: List[Dict[str, object]] = []
-                for heuristic_idx, inst in enumerate(heuristic_instances):
-                    item = _candidate_to_item(
-                        inst=inst,
-                        idx=len(items) + heuristic_idx,
-                        image=image,
-                        normalize_garment_type=normalize_garment_type,
-                        infer_style_from_text=infer_style_from_text,
-                        wardrobe_category_from_garment_type=wardrobe_category_from_garment_type,
-                    )
-                    if item is not None:
-                        heuristic_items.append(item)
-
-                heuristic_same = [
-                    it for it in heuristic_items
-                    if normalize_garment_type(str(it.get("type"))) == normalized_requested
-                ]
-                if heuristic_same:
-                    heuristic_split_used = True
-                    items.extend(heuristic_same)
+        payload = build_error_payload(
+            title="No Clothing Found",
+            description="No clothing item was detected in the uploaded image.",
+            reason_codes=["NO_CLOTHING"],
+            status_code=400,
+        )
+        return None, multipart_form_response(payload)
 
     items = dedupe_items(items, iou_threshold=0.60)
     unique_types = sorted({str(it.get("type")) for it in items if it.get("type")})
@@ -328,24 +234,52 @@ def run_detection_stage_or_response(
         best = max(items, key=item_rank_score)
         items = [best]
 
+    # Compute extraction crop/padding once here for detector-driven flow.
+    # Downstream stages must reuse this prepared source image + crop bbox.
+    prepared_items: List[Dict[str, object]] = []
+    for item in items:
+        mapped_type = normalize_garment_type(str(item.get("type") or ""))
+        if mapped_type not in {"top", "bottom", "dress", "outer"}:
+            continue
+        try:
+            plan = prepare_extract_source_image(
+                full_image=image,
+                bbox=item.get("bbox"),
+                garment_type=mapped_type,
+                total_items=len(items),
+                detector_mask=item.get("_mask_obj"),
+            )
+            if item.get("bbox") != plan.anchor_bbox:
+                item["detector_bbox"] = list(item.get("bbox") or [])
+                item["bbox"] = list(plan.anchor_bbox)
+            item["bbox_geometry_source"] = str(plan.geometry_source)
+            if plan.mask_bbox:
+                item["mask_bbox"] = list(plan.mask_bbox)
+            item["extract_crop_bbox"] = list(plan.extract_bbox)
+            item["extract_crop_mode"] = str(plan.crop_mode)
+            item["_extract_source_image"] = plan.image.copy()
+        except Exception:
+            # Keep item but mark fallback to full image so downstream stays deterministic.
+            item["bbox_geometry_source"] = "extract_prepare_failed_full_image"
+            item["extract_crop_bbox"] = [0, 0, image.width, image.height]
+            item["extract_crop_mode"] = "full_image_fallback"
+            item["_extract_source_image"] = image.copy()
+        prepared_items.append(item)
+    items = prepared_items
+
     for new_idx, item in enumerate(items):
         item["garment_id"] = new_idx
 
     auto_selected_index = None
-    if selected_index is None and requested_type and len(items) > 1:
+    if selected_index is None and normalized_requested and len(items) > 1:
         matched = [
             idx for idx, item in enumerate(items)
-            if normalize_garment_type(str(item.get("type"))) == requested_type
+            if normalize_garment_type(str(item.get("type"))) == normalized_requested
         ]
         if len(matched) >= 1:
             auto_selected_index = max(
                 matched,
-                key=lambda idx: requested_type_geometry_score(items[idx], requested_type, image.height),
-            )
-        else:
-            auto_selected_index = max(
-                range(len(items)),
-                key=lambda idx: requested_type_geometry_score(items[idx], requested_type, image.height),
+                key=lambda idx: requested_type_geometry_score(items[idx], normalized_requested, image.height),
             )
     elif (
         selected_index is None
@@ -423,16 +357,30 @@ def build_selection_required_response(
                 ]
                 pub["preview_geometry_source"] = str(chosen_preview.get("name") or "adaptive_rect")
             if preview is None:
-                preview_plan = prepare_extract_source_image(
-                    full_image=full_image,
-                    bbox=item.get("bbox"),
-                    garment_type=str(mapped_type or ""),
-                    total_items=len(items),
-                    detector_mask=item.get("_mask_obj"),
-                )
-                preview = preview_plan.image.convert("RGB")
-                pub["preview_crop_bbox"] = [int(v) for v in preview_plan.extract_bbox]
-                pub["preview_geometry_source"] = str(preview_plan.geometry_source)
+                prebuilt_source = item.get("_extract_source_image")
+                prebuilt_bbox = item.get("extract_crop_bbox")
+                prebuilt_mode = item.get("extract_crop_mode")
+                if isinstance(prebuilt_source, Image.Image):
+                    preview = prebuilt_source.convert("RGB")
+                if isinstance(prebuilt_bbox, list) and len(prebuilt_bbox) == 4:
+                    pub["preview_crop_bbox"] = [int(v) for v in prebuilt_bbox]
+                    pub["extract_crop_bbox"] = [int(v) for v in prebuilt_bbox]
+                pub["preview_geometry_source"] = str(item.get("bbox_geometry_source") or "precomputed_extract_crop")
+                if prebuilt_mode:
+                    pub["extract_crop_mode"] = str(prebuilt_mode)
+                if preview is None:
+                    preview_plan = prepare_extract_source_image(
+                        full_image=full_image,
+                        bbox=item.get("bbox"),
+                        garment_type=str(mapped_type or ""),
+                        total_items=len(items),
+                        detector_mask=item.get("_mask_obj"),
+                    )
+                    preview = preview_plan.image.convert("RGB")
+                    pub["preview_crop_bbox"] = [int(v) for v in preview_plan.extract_bbox]
+                    pub["preview_geometry_source"] = str(preview_plan.geometry_source)
+                    pub["extract_crop_bbox"] = [int(v) for v in preview_plan.extract_bbox]
+                    pub["extract_crop_mode"] = str(preview_plan.crop_mode)
         except Exception:
             item_img = item.get("_image_obj")
             if item_img is not None:

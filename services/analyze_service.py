@@ -82,6 +82,7 @@ ANALYZE_QWEN_TYPE_PROMPTS = {
 ANALYZE_QWEN_DEFAULT_STEPS = 14
 ANALYZE_QWEN_DEFAULT_SEED = 123
 ANALYZE_QWEN_MAX_INPUT_EDGE = 512
+ANALYZE_QWEN_MIN_INPUT_LONGEST_EDGE = 768
 ANALYZE_QWEN_MAX_OUTPUT_EDGE = 768
 ANALYZE_QWEN_OUTPUT_ASPECT_RATIO = "2:3"
 
@@ -222,17 +223,10 @@ class AnalyzeService:
                 garment_type: str,
                 all_candidates: Optional[list[dict]] = None,
             ) -> list[dict]:
-                bbox = selected_candidate.get("bbox") or [0, 0, full_image.width, full_image.height]
-                x0, y0, x1, y1 = [int(v) for v in bbox]
-                x0 = max(0, min(x0, full_image.width - 1))
-                y0 = max(0, min(y0, full_image.height - 1))
-                x1 = max(x0 + 1, min(x1, full_image.width))
-                y1 = max(y0 + 1, min(y1, full_image.height))
-                return [{
-                    "name": "detector_bbox",
-                    "bbox": [x0, y0, x1, y1],
-                    "image": full_image.crop((x0, y0, x1, y1)).convert("RGB"),
-                }]
+                # Force selection previews to reuse the extraction crop plan
+                # (same padded geometry) via prepare_extract_source_image fallback.
+                _ = (full_image, selected_candidate, garment_type, all_candidates)
+                return []
 
             # Helper functions for extraction
             def _prepare_extract_source_image(
@@ -289,6 +283,20 @@ class AnalyzeService:
                 source_image = kwargs.get("source_image")
                 if source_image is None:
                     raise RuntimeError("source_image is required for extraction")
+                source_image = source_image.convert("RGB")
+
+                # Keep Qwen input consistent for small crops:
+                # if longest edge < 768px, upscale proportionally with Lanczos.
+                longest_edge = max(source_image.width, source_image.height)
+                if longest_edge < ANALYZE_QWEN_MIN_INPUT_LONGEST_EDGE:
+                    ratio = float(ANALYZE_QWEN_MIN_INPUT_LONGEST_EDGE) / float(max(1, longest_edge))
+                    target_size = (
+                        max(1, int(round(source_image.width * ratio))),
+                        max(1, int(round(source_image.height * ratio))),
+                    )
+                    resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+                    source_image = source_image.resize(target_size, resampling)
+                qwen_input_edge = int(max(source_image.width, source_image.height))
 
                 selected_type = normalize_garment_type(str(kwargs.get("garment_type") or "")) or "top"
                 qwen_prompt = ANALYZE_QWEN_TYPE_PROMPTS.get(selected_type, ANALYZE_QWEN_TYPE_PROMPTS["top"])
@@ -301,7 +309,7 @@ class AnalyzeService:
                     negative_prompt="",
                     negative_prompt_alias=None,
                     max_input_edge=ANALYZE_QWEN_MAX_INPUT_EDGE,
-                    max_input_edge_alias=None,
+                    max_input_edge_alias=qwen_input_edge,
                     output_max_edge=ANALYZE_QWEN_MAX_OUTPUT_EDGE,
                     output_max_edge_alias=None,
                     output_aspect_ratio=ANALYZE_QWEN_OUTPUT_ASPECT_RATIO,
@@ -452,6 +460,7 @@ class AnalyzeService:
                 analyze_caption_mode=str(getattr(main_mod, "ANALYZE_CAPTION_MODE", self.config.caption_mode)),
                 analyze_primary_type_with_florence=bool(getattr(main_mod, "ANALYZE_PRIMARY_TYPE_WITH_FLORENCE", self.config.primary_type_with_florence)),
                 analyze_auto_select_multi_dress=bool(getattr(main_mod, "ANALYZE_AUTO_SELECT_MULTI_DRESS", self.config.auto_select_multi_dress)),
+                prepare_extract_source_image=_prepare_extract_source_image,
             )
             if detection_response is not None:
                 return detection_response

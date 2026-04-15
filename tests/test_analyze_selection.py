@@ -2,12 +2,14 @@ import io
 import json
 import re
 import unittest
+import base64
 from typing import Any, Dict, List, Optional
 
 from fastapi.testclient import TestClient
 from PIL import Image
 
 from ai import main as api_main
+from core import qwen_extract_outfit_service as qwen_service_mod
 
 
 def _png_bytes(color: tuple[int, int, int], size: tuple[int, int] = (128, 192)) -> bytes:
@@ -86,6 +88,8 @@ class _AnalyzePatchContext:
         self.orig_max_file = api_main.ANALYZE_MAX_FILE_BYTES
         self.orig_collapse_same_type = api_main.ANALYZE_COLLAPSE_SAME_TYPE
         self.orig_collapse_same_type_iou = api_main.ANALYZE_COLLAPSE_SAME_TYPE_MIN_IOU
+        self.orig_qwen_execute = qwen_service_mod.execute_qwen_extract_outfit_request
+        self.orig_upload_or_raise = getattr(api_main, "_upload_or_raise", None)
 
     def __enter__(self):
         def fake_detect_candidates(img: Image.Image, requested_type: Optional[str] = None, threshold: Optional[float] = None) -> List[Any]:
@@ -150,6 +154,42 @@ class _AnalyzePatchContext:
         api_main.ANALYZE_MAX_FILE_BYTES = 3 * 1024 * 1024
         api_main.ANALYZE_COLLAPSE_SAME_TYPE = False
         api_main.ANALYZE_COLLAPSE_SAME_TYPE_MIN_IOU = 0.85
+
+        def fake_qwen_execute(
+            *,
+            request,
+            source_image,
+            runner,
+            minicpm_runner,
+            upload_image_fn=None,
+            output_dir="/tmp",
+        ):
+            del request, runner, minicpm_runner, upload_image_fn, output_dir
+            out = Image.new("RGB", (128, 192), (220, 180, 140))
+            out_buf = io.BytesIO()
+            out.save(out_buf, format="PNG")
+            out_bytes = out_buf.getvalue()
+            return {
+                "output_url": "",
+                "local_path": "",
+                "image_base64": base64.b64encode(out_bytes).decode("ascii"),
+                "promptDescription": "mock structured garment prompt",
+                "promptDescriptionSource": "test",
+                "garmentMetadata": {"schema_version": "garment_metadata.v1"},
+                "promptElapsedSeconds": 0.0,
+                "promptFallbackUsed": False,
+                "minicpmElapsedSeconds": 0.0,
+                "qwenElapsedSeconds": 0.0,
+                "totalElapsedSeconds": 0.0,
+                "metadata": {
+                    "input_size": {"width": int(source_image.width), "height": int(source_image.height)},
+                    "output_size": {"width": 128, "height": 192},
+                },
+            }
+
+        qwen_service_mod.execute_qwen_extract_outfit_request = fake_qwen_execute
+        if self.orig_upload_or_raise is not None:
+            api_main._upload_or_raise = lambda _bytes: "https://example.local/extracted.png"
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -176,6 +216,9 @@ class _AnalyzePatchContext:
         api_main.ANALYZE_MAX_FILE_BYTES = self.orig_max_file
         api_main.ANALYZE_COLLAPSE_SAME_TYPE = self.orig_collapse_same_type
         api_main.ANALYZE_COLLAPSE_SAME_TYPE_MIN_IOU = self.orig_collapse_same_type_iou
+        qwen_service_mod.execute_qwen_extract_outfit_request = self.orig_qwen_execute
+        if self.orig_upload_or_raise is not None:
+            api_main._upload_or_raise = self.orig_upload_or_raise
 
 
 class TestAnalyzeSelectionFlow(unittest.TestCase):
@@ -209,7 +252,7 @@ class TestAnalyzeSelectionFlow(unittest.TestCase):
             self.assertIn("item_1", parts)
             self.assertIn("item_2", parts)
 
-    def test_multi_garment_selected_index_returns_success_with_extracted_cloth(self):
+    def test_multi_garment_selected_index_keeps_selection_required(self):
         with _AnalyzePatchContext(crop_count=2):
             resp = self.client.post(
                 "/analyze",
@@ -217,17 +260,13 @@ class TestAnalyzeSelectionFlow(unittest.TestCase):
                 data={"selected_index": "2"},
                 headers=self.headers,
             )
-            self.assertEqual(resp.status_code, 200)
+            self.assertEqual(resp.status_code, 400)
 
             parts = _parse_multipart_response(resp)
             metadata = json.loads(parts["metadata"]["bytes"].decode("utf-8"))
             data = metadata.get("data", {})
-
-            self.assertEqual(data.get("result"), "ACCEPTED")
-            self.assertIn("SINGLE_ITEM", data.get("reason_codes", []))
-            self.assertIn("VTON_ONLY_PIPELINE", data.get("reason_codes", []))
-            self.assertIn("extracted_cloth", parts)
-            self.assertGreater(len(parts["extracted_cloth"]["bytes"]), 0)
+            self.assertTrue(bool(data.get("selection_required")))
+            self.assertIn("MULTI_ITEM_SELECTION_REQUIRED", data.get("reason_codes", []))
 
     def test_multi_garment_type_hint_auto_selects_and_flags_type_forced(self):
         with _AnalyzePatchContext(crop_count=2, labels=["top", "bottom"]):
@@ -276,7 +315,7 @@ class TestAnalyzeSelectionFlow(unittest.TestCase):
             self.assertEqual(data.get("total_garments_found"), 2)
             self.assertEqual(len(data.get("item_breakdown", [])), 2)
 
-    def test_requested_type_auto_select_prefers_best_geometry_match_not_first_match(self):
+    def test_requested_type_skips_detection_and_uses_full_image_bbox(self):
         bboxes = [
             [8, 82, 86, 150],
             [8, 12, 86, 88],
@@ -292,7 +331,43 @@ class TestAnalyzeSelectionFlow(unittest.TestCase):
             parts = _parse_multipart_response(resp)
             metadata = json.loads(parts["metadata"]["bytes"].decode("utf-8"))
             selected_item = metadata.get("data", {}).get("selected_item", {})
-            self.assertEqual(selected_item.get("bbox"), bboxes[1])
+            detector_bbox = selected_item.get("detector_bbox") or selected_item.get("bbox")
+            self.assertEqual(detector_bbox, [0, 0, 128, 192])
+            self.assertEqual(selected_item.get("type"), "top")
+
+    def test_requested_type_directly_controls_selected_type(self):
+        with _AnalyzePatchContext(crop_count=1, labels=["top"], bboxes=[[10, 10, 110, 150]]):
+            resp = self.client.post(
+                "/analyze",
+                files={"image": ("single.png", self.file_bytes, "image/png")},
+                data={"type": "bottom"},
+                headers=self.headers,
+            )
+            self.assertEqual(resp.status_code, 200)
+            parts = _parse_multipart_response(resp)
+            metadata = json.loads(parts["metadata"]["bytes"].decode("utf-8"))
+            data = metadata.get("data", {})
+            reason_codes = data.get("reason_codes", [])
+            self.assertNotIn("REQUESTED_TYPE_NOT_FOUND", reason_codes)
+            selected_item = data.get("selected_item", {})
+            self.assertEqual(selected_item.get("type"), "bottom")
+
+    def test_small_selected_crop_is_upscaled_to_min_768_before_qwen(self):
+        with _AnalyzePatchContext(crop_count=1, labels=["top"], bboxes=[[10, 12, 90, 88]]):
+            resp = self.client.post(
+                "/analyze",
+                files={"image": ("single.png", self.file_bytes, "image/png")},
+                data={"type": "top"},
+                headers=self.headers,
+            )
+            self.assertEqual(resp.status_code, 200)
+            parts = _parse_multipart_response(resp)
+            metadata = json.loads(parts["metadata"]["bytes"].decode("utf-8"))
+            selected_item = metadata.get("data", {}).get("selected_item", {})
+            extraction = selected_item.get("extraction", {})
+            input_size = extraction.get("input_size", {})
+            longest = max(int(input_size.get("width", 0)), int(input_size.get("height", 0)))
+            self.assertEqual(longest, 768)
 
 
 if __name__ == "__main__":

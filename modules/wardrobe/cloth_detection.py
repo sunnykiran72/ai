@@ -83,7 +83,7 @@ class ClothDetectionConfig:
     min_upper_center_ratio_for_bottom: float = 0.42
     max_lower_center_ratio_for_top: float = 0.72
     min_height_ratio_for_dress: float = 0.44
-    min_crop_edge_px: int = 32
+    min_crop_edge_px: int = 100
     pair_boundary_gap_px: int = 18
     top_bottom_boundary_blend: float = 0.50
 
@@ -179,9 +179,8 @@ class ClothDetector:
             return requested, "requested_type_match"
         if detector_type in {"top", "bottom", "dress", "outer"}:
             return detector_type, "detector"
-        if requested in {"top", "bottom", "dress", "outer"}:
-            return requested, "requested_type_fallback"
-        return "dress", "fallback_uncertain_garment"
+        # Strict mode: do not infer fallback types from requested_type or defaults.
+        return "", "detector_unmapped"
 
     def _geometry_conflict(self, item: Dict[str, object], image_height: int) -> bool:
         bbox = item.get("bbox") or [0, 0, 0, 0]
@@ -349,6 +348,8 @@ class ClothDetector:
 
             resolved_type, type_source = self._resolve_type(det.get("label"), requested_type)
             if resolved_type == "non_garment":
+                continue
+            if resolved_type not in {"top", "bottom", "dress", "outer"}:
                 continue
             crop_img = image.crop(tuple(bbox))
             metrics = self._bbox_metrics(bbox, image)

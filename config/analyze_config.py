@@ -111,7 +111,7 @@ class AnalyzeConfig(BaseModel):
     prompt_from_extracted: bool = Field(default=True, description="Generate prompt from extracted image")
     extract_parser_only: bool = Field(default=True, description="Use parser-only extraction mode")
     extract_force_bbox_crop: bool = Field(default=True, description="Force bbox crop in extraction")
-    extract_crop_pad_ratio_x: float = Field(default=0.30, description="Horizontal padding ratio (left/right) for extraction crops")
+    extract_crop_pad_ratio_x: float = Field(default=0.35, description="Horizontal padding ratio (left/right) for extraction crops")
     extract_crop_pad_ratio_y: float = Field(default=0.10, description="Vertical padding ratio (top/bottom) for extraction crops")
     extract_crop_pad_ratio: float = Field(default=0.08, description="Padding ratio for extraction crops")
     extract_crop_pad_ratio_dress: float = Field(default=0.15, description="Padding ratio for dress extraction")
@@ -329,7 +329,7 @@ class AnalyzeConfig(BaseModel):
             prompt_from_extracted=env_bool("ANALYZE_PROMPT_FROM_EXTRACTED", "1"),
             extract_parser_only=env_bool("ANALYZE_EXTRACT_PARSER_ONLY", "1"),
             extract_force_bbox_crop=env_bool("ANALYZE_EXTRACT_FORCE_BBOX_CROP", "1"),
-            extract_crop_pad_ratio_x=env_float("ANALYZE_EXTRACT_CROP_PAD_RATIO_X", 0.30),
+            extract_crop_pad_ratio_x=env_float("ANALYZE_EXTRACT_CROP_PAD_RATIO_X", 0.35),
             extract_crop_pad_ratio_y=env_float("ANALYZE_EXTRACT_CROP_PAD_RATIO_Y", 0.10),
             extract_crop_pad_ratio=env_float("ANALYZE_EXTRACT_CROP_PAD_RATIO", 0.08),
             extract_crop_pad_ratio_dress=env_float("ANALYZE_EXTRACT_CROP_PAD_RATIO_DRESS", 0.15),
