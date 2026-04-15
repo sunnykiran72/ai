@@ -12,6 +12,8 @@ Responsibilities:
 """
 
 from typing import Optional, Dict
+import logging
+import os
 import threading
 
 from config import Config
@@ -33,6 +35,8 @@ from modules.wardrobe.yolo_cropper import YoloCropper
 from modules.wardrobe.human_parser import HumanParser
 from modules.wardrobe.cloth_detection import ClothDetector
 from modules.vto.board_builder import BoardBuilder
+
+logger = logging.getLogger("glamify-ai")
 
 
 class AIEngine:
@@ -162,9 +166,21 @@ class AIEngine:
             except Exception as exc:
                 logger.warning("Analyze preload failed for %s: %s", label, exc)
 
-        self.yolo_runner.ensure_ready()
-        if self.parser_runner:
-            self.parser_runner.ensure_ready()
+        # Canonical analyze detection stack now relies on fashion-object-detection.
+        _safe_preload("fashion_object_detection", self.fashion_detection_runner.ensure_ready)
+
+        # Keep legacy YOLO parser stack opt-in only (off by default to save VRAM).
+        preload_legacy_yolo = str(os.getenv("ANALYZE_PRELOAD_LEGACY_YOLO", "0")).strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+        preload_human_parser = str(os.getenv("ANALYZE_PRELOAD_HUMAN_PARSER", "0")).strip().lower() in {
+            "1", "true", "yes", "on"
+        }
+        if preload_legacy_yolo:
+            _safe_preload("yolo_legacy", self.yolo_runner.ensure_ready)
+        if self.parser_runner and preload_human_parser:
+            _safe_preload("human_parser", self.parser_runner.ensure_ready)
+
         if self.config.analyze.preload_florence:
             _safe_preload("florence", self.florence._ensure_loaded)
         if getattr(self.config.analyze, "preload_minicpm", False):

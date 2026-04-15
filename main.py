@@ -52,6 +52,7 @@ from routes import (
     bulk_tryon_gallery_router,
     qwen_extract_outfit_router,
     upscaler_test_router,
+    analyze_detection_lab_router,
 )
 
 # Shared utilities
@@ -138,6 +139,7 @@ app.include_router(tryon_lora_multi_lab_router, tags=["tryon-lora-multi-lab"])
 app.include_router(bulk_tryon_gallery_router, tags=["bulk-tryon-gallery"])
 app.include_router(qwen_extract_outfit_router, tags=["qwen-extract-outfit"])
 app.include_router(upscaler_test_router, tags=["upscaler-test"])
+app.include_router(analyze_detection_lab_router, tags=["analyze-detection-lab"])
 
 # Dependency injection helpers
 def get_tryon_service() -> TryonService:
@@ -170,27 +172,36 @@ async def startup_event():
     """Initialize application on startup."""
     logger.info("Starting Glamify AI Engine...")
     
+    preload_analyze_enabled = str(os.getenv("STARTUP_PRELOAD_ANALYZE", "1")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+    preload_vto_enabled = str(os.getenv("STARTUP_PRELOAD_VTO", "0")).strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
     # Preload models if configured
     if config.app.startup_background_preload:
         logger.info("Starting background model preloading...")
         # Analyze requests are sensitive to lazy model loading. Preload the
         # full analyze stack synchronously so the first request does not pay
         # model initialization latency.
-        try:
-            if hasattr(engine, "ensure_analyze_ready"):
-                await asyncio.to_thread(engine.ensure_analyze_ready)
-                logger.info("Analyze stack preloaded successfully.")
-        except Exception as exc:
-            logger.warning("Analyze preload failed: %s", exc)
-
-        async def _background_preload() -> None:
+        if preload_analyze_enabled:
             try:
-                if hasattr(engine, "ensure_vto_ready"):
-                    await asyncio.to_thread(engine.ensure_vto_ready)
+                if hasattr(engine, "ensure_analyze_ready"):
+                    await asyncio.to_thread(engine.ensure_analyze_ready)
+                    logger.info("Analyze stack preloaded successfully.")
             except Exception as exc:
-                logger.warning("VTO background preload failed: %s", exc)
+                logger.warning("Analyze preload failed: %s", exc)
 
-        asyncio.create_task(_background_preload())
+        if preload_vto_enabled:
+            async def _background_preload() -> None:
+                try:
+                    if hasattr(engine, "ensure_vto_ready"):
+                        await asyncio.to_thread(engine.ensure_vto_ready)
+                except Exception as exc:
+                    logger.warning("VTO background preload failed: %s", exc)
+
+            asyncio.create_task(_background_preload())
 
     # Optional Qwen extract-outfit preload/warmup.
     # Controlled via env flags to avoid forcing heavy startup work.
