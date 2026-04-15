@@ -58,9 +58,11 @@ class GFPGANRunner:
 
     @property
     def is_available(self) -> bool:
+        _ensure_torchvision_functional_tensor_compat()
         try:
             from gfpgan.utils import GFPGANer  # noqa: F401
-        except Exception:
+        except Exception as exc:
+            logger.debug("GFPGAN unavailable: %s", exc)
             return False
         return True
 

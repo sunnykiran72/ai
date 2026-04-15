@@ -1729,6 +1729,26 @@ def _prepare_image_bytes(
     }
 
 
+def _build_passthrough_jpeg_meta(
+    source_bytes: bytes,
+    *,
+    max_bytes: int,
+) -> Dict[str, Any]:
+    return {
+        "format": "jpg",
+        "bytes": len(source_bytes),
+        "max_bytes": int(max_bytes),
+        "within_budget": len(source_bytes) <= int(max_bytes),
+        "quality": None,
+        "quality_start": None,
+        "quality_floor": None,
+        "subsampling": "unknown",
+        "optimize": None,
+        "progressive": None,
+        "backend": "passthrough",
+    }
+
+
 def _build_prepared_image_bundle(
     image: Image.Image,
     *,
@@ -1741,6 +1761,9 @@ def _build_prepared_image_bundle(
     jpeg_quality: int = DEFAULT_USER_PREP_JPEG_QUALITY,
     jpeg_min_quality: int = DEFAULT_USER_PREP_JPEG_MIN_QUALITY,
     resize_method: str = DEFAULT_USER_PREP_RESIZE_METHOD,
+    source_upload_payload: Optional[bytes] = None,
+    source_upload_format: str = "",
+    source_exif_orientation: Optional[int] = 1,
 ) -> PreparedImageBundle:
     resolved_resize_method = normalize_prepare_resize_method(resize_method)
     normalized = ImageOps.exif_transpose(image).convert("RGB")
@@ -1752,6 +1775,10 @@ def _build_prepared_image_bundle(
     if keep_long_edge_min > target_height:
         keep_long_edge_min = target_height
     max_long_edge = max(512, int(max_long_edge))
+    source_format_norm = str(source_upload_format or "").strip().upper()
+    source_is_jpeg = source_format_norm in {"JPG", "JPEG"}
+    orientation_value = int(source_exif_orientation or 1)
+    orientation_fixed = orientation_value != 1
     actions: List[str] = []
     upscale_meta: Dict[str, Any] = {
         "attempted": False,
@@ -1798,14 +1825,36 @@ def _build_prepared_image_bundle(
         if working.size != before_size:
             actions.append("long_edge_capped")
 
-    image_bytes, jpeg_meta = _prepare_image_bytes(
-        working,
-        max_bytes=max_output_bytes,
-        quality=jpeg_quality,
-        min_quality=jpeg_min_quality,
-        resize_method=resolved_resize_method,
+    resize_action = "none"
+    if "resized_up" in actions:
+        resize_action = "upscale"
+    elif "resized_down" in actions or "long_edge_capped" in actions:
+        resize_action = "downscale"
+
+    passthrough_eligible = (
+        isinstance(source_upload_payload, (bytes, bytearray))
+        and len(source_upload_payload or b"") > 0
+        and source_is_jpeg
+        and not orientation_fixed
+        and resize_action == "none"
+        and len(source_upload_payload or b"") <= int(max_output_bytes)
     )
-    actions.append("jpeg_encoded")
+
+    if passthrough_eligible:
+        image_bytes = bytes(source_upload_payload or b"")
+        jpeg_meta = _build_passthrough_jpeg_meta(image_bytes, max_bytes=max_output_bytes)
+        actions.append("jpeg_passthrough")
+        jpeg_reencoded = False
+    else:
+        image_bytes, jpeg_meta = _prepare_image_bytes(
+            working,
+            max_bytes=max_output_bytes,
+            quality=jpeg_quality,
+            min_quality=jpeg_min_quality,
+            resize_method=resolved_resize_method,
+        )
+        actions.append("jpeg_encoded")
+        jpeg_reencoded = True
 
     prepared_mode = "original_full_frame"
     if "ai_upscaled" in actions:
@@ -1838,6 +1887,10 @@ def _build_prepared_image_bundle(
                     "supported": list(ALLOWED_USER_PREP_RESIZE_METHODS),
                 },
                 "upscale": upscale_meta,
+                "passthrough_used": bool(passthrough_eligible),
+                "orientation_fixed": bool(orientation_fixed),
+                "resize_action": resize_action,
+                "jpeg_reencoded": bool(jpeg_reencoded),
                 "jpeg": jpeg_meta,
             },
         },
@@ -1873,6 +1926,9 @@ def prepare_user_image_core(
     jpeg_quality: int = DEFAULT_USER_PREP_JPEG_QUALITY,
     jpeg_min_quality: int = DEFAULT_USER_PREP_JPEG_MIN_QUALITY,
     resize_method: str = DEFAULT_USER_PREP_RESIZE_METHOD,
+    source_upload_payload: Optional[bytes] = None,
+    source_upload_format: str = "",
+    source_exif_orientation: Optional[int] = 1,
     blur_check_enabled: bool = False,
     blur_min_focus_score: float = 22.0,
     blur_focus_max_edge: int = 1024,
@@ -2025,6 +2081,9 @@ def prepare_user_image_core(
             jpeg_quality=jpeg_quality,
             jpeg_min_quality=jpeg_min_quality,
             resize_method=resize_method,
+            source_upload_payload=source_upload_payload,
+            source_upload_format=source_upload_format,
+            source_exif_orientation=source_exif_orientation,
         )
     except ValueError as exc:
         return _error_payload(
@@ -2120,8 +2179,16 @@ async def prepare_user_image_pipeline(
     except Exception as exc:
         return _error_payload("upload_read_failed", f"Failed to read upload: {exc}", status_code=422)
 
+    source_upload_format = ""
+    source_exif_orientation = 1
     try:
-        image = ImageOps.exif_transpose(Image.open(io.BytesIO(payload))).convert("RGB")
+        raw = Image.open(io.BytesIO(payload))
+        source_upload_format = str(getattr(raw, "format", "") or "").strip().upper()
+        try:
+            source_exif_orientation = int((raw.getexif() or {}).get(274, 1) or 1)
+        except Exception:
+            source_exif_orientation = 1
+        image = ImageOps.exif_transpose(raw).convert("RGB")
     except UnidentifiedImageError:
         return _error_payload("invalid_image", "The uploaded file is not a valid image.", status_code=422)
     except Exception as exc:
@@ -2136,6 +2203,9 @@ async def prepare_user_image_pipeline(
         prepared_image_fn=prepared_image_fn,
         upload_fn=upload_fn,
         source_upload_bytes=len(payload),
+        source_upload_payload=payload,
+        source_upload_format=source_upload_format,
+        source_exif_orientation=source_exif_orientation,
         min_input_height=min_input_height,
         target_height=target_height,
         keep_long_edge_min=keep_long_edge_min,

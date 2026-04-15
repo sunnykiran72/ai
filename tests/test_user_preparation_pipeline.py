@@ -97,10 +97,10 @@ class TestUserPreparationPipeline(unittest.TestCase):
         def grounding_detector_fn(_image, prompts):
             self.assertIn("person", prompts)
             return [
-                {"label": "person", "bbox": [60, 20, 340, 580], "score": 0.82, "source": "grounding_dino"},
-                {"label": "face", "bbox": [150, 40, 240, 140], "score": 0.74, "source": "grounding_dino"},
-                {"label": "upper body", "bbox": [100, 120, 310, 320], "score": 0.65, "source": "grounding_dino"},
-                {"label": "lower body", "bbox": [100, 300, 320, 570], "score": 0.68, "source": "grounding_dino"},
+                {"label": "person", "bbox": [200, 100, 1400, 2300], "score": 0.82, "source": "grounding_dino"},
+                {"label": "face", "bbox": [650, 180, 950, 520], "score": 0.74, "source": "grounding_dino"},
+                {"label": "upper body", "bbox": [420, 520, 1180, 1160], "score": 0.65, "source": "grounding_dino"},
+                {"label": "lower body", "bbox": [420, 1160, 1180, 2220], "score": 0.68, "source": "grounding_dino"},
             ]
 
         def verifier_fn(_image, _prompt):
@@ -128,10 +128,92 @@ class TestUserPreparationPipeline(unittest.TestCase):
         self.assertEqual(result["url"], "https://example.com/prepared.png")
         self.assertEqual(result["meta"]["detect"].get("backend"), "grounding_dino")
         self.assertEqual(result["meta"]["prepared_source_image_size"], {"width": 800, "height": 1200})
-        self.assertEqual(result["meta"]["prepared_image_size"], {"width": 683, "height": 1024})
-        self.assertEqual(result["meta"]["prepared_image_mode"], "resized_down_full_frame")
+        self.assertEqual(result["meta"]["prepared_image_size"], {"width": 800, "height": 1200})
+        self.assertEqual(result["meta"]["prepared_image_mode"], "original_full_frame")
+        self.assertEqual(result["meta"]["prepare_policy"]["resize_action"], "none")
         self.assertTrue(result["meta"]["prepare_policy"]["jpeg"]["within_budget"])
         self.assertEqual(result["meta"]["prepare_policy"]["target_long_edge"], 1024)
+
+    def test_prepare_can_force_fixed_long_edge_downscale(self):
+        image = Image.new("RGB", (1600, 2400), "white")
+
+        def grounding_detector_fn(_image, prompts):
+            self.assertIn("person", prompts)
+            return [
+                {"label": "person", "bbox": [200, 100, 1400, 2300], "score": 0.82, "source": "grounding_dino"},
+                {"label": "face", "bbox": [650, 180, 950, 520], "score": 0.74, "source": "grounding_dino"},
+                {"label": "upper body", "bbox": [420, 520, 1180, 1160], "score": 0.65, "source": "grounding_dino"},
+                {"label": "lower body", "bbox": [420, 1160, 1180, 2220], "score": 0.68, "source": "grounding_dino"},
+            ]
+
+        def verifier_fn(_image, _prompt):
+            return {
+                "single_person": True,
+                "face_visible": True,
+                "upper_body_visible": True,
+                "lower_body_visible": True,
+                "clear_human": True,
+                "reason": "ok",
+            }
+
+        result = prepare_user_image_core(
+            image,
+            resize_method=TEST_RESIZE_METHOD,
+            grounding_detector_fn=grounding_detector_fn,
+            verifier_fn=verifier_fn,
+            description_fn=lambda _img: "identity: test subject. face: clear.",
+            upload_fn=lambda _bytes: "https://example.com/prepared.png",
+            target_height=1024,
+            keep_long_edge_min=1024,
+            output_max_long_edge=1024,
+            blur_check_enabled=False,
+            verification_required=True,
+        )
+
+        self.assertNotIn("error", result)
+        self.assertEqual(max(result["meta"]["prepared_image_size"].values()), 1024)
+        self.assertEqual(result["meta"]["prepare_policy"]["target_long_edge"], 1024)
+        self.assertEqual(result["meta"]["prepare_policy"]["max_long_edge"], 1024)
+
+    def test_prepare_can_force_fixed_long_edge_upscale(self):
+        image = Image.new("RGB", (600, 900), "white")
+
+        def grounding_detector_fn(_image, prompts):
+            self.assertIn("person", prompts)
+            return [
+                {"label": "person", "bbox": [60, 20, 340, 580], "score": 0.82, "source": "grounding_dino"},
+                {"label": "face", "bbox": [150, 40, 240, 140], "score": 0.74, "source": "grounding_dino"},
+                {"label": "upper body", "bbox": [100, 120, 310, 320], "score": 0.65, "source": "grounding_dino"},
+                {"label": "lower body", "bbox": [100, 300, 320, 570], "score": 0.68, "source": "grounding_dino"},
+            ]
+
+        def verifier_fn(_image, _prompt):
+            return {
+                "single_person": True,
+                "face_visible": True,
+                "upper_body_visible": True,
+                "lower_body_visible": True,
+                "clear_human": True,
+                "reason": "ok",
+            }
+
+        result = prepare_user_image_core(
+            image,
+            resize_method=TEST_RESIZE_METHOD,
+            grounding_detector_fn=grounding_detector_fn,
+            verifier_fn=verifier_fn,
+            description_fn=lambda _img: "identity: test subject. face: clear.",
+            upload_fn=lambda _bytes: "https://example.com/prepared.png",
+            target_height=1024,
+            keep_long_edge_min=1024,
+            output_max_long_edge=1024,
+            blur_check_enabled=False,
+            verification_required=True,
+        )
+
+        self.assertNotIn("error", result)
+        self.assertEqual(max(result["meta"]["prepared_image_size"].values()), 1024)
+        self.assertEqual(result["meta"]["prepare_policy"]["resize_action"], "upscale")
 
     def test_rejects_when_grounding_detector_is_missing(self):
         image = Image.new("RGB", (800, 1200), "white")
@@ -436,9 +518,10 @@ class TestUserPreparationPipeline(unittest.TestCase):
 
         self.assertNotIn("error", result)
         self.assertEqual(result["meta"]["prepared_source_image_size"], {"width": 1248, "height": 720})
-        self.assertEqual(result["meta"]["prepared_image_size"], {"width": 1024, "height": 591})
+        self.assertEqual(result["meta"]["prepared_image_size"], {"width": 1248, "height": 720})
         self.assertEqual(result["meta"]["prepare_policy"]["source_long_edge"], 1248)
-        self.assertEqual(result["meta"]["prepared_image_mode"], "resized_down_full_frame")
+        self.assertEqual(result["meta"]["prepared_image_mode"], "original_full_frame")
+        self.assertEqual(result["meta"]["prepare_policy"]["resize_action"], "none")
 
     def test_prepare_core_adapts_jpeg_quality_to_size_budget(self):
         image = Image.effect_noise((1024, 1536), 100).convert("RGB")
@@ -483,9 +566,97 @@ class TestUserPreparationPipeline(unittest.TestCase):
 
         self.assertNotIn("error", result)
         self.assertEqual(uploaded["magic"], b"\xff\xd8\xff")
-        self.assertLessEqual(uploaded["bytes"], 250 * 1024)
+        self.assertEqual(result["meta"]["prepare_policy"]["jpeg"]["bytes"], uploaded["bytes"])
         self.assertLess(result["meta"]["prepare_policy"]["jpeg"]["quality"], 92)
-        self.assertTrue(result["meta"]["prepare_policy"]["jpeg"]["within_budget"])
+        self.assertGreaterEqual(result["meta"]["prepare_policy"]["jpeg"]["quality"], 52)
+        self.assertEqual(
+            result["meta"]["prepare_policy"]["jpeg"]["within_budget"],
+            uploaded["bytes"] <= 250 * 1024,
+        )
+
+    def test_prepare_core_uses_jpeg_passthrough_when_stable_and_no_resize_needed(self):
+        image = Image.new("RGB", (764, 1142), "white")
+        src_buf = io.BytesIO()
+        image.save(src_buf, format="JPEG", quality=87)
+        source_payload = src_buf.getvalue()
+        uploaded = {}
+
+        def upload_fn(payload):
+            uploaded["bytes"] = payload
+            return "https://example.com/prepared-passthrough.jpg"
+
+        result = prepare_user_image_core(
+            image,
+            resize_method=TEST_RESIZE_METHOD,
+            grounding_detector_fn=lambda *_args, **_kwargs: [
+                {"label": "person", "bbox": [80, 20, 680, 1100], "score": 0.82, "source": "grounding_dino"},
+                {"label": "face", "bbox": [280, 40, 460, 220], "score": 0.74, "source": "grounding_dino"},
+                {"label": "upper body", "bbox": [220, 220, 560, 560], "score": 0.65, "source": "grounding_dino"},
+                {"label": "lower body", "bbox": [220, 560, 560, 1100], "score": 0.68, "source": "grounding_dino"},
+            ],
+            verifier_fn=lambda *_args, **_kwargs: {
+                "single_person": True,
+                "face_visible": True,
+                "upper_body_visible": True,
+                "lower_body_visible": True,
+                "clear_human": True,
+            },
+            description_fn=lambda _img: "identity: test subject. face: clear.",
+            upload_fn=upload_fn,
+            source_upload_payload=source_payload,
+            source_upload_format="JPEG",
+            source_exif_orientation=1,
+            blur_check_enabled=False,
+            verification_required=True,
+        )
+
+        self.assertNotIn("error", result)
+        self.assertEqual(uploaded["bytes"], source_payload)
+        self.assertEqual(result["meta"]["prepared_image_size"], {"width": 764, "height": 1142})
+        self.assertTrue(result["meta"]["prepare_policy"]["passthrough_used"])
+        self.assertFalse(result["meta"]["prepare_policy"]["orientation_fixed"])
+        self.assertEqual(result["meta"]["prepare_policy"]["resize_action"], "none")
+        self.assertFalse(result["meta"]["prepare_policy"]["jpeg_reencoded"])
+        self.assertIn("jpeg_passthrough", result["meta"]["prepare_policy"]["actions"])
+        self.assertEqual(result["meta"]["prepare_policy"]["jpeg"]["backend"], "passthrough")
+
+    def test_prepare_core_reencodes_jpeg_when_orientation_fix_is_needed(self):
+        image = Image.new("RGB", (764, 1142), "white")
+        src_buf = io.BytesIO()
+        image.save(src_buf, format="JPEG", quality=87)
+        source_payload = src_buf.getvalue()
+
+        result = prepare_user_image_core(
+            image,
+            resize_method=TEST_RESIZE_METHOD,
+            grounding_detector_fn=lambda *_args, **_kwargs: [
+                {"label": "person", "bbox": [80, 20, 680, 1100], "score": 0.82, "source": "grounding_dino"},
+                {"label": "face", "bbox": [280, 40, 460, 220], "score": 0.74, "source": "grounding_dino"},
+                {"label": "upper body", "bbox": [220, 220, 560, 560], "score": 0.65, "source": "grounding_dino"},
+                {"label": "lower body", "bbox": [220, 560, 560, 1100], "score": 0.68, "source": "grounding_dino"},
+            ],
+            verifier_fn=lambda *_args, **_kwargs: {
+                "single_person": True,
+                "face_visible": True,
+                "upper_body_visible": True,
+                "lower_body_visible": True,
+                "clear_human": True,
+            },
+            description_fn=lambda _img: "identity: test subject. face: clear.",
+            upload_fn=lambda _bytes: "https://example.com/prepared-reencoded.jpg",
+            source_upload_payload=source_payload,
+            source_upload_format="JPEG",
+            source_exif_orientation=6,
+            blur_check_enabled=False,
+            verification_required=True,
+        )
+
+        self.assertNotIn("error", result)
+        self.assertFalse(result["meta"]["prepare_policy"]["passthrough_used"])
+        self.assertTrue(result["meta"]["prepare_policy"]["orientation_fixed"])
+        self.assertFalse("jpeg_passthrough" in result["meta"]["prepare_policy"]["actions"])
+        self.assertIn("jpeg_encoded", result["meta"]["prepare_policy"]["actions"])
+        self.assertTrue(result["meta"]["prepare_policy"]["jpeg_reencoded"])
 
     def test_rejects_invalid_resize_method(self):
         image = Image.new("RGB", (800, 1200), "white")

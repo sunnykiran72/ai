@@ -33,7 +33,6 @@ def get_analyze_service() -> AnalyzeService:
 
 @router.post("/analyze", response_model=AnalyzeResponse)
 @router.post("/analzye", response_model=AnalyzeResponse)  # Typo compatibility
-@router.post("/analayze", response_model=AnalyzeResponse)  # Typo compatibility
 async def analyze_garment_endpoint(
     file: Optional[UploadFile] = File(None),
     image: Optional[UploadFile] = File(None),

@@ -38,6 +38,7 @@ class UserImageService:
         upload,
         authorization: Optional[str] = None,
         resize_method: Optional[str] = None,
+        output_max_edge: Optional[int] = None,
     ):
         """
         Prepare user image.
@@ -54,6 +55,10 @@ class UserImageService:
         realesrgan = getattr(self.engine, "realesrgan", None)
         gfpgan = getattr(self.engine, "gfpgan", None)
         resolved_resize_method = resize_method or self.config.app.user_prep_resize_method
+        resolved_output_max_edge = max(
+            512,
+            int(output_max_edge) if output_max_edge is not None else int(self.config.app.user_prep_target_height),
+        )
 
         def _grounding_detector_fn(image, prompts):
             if grounding_dino is None:
@@ -79,8 +84,8 @@ class UserImageService:
         prepared_image_fn = None
         if realesrgan is not None and bool(self.config.app.user_prep_upscale_enabled):
             def _prepared_image_fn(image):
-                keep_long_edge_min = max(256, int(self.config.app.user_prep_keep_long_edge_min))
-                target_long_edge = max(512, int(self.config.app.user_prep_target_height))
+                keep_long_edge_min = resolved_output_max_edge
+                target_long_edge = resolved_output_max_edge
                 if max(image.size) >= max(keep_long_edge_min, target_long_edge):
                     return image
                 result = image
@@ -112,9 +117,9 @@ class UserImageService:
                 prepared_image_fn=prepared_image_fn,
                 upload_fn=main_mod._upload_or_raise,
                 min_input_height=int(self.config.app.user_prep_min_input_height),
-                target_height=int(self.config.app.user_prep_target_height),
-                keep_long_edge_min=int(self.config.app.user_prep_keep_long_edge_min),
-                output_max_long_edge=int(self.config.app.user_prep_output_max_long_edge),
+                target_height=resolved_output_max_edge,
+                keep_long_edge_min=resolved_output_max_edge,
+                output_max_long_edge=resolved_output_max_edge,
                 output_max_bytes=int(self.config.app.user_prep_output_max_bytes),
                 jpeg_quality=int(self.config.app.user_prep_jpeg_quality),
                 jpeg_min_quality=int(self.config.app.user_prep_jpeg_min_quality),

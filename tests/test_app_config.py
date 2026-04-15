@@ -40,7 +40,7 @@ class TestAppConfigDefaults(unittest.TestCase):
             self.assertFalse(config.wardrobe_progress_include_input_image)
             self.assertEqual(config.user_prep_min_input_height, 768)
             self.assertEqual(config.user_prep_target_height, 1024)
-            self.assertEqual(config.user_prep_output_max_long_edge, 2048)
+            self.assertEqual(config.user_prep_output_max_long_edge, 1024)
             self.assertEqual(config.user_prep_output_max_bytes, 1572864)
             self.assertEqual(config.user_prep_jpeg_quality, 92)
             self.assertEqual(config.user_prep_jpeg_min_quality, 72)

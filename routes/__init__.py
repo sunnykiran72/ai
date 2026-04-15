@@ -34,6 +34,7 @@ from .bulk_tryon_gallery import router as bulk_tryon_gallery_router
 from .qwen_extract_outfit import router as qwen_extract_outfit_router
 from .upscaler_test import router as upscaler_test_router
 from .analyze_detection_lab import router as analyze_detection_lab_router
+from .seedvr2_test import router as seedvr2_test_router
 
 __all__ = [
     "tryon_router",
@@ -47,4 +48,5 @@ __all__ = [
     "qwen_extract_outfit_router",
     "upscaler_test_router",
     "analyze_detection_lab_router",
+    "seedvr2_test_router",
 ]

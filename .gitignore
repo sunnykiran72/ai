@@ -2,7 +2,6 @@
 *.jpg
 *.jpeg
 *.md
-*.md
 asymmetric_dataset/
 lora_failed_images/
 lora_output_images/
@@ -13,14 +12,18 @@ new_dataset/
 .kiro/
 .pytest_cache/
 .qoder/
-tmp_sync/
+# Sync files
 tmp_rank64_ckpt1800
 tmp_rank64_ckpt1800_min
 tmp_rank64_ckpt2200_min
 tmp_validation_preview
-tmp_sync
+tmp_sync/
 tmp_*
 garment_extraction_lora/
 __pycache__/
 debug_outputs/
 debug_comparisons/
+.venv/
+.venv*/
+venv/
+env/

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import logging
 from typing import List
 
@@ -114,7 +115,7 @@ async def tryon_lab_page() -> HTMLResponse:
         garment_description="asymmetrical top with sleeve detail",
         user_description="",
     )
-    html = f"""<!doctype html>
+    html = """<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -353,7 +354,7 @@ async def tryon_lab_page() -> HTMLResponse:
           </div>
           <div>
             <label>Prompt Override (optional; if non-empty, this exact prompt is sent to FLUX)</label>
-            <textarea name="prompt">{default_tryon_prompt}</textarea>
+            <textarea name="prompt">__DEFAULT_TRYON_PROMPT_TEXT__</textarea>
           </div>
           <div class="actions">
             <button class="btn" id="run-btn" type="submit">Run Try-on</button>
@@ -411,7 +412,7 @@ async def tryon_lab_page() -> HTMLResponse:
     const profileDefaults = {{
       tryon: {{ steps: 28, guidance_scale: 2.5, lora_scale: 1.0 }},
     }};
-    const defaultTryonPrompt = { default_tryon_prompt!r };
+    const defaultTryonPrompt = __DEFAULT_TRYON_PROMPT_JSON__;
 
     function buildDefaultPrompt() {{
       return defaultTryonPrompt;
@@ -506,6 +507,8 @@ async def tryon_lab_page() -> HTMLResponse:
 </body>
 </html>
 """
+    html = html.replace("__DEFAULT_TRYON_PROMPT_TEXT__", default_tryon_prompt)
+    html = html.replace("__DEFAULT_TRYON_PROMPT_JSON__", json.dumps(default_tryon_prompt))
     return HTMLResponse(content=html)
 
 

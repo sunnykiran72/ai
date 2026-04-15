@@ -183,7 +183,7 @@ class TryonServiceCanvasTests(unittest.TestCase):
         self.assertEqual(target_types[0], "bottom")
 
     @patch("services.tryon_service.download_image")
-    def test_try_on_defaults_output_max_edge_to_1280(self, mock_download_image):
+    def test_try_on_defaults_output_max_edge_to_1024(self, mock_download_image):
         person_image = Image.new("RGB", (64, 96), "white")
         garment_image = Image.new("RGB", (32, 32), "black")
         mock_download_image.side_effect = [person_image, garment_image]
@@ -213,7 +213,35 @@ class TryonServiceCanvasTests(unittest.TestCase):
 
         self.assertEqual(result["metadata"]["output_size"], [64, 96])
         engine.flux2.run_tryon.assert_called_once()
-        self.assertEqual(engine.flux2.run_tryon.call_args.kwargs["output_max_edge"], 1280)
+        self.assertEqual(engine.flux2.run_tryon.call_args.kwargs["output_max_edge"], 1024)
+
+    @patch("services.tryon_service.download_image")
+    def test_try_on_keeps_generated_canvas_instead_of_restoring_source_size(self, mock_download_image):
+        person_image = Image.new("RGB", (965, 1286), "white")
+        garment_image = Image.new("RGB", (32, 32), "black")
+        mock_download_image.side_effect = [person_image, garment_image]
+
+        engine = Mock()
+        engine.flux2 = Mock()
+        engine.flux2.run_tryon.return_value = {
+            "image": Image.new("RGB", (768, 1024), "white"),
+            "latency": 1.23,
+            "metadata": {},
+        }
+
+        service = TryonService(engine=engine, config=Mock())
+
+        result = asyncio.run(
+            service.try_on(
+                user_image_url="https://example.com/user.jpg",
+                garment_image_url="https://example.com/garment.png",
+                garment_type="top",
+                prompt_description="structured cropped top",
+            )
+        )
+
+        self.assertEqual(result["metadata"]["output_size"], [768, 1024])
+        self.assertEqual(result["metadata"]["source_size"], [965, 1286])
 
 
 class TryonServicePromptBuilderTests(unittest.TestCase):

@@ -65,10 +65,12 @@ class RealESRGANRunner:
 
     @property
     def is_available(self) -> bool:
+        _ensure_torchvision_functional_tensor_compat()
         try:
             from basicsr.archs.rrdbnet_arch import RRDBNet  # noqa: F401
             from realesrgan import RealESRGANer  # noqa: F401
-        except Exception:
+        except Exception as exc:
+            logger.debug("RealESRGAN unavailable: %s", exc)
             return False
         return True
 

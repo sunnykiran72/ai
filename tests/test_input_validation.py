@@ -171,6 +171,17 @@ class TestInputValidation:
         # Test valid garment_type
         valid_request = ExtractRequest(garment_type="top")
         assert valid_request.garment_type == "top"
+
+    def test_user_prep_request_defaults_and_output_max_edge_validation(self):
+        request = UserPrepRequest()
+        assert request.resize_method == "pyvips"
+        assert request.output_max_edge == 1024
+
+        request = UserPrepRequest(outputMaxEdge=1536)
+        assert request.output_max_edge == 1536
+
+        with pytest.raises(ValidationError):
+            UserPrepRequest(outputMaxEdge=256)
     
     @given(
         garment_type=st.sampled_from(["top", "bottom", "dress"]),

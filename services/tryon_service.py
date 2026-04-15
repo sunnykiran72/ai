@@ -77,7 +77,7 @@ class TryonService:
         t0 = time.time()
         steps = int(steps) if steps is not None else 20
         seed = int(seed) if seed is not None else None
-        output_max_edge = int(output_max_edge) if output_max_edge is not None else 1280
+        output_max_edge = int(output_max_edge) if output_max_edge is not None else 1024
 
         person = self._resolve_person_image(user_image, user_image_url)
         garments, garment_descriptions, garment_types = self._resolve_products(
@@ -128,8 +128,6 @@ class TryonService:
         image = flux_result.get("image")
         if not isinstance(image, Image.Image):
             raise RuntimeError("Flux2 did not return a valid image.")
-        image = self._match_canvas(image, person.size)
-
         out_buf = io.BytesIO()
         image.save(out_buf, format="PNG")
         output_url = storage.upload_image(out_buf.getvalue(), content_type="image/png")

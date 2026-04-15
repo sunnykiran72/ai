@@ -53,6 +53,7 @@ from routes import (
     qwen_extract_outfit_router,
     upscaler_test_router,
     analyze_detection_lab_router,
+    seedvr2_test_router,
 )
 
 # Shared utilities
@@ -140,6 +141,7 @@ app.include_router(bulk_tryon_gallery_router, tags=["bulk-tryon-gallery"])
 app.include_router(qwen_extract_outfit_router, tags=["qwen-extract-outfit"])
 app.include_router(upscaler_test_router, tags=["upscaler-test"])
 app.include_router(analyze_detection_lab_router, tags=["analyze-detection-lab"])
+app.include_router(seedvr2_test_router, tags=["seedvr2-test"])
 
 # Dependency injection helpers
 def get_tryon_service() -> TryonService:

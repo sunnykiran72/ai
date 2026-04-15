@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from PIL import Image, UnidentifiedImageError
-from starlette.responses import FileResponse
+from starlette.responses import FileResponse, HTMLResponse
 
 from core.artisan_upscaler_runner import ArtisanUpscalerRunner
 from routes.models import SuccessResponse
@@ -65,21 +65,17 @@ async def run_upscaler_compare(
     request: Request,
     file: UploadFile = File(...),
     run_artisan: bool = Form(True),
-    run_realesrgan: bool = Form(True),
+    run_realesrgan: bool = Form(False),
     repeats: int = Form(1),
     max_output_edge: int = Form(1024),
-    artisan_precision: str = Form("bf16"),
+    artisan_precision: str = Form("fp32"),
     artisan_compile: bool = Form(False),
     artisan_tile: int = Form(128),
     artisan_overlap: int = Form(32),
     realesrgan_target_max_edge: int = Form(0),
     ai_engine: AIEngine = Depends(get_ai_engine),
 ) -> SuccessResponse:
-    """
-    Compare Artisan and Real-ESRGAN on the same uploaded image.
-
-    Returns per-model timings and output image URLs for visual checks.
-    """
+    """Run upscaler quality checks and return timings/output URLs."""
     if not run_artisan and not run_realesrgan:
         raise HTTPException(status_code=422, detail="Enable at least one model: run_artisan or run_realesrgan")
 
@@ -223,3 +219,297 @@ async def run_upscaler_compare(
             "results": results,
         },
     )
+
+
+@router.get("/dev/upscaler-test-lab", response_class=HTMLResponse)
+async def upscaler_test_lab_page() -> HTMLResponse:
+    """Simple visual lab focused on Artisan upscaler quality checks."""
+    html = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Upscaler Compare Lab</title>
+  <style>
+    :root {
+      --bg: #eef3f8;
+      --ink: #112433;
+      --muted: #506273;
+      --card: #fff;
+      --line: #d0dbe7;
+      --accent: #0f766e;
+      --accent2: #155e75;
+      --err: #a11a3a;
+      --ok: #1f7a4f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Space Grotesk","Manrope","Avenir Next",sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(900px 450px at 20% -15%, #d5e9ff 0, transparent 60%),
+        radial-gradient(900px 450px at 85% -20%, #d5f7ea 0, transparent 60%),
+        linear-gradient(180deg, #f4f8fb, var(--bg));
+      min-height: 100vh;
+    }
+    .wrap { max-width: 1260px; margin: 16px auto; padding: 0 12px 24px; }
+    .title { margin: 8px 0 10px; font-size: 30px; }
+    .sub { margin: 0 0 14px; color: var(--muted); font-size: 14px; }
+    .layout { display: grid; grid-template-columns: 360px 1fr; gap: 12px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 8px 24px rgba(17, 36, 51, .07);
+      padding: 12px;
+    }
+    label {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .4px;
+      text-transform: uppercase;
+    }
+    input[type="file"], input[type="text"], input[type="number"], select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 9px 10px;
+      font-size: 14px;
+      margin-bottom: 10px;
+      color: var(--ink);
+      background: #fff;
+    }
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .btn {
+      border: 0;
+      border-radius: 10px;
+      color: #fff;
+      font-weight: 700;
+      padding: 10px 14px;
+      cursor: pointer;
+      font-size: 14px;
+      background: linear-gradient(135deg, var(--accent), var(--accent2));
+    }
+    .btn:disabled { opacity: .62; cursor: wait; }
+    .status { margin-top: 10px; min-height: 20px; font-size: 13px; color: var(--muted); }
+    .status.ok { color: var(--ok); }
+    .status.err { color: var(--err); font-weight: 700; }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+    .tile {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: #f7fafd;
+      padding: 8px;
+    }
+    .tile h4 {
+      margin: 0 0 6px;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: .4px;
+      text-transform: uppercase;
+    }
+    .tile img {
+      width: 100%;
+      height: 360px;
+      object-fit: contain;
+      border: 1px solid #e5edf5;
+      border-radius: 8px;
+      background: #fff;
+      display: block;
+    }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4,minmax(120px,1fr));
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px;
+      background: #f9fbfd;
+    }
+    .k {
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: .4px;
+      text-transform: uppercase;
+      margin-bottom: 2px;
+    }
+    .v { font-weight: 700; font-size: 14px; overflow-wrap: anywhere; }
+    pre {
+      margin: 0;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #0f172a;
+      color: #e2e8f0;
+      padding: 10px;
+      font-size: 12px;
+      line-height: 1.35;
+      overflow: auto;
+      min-height: 180px;
+      max-height: 420px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    @media (max-width: 980px) {
+      .layout { grid-template-columns: 1fr; }
+      .grid2 { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: repeat(2,minmax(120px,1fr)); }
+      .tile img { height: 300px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1 class="title">Upscaler Quality Lab</h1>
+    <p class="sub">Quick visual test focused on the new Artisan upscaler output.</p>
+    <div class="layout">
+      <section class="card">
+        <label for="apiBase">API Base</label>
+        <input id="apiBase" type="text" value="" placeholder="Leave blank for same origin" />
+
+        <label for="fileInput">Input Image</label>
+        <input id="fileInput" type="file" accept="image/*" />
+
+        <div class="row2">
+          <div>
+            <label for="maxEdge">Max Output Edge</label>
+            <input id="maxEdge" type="number" min="512" max="4096" step="1" value="2048" />
+          </div>
+          <div>
+            <label for="repeats">Repeats</label>
+            <input id="repeats" type="number" min="1" max="5" step="1" value="1" />
+          </div>
+        </div>
+
+        <div class="row2">
+          <div>
+            <label for="artisanPrecision">Artisan Precision</label>
+            <select id="artisanPrecision">
+              <option value="fp32" selected>fp32 (default)</option>
+              <option value="bf16">bf16</option>
+            </select>
+          </div>
+          <div>
+            <label for="artisanCompile">Artisan Compile</label>
+            <select id="artisanCompile">
+              <option value="false" selected>false</option>
+              <option value="true">true</option>
+            </select>
+          </div>
+        </div>
+
+        <button id="runBtn" class="btn">Run Artisan</button>
+        <div id="status" class="status">Ready.</div>
+      </section>
+
+      <section class="card">
+        <div class="metrics">
+          <div class="metric"><div class="k">Artisan Avg (s)</div><div id="mArtisan" class="v">-</div></div>
+          <div class="metric"><div class="k">Artisan Size</div><div id="mArtisanSize" class="v">-</div></div>
+          <div class="metric"><div class="k">Job ID</div><div id="mJobId" class="v">-</div></div>
+          <div class="metric"><div class="k">Repeats</div><div id="mRepeats" class="v">-</div></div>
+        </div>
+        <div class="grid2">
+          <div class="tile">
+            <h4>Input</h4>
+            <img id="imgInput" alt="input" />
+          </div>
+          <div class="tile">
+            <h4>Artisan</h4>
+            <img id="imgArtisan" alt="artisan" />
+          </div>
+        </div>
+        <h4 style="margin:0 0 6px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;font-size:12px;">Raw JSON</h4>
+        <pre id="jsonOut">No response yet.</pre>
+      </section>
+    </div>
+  </div>
+  <script>
+    const fileInput = document.getElementById("fileInput");
+    const runBtn = document.getElementById("runBtn");
+    const statusEl = document.getElementById("status");
+    const jsonOut = document.getElementById("jsonOut");
+    const imgInput = document.getElementById("imgInput");
+    const imgArtisan = document.getElementById("imgArtisan");
+    const apiBaseEl = document.getElementById("apiBase");
+    const maxEdgeEl = document.getElementById("maxEdge");
+    const repeatsEl = document.getElementById("repeats");
+    const artisanPrecisionEl = document.getElementById("artisanPrecision");
+    const artisanCompileEl = document.getElementById("artisanCompile");
+
+    function setStatus(text, kind) {
+      statusEl.textContent = text;
+      statusEl.className = `status ${kind || ""}`.trim();
+    }
+    function setMetric(id, val) {
+      const n = document.getElementById(id);
+      if (n) n.textContent = val;
+    }
+    function safe(v, fb="-") {
+      return (v === undefined || v === null || v === "") ? fb : String(v);
+    }
+    function parseBool(s) {
+      return String(s).toLowerCase() === "true";
+    }
+
+    fileInput.addEventListener("change", () => {
+      const f = fileInput.files && fileInput.files[0];
+      if (!f) return;
+      imgInput.src = URL.createObjectURL(f);
+    });
+
+    runBtn.addEventListener("click", async () => {
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) {
+        setStatus("Choose an image first.", "err");
+        return;
+      }
+      runBtn.disabled = true;
+      setStatus("Running Artisan...", "");
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("run_artisan", "true");
+      fd.append("run_realesrgan", "false");
+      fd.append("repeats", String(parseInt(repeatsEl.value || "1", 10)));
+      fd.append("max_output_edge", String(parseInt(maxEdgeEl.value || "2048", 10)));
+      fd.append("artisan_precision", artisanPrecisionEl.value || "bf16");
+      fd.append("artisan_compile", String(parseBool(artisanCompileEl.value || "false")));
+      fd.append("artisan_tile", "128");
+      fd.append("artisan_overlap", "32");
+
+      const base = (apiBaseEl.value || "").trim();
+      const url = `${base}/v1/dev/upscaler-test/compare`;
+      try {
+        const res = await fetch(url, { method: "POST", body: fd });
+        const data = await res.json().catch(() => ({}));
+        jsonOut.textContent = JSON.stringify(data, null, 2);
+        if (!res.ok) {
+          setStatus(`Failed (${res.status})`, "err");
+          return;
+        }
+        setStatus("Success", "ok");
+        const payload = (data && data.data) || {};
+        const results = payload.results || {};
+        const artisan = results.artisan || {};
+        setMetric("mArtisan", safe(artisan.avg_inference_seconds));
+        setMetric("mArtisanSize", `${safe(artisan.output_width,"?")}x${safe(artisan.output_height,"?")}`);
+        setMetric("mJobId", safe(payload.job_id));
+        setMetric("mRepeats", safe(payload.settings && payload.settings.repeats));
+        imgArtisan.src = safe(artisan.output_url, "");
+      } catch (err) {
+        setStatus(`Request error: ${err}`, "err");
+        jsonOut.textContent = String(err);
+      } finally {
+        runBtn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(content=html)

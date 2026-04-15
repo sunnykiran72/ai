@@ -187,10 +187,10 @@ class Flux2TryonRequest(BaseModel):
         description="Try-on LoRA scale override (defaults to 1.0 in tryon-lora mode)",
     )
     outputMaxEdge: Optional[int] = Field(
-        default=1280,
+        default=1024,
         ge=512,
         le=2048,
-        description="Output max edge in pixels (longest side) for try-on generation; defaults to 1280",
+        description="Output max edge in pixels (longest side) for try-on generation; defaults to 1024",
     )
 
     @field_validator("mode")
@@ -255,11 +255,51 @@ class UserPrepRequest(BaseModel):
         alias="resizeMethod",
         description="Optional resize backend override: libvips or pillow_lanczos",
     )
+    output_max_edge: int = Field(
+        default=1024,
+        alias="outputMaxEdge",
+        ge=512,
+        le=2048,
+        description="Prepared-image longest-side target/cap in pixels; defaults to 1024",
+    )
 
     @field_validator("resize_method")
     @classmethod
     def _validate_resize_method(cls, value: str) -> str:
         return normalize_prepare_resize_method(value)
+
+
+class SeedVR2UpscaleUrlRequest(BaseModel):
+    """Request model for SeedVR2 URL-based upscaling (fixed 7B FP8)."""
+    image_url: str = Field(..., description="Public HTTP(S) URL for the input image")
+    target_long_edge: int = Field(
+        default=2048,
+        ge=512,
+        le=4096,
+        description="Target long edge (in pixels). Aspect ratio is preserved automatically.",
+    )
+    batch_size: int = Field(default=1, ge=1, le=33, description="Batch size (SeedVR2 4n+1 pattern recommended)")
+    use_persistent: bool = Field(default=True, description="Use persistent warm worker process")
+    gpu_resident: bool = Field(default=True, description="Keep model on GPU between requests for speed")
+    cache_models: bool = Field(default=True, description="Enable model caching (subprocess mode only)")
+    timeout_seconds: int = Field(default=900, ge=30, le=3600, description="Timeout for one upscale request")
+    upload_to_storage: bool = Field(default=False, description="Upload output image to Azure Blob storage")
+    output_filename: Optional[str] = Field(
+        default=None,
+        description="Optional Azure output filename when upload_to_storage=true",
+    )
+
+    @field_validator("image_url")
+    @classmethod
+    def _validate_image_url(cls, value: str) -> str:
+        if not isinstance(value, str):
+            raise ValueError("image_url must be a string")
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("image_url must not be empty")
+        if not cleaned.startswith(("http://", "https://")):
+            raise ValueError("image_url must start with http:// or https://")
+        return cleaned
 
 
 class UserPrepResponse(SuccessResponse):

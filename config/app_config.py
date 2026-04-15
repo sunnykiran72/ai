@@ -109,7 +109,7 @@ class AppConfig(BaseModel):
         description="Minimum longest-side dimension to keep without resizing during prepare normalization"
     )
     user_prep_output_max_long_edge: int = Field(
-        default=2048,
+        default=1024,
         description="Optional longest-side cap for prepared user images after height normalization"
     )
     user_prep_output_max_bytes: int = Field(
@@ -211,7 +211,7 @@ class AppConfig(BaseModel):
         - USER_PREP_MIN_INPUT_HEIGHT: Minimum accepted longest-side dimension before rejection (default: 768)
         - USER_PREP_TARGET_HEIGHT: Target prepared-image longest side (default: 1024, falls back to USER_PREP_UPSCALE_TARGET_MAX_EDGE)
         - USER_PREP_KEEP_LONG_EDGE_MIN: Keep size if longest side is at least this value (default: 1024)
-        - USER_PREP_OUTPUT_MAX_LONG_EDGE: Prepared image longest-side cap after normalization (default: 2048)
+        - USER_PREP_OUTPUT_MAX_LONG_EDGE: Prepared image longest-side cap after normalization (default: 1024)
         - USER_PREP_OUTPUT_MAX_BYTES: Preferred prepared JPEG size budget in bytes (default: 2621440)
         - USER_PREP_JPEG_QUALITY: Starting JPEG quality for prepared uploads (default: 92)
         - USER_PREP_JPEG_MIN_QUALITY: Minimum JPEG quality during adaptive compression (default: 72)
@@ -259,7 +259,7 @@ class AppConfig(BaseModel):
             user_prep_min_input_height=max(256, env_int("USER_PREP_MIN_INPUT_HEIGHT", 768)),
             user_prep_target_height=max(512, env_int("USER_PREP_TARGET_HEIGHT", env_int("USER_PREP_UPSCALE_TARGET_MAX_EDGE", 1024))),
             user_prep_keep_long_edge_min=max(256, env_int("USER_PREP_KEEP_LONG_EDGE_MIN", 1024)),
-            user_prep_output_max_long_edge=max(512, env_int("USER_PREP_OUTPUT_MAX_LONG_EDGE", 2048)),
+            user_prep_output_max_long_edge=max(512, env_int("USER_PREP_OUTPUT_MAX_LONG_EDGE", 1024)),
             user_prep_output_max_bytes=max(128 * 1024, env_int("USER_PREP_OUTPUT_MAX_BYTES", 2621440)),
             user_prep_jpeg_quality=min(100, max(50, env_int("USER_PREP_JPEG_QUALITY", 92))),
             user_prep_jpeg_min_quality=min(95, max(40, env_int("USER_PREP_JPEG_MIN_QUALITY", 72))),
