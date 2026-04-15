@@ -93,7 +93,11 @@ class AIEngine:
         
         # Classification models
         self.openclip = OpenCLIPRunner()
-        self.fashion_basecolour = FashionColorClassifierRunner()
+        self.fashion_basecolour = (
+            FashionColorClassifierRunner()
+            if self.config.analyze.fashion_basecolour_trial_enabled
+            else None
+        )
         
         # Generation models
         shared_flux2_config: Dict[str, object] = {}
@@ -187,7 +191,7 @@ class AIEngine:
             _safe_preload("minicpm", self.minicpm.ensure_ready)
         if self.config.analyze.preload_flux_runner:
             _safe_preload("flux2", self.get_flux2_for_analyze().ensure_ready)
-        if self.config.analyze.fashion_basecolour_trial_enabled:
+        if self.fashion_basecolour is not None:
             _safe_preload("fashion_basecolour", self.fashion_basecolour.ensure_ready)
     
     def model_status(self) -> Dict[str, object]:
@@ -219,9 +223,9 @@ class AIEngine:
             "gfpgan_model_name": self.gfpgan.model_name,
             "openclip_loaded": self.openclip.is_loaded,
             "openclip_available": self.openclip.is_available,
-            "fashion_basecolour_loaded": self.fashion_basecolour.is_loaded,
-            "fashion_basecolour_available": self.fashion_basecolour.is_available,
-            "fashion_basecolour_model_id": self.fashion_basecolour.model_id,
+            "fashion_basecolour_loaded": bool(self.fashion_basecolour and self.fashion_basecolour.is_loaded),
+            "fashion_basecolour_available": bool(self.fashion_basecolour and self.fashion_basecolour.is_available),
+            "fashion_basecolour_model_id": str(getattr(self.fashion_basecolour, "model_id", "")),
             "yolo_loaded": self.yolo_runner.is_loaded,
             "yolo_model_path": self.yolo_runner.model_path,
             "yolo_expected_label_family": self.yolo_runner.expected_label_family,
