@@ -15,6 +15,7 @@ from typing import Optional, Dict
 import logging
 import os
 import threading
+import torch
 
 from config import Config
 from core.flux2_cvton_runner import Flux2CVTONRunner
@@ -114,6 +115,53 @@ class AIEngine:
         
         # Utilities
         self.board_builder = BoardBuilder()
+        self._gpu_only_mode = str(os.getenv("GPU_ONLY_MODE", "0")).strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        self._validate_gpu_only_mode()
+
+    @staticmethod
+    def _is_cuda_device(device_value: object) -> bool:
+        return str(device_value or "").strip().lower().startswith("cuda")
+
+    def _validate_gpu_only_mode(self) -> None:
+        """
+        Optional strict mode for GPU pods:
+        when GPU_ONLY_MODE=1, fail startup if any tracked model is CPU-bound.
+        """
+        if not self._gpu_only_mode:
+            return
+        if not torch.cuda.is_available():
+            raise RuntimeError("GPU_ONLY_MODE=1 but CUDA is not available on this host.")
+
+        tracked_devices = {
+            "flux2": getattr(self.flux2, "device", ""),
+            "qwen25vl": getattr(self.qwen25vl, "device", ""),
+            "joycaption": getattr(self.joycaption, "device", ""),
+            "minicpm": getattr(self.minicpm, "device", ""),
+            "realesrgan": getattr(self.realesrgan, "device", ""),
+            "gfpgan": getattr(self.gfpgan, "device", ""),
+            "openclip": getattr(self.openclip, "device", ""),
+            "fashion_basecolour": getattr(self.fashion_basecolour, "device", "") if self.fashion_basecolour else "",
+            "yolo": getattr(self.yolo_runner, "device", ""),
+            "fashion_detection": getattr(self.fashion_detection_runner, "device", ""),
+            "grounding_dino": getattr(self.grounding_dino, "device", ""),
+            "human_parser": getattr(self.parser_runner, "device", "") if self.parser_runner else "",
+        }
+        cpu_models = [
+            name
+            for name, dev in tracked_devices.items()
+            if str(dev or "").strip() and not self._is_cuda_device(dev)
+        ]
+        if cpu_models:
+            rendered = ", ".join(cpu_models)
+            raise RuntimeError(
+                "GPU_ONLY_MODE=1 but these models are not on CUDA: "
+                f"{rendered}. Set their *_DEVICE envs to 'cuda' and restart."
+            )
     
     def get_flux2_for_analyze(self) -> Flux2CVTONRunner:
         """Get Flux2 runner for analyze endpoint (may be shared or isolated)."""
@@ -199,7 +247,9 @@ class AIEngine:
         analyze_flux2 = self.flux2 if self._share_flux2_base_runner else self._analyze_flux2
         analyze_startup = dict(getattr(analyze_flux2, "_startup_metrics", {}) or {}) if analyze_flux2 else {}
         return {
+            "gpu_only_mode": bool(self._gpu_only_mode),
             "flux2_loaded": self.flux2._pipeline is not None,
+            "flux2_device": str(getattr(self.flux2, "device", "") or ""),
             "analyze_flux2_loaded": bool(analyze_flux2 and analyze_flux2._pipeline is not None),
             "analyze_flux2_isolated": bool(self.config.analyze.flux_disable_lora and not self._share_flux2_base_runner),
             "flux2_shared_base_runner": bool(self._share_flux2_base_runner),
@@ -211,31 +261,45 @@ class AIEngine:
                 analyze_startup.get("lora_loaded", False)
             ) if analyze_flux2 else False,
             "florence_loaded": self.florence._model is not None,
+            "florence_device": str(getattr(self.florence, "device", "") or ""),
             "qwen25vl_loaded": self.qwen25vl.is_loaded,
+            "qwen25vl_device": str(getattr(self.qwen25vl, "device", "") or ""),
             "joycaption_loaded": self.joycaption.is_loaded,
+            "joycaption_device": str(getattr(self.joycaption, "device", "") or ""),
             "minicpm_loaded": self.minicpm.is_loaded,
             "minicpm_model_id": str(getattr(self.minicpm, "model_id", "")),
+            "minicpm_device": str(getattr(self.minicpm, "device", "") or ""),
             "realesrgan_loaded": self.realesrgan.is_loaded,
             "realesrgan_available": self.realesrgan.is_available,
             "realesrgan_model_name": self.realesrgan.model_name,
+            "realesrgan_device": str(getattr(self.realesrgan, "device", "") or ""),
             "gfpgan_loaded": self.gfpgan.is_loaded,
             "gfpgan_available": self.gfpgan.is_available,
             "gfpgan_model_name": self.gfpgan.model_name,
+            "gfpgan_device": str(getattr(self.gfpgan, "device", "") or ""),
             "openclip_loaded": self.openclip.is_loaded,
             "openclip_available": self.openclip.is_available,
+            "openclip_device": str(getattr(self.openclip, "device", "") or ""),
             "fashion_basecolour_loaded": bool(self.fashion_basecolour and self.fashion_basecolour.is_loaded),
             "fashion_basecolour_available": bool(self.fashion_basecolour and self.fashion_basecolour.is_available),
             "fashion_basecolour_model_id": str(getattr(self.fashion_basecolour, "model_id", "")),
+            "fashion_basecolour_device": (
+                str(getattr(self.fashion_basecolour, "device", "") or "") if self.fashion_basecolour else ""
+            ),
             "yolo_loaded": self.yolo_runner.is_loaded,
             "yolo_model_path": self.yolo_runner.model_path,
+            "yolo_device": str(getattr(self.yolo_runner, "device", "") or ""),
             "yolo_expected_label_family": self.yolo_runner.expected_label_family,
             "yolo_label_family": self.yolo_runner.label_family,
             "yolo_class_count": self.yolo_runner.class_count,
             "fashion_detection_loaded": self.fashion_detection_runner.is_loaded,
             "fashion_detection_model_path": self.fashion_detection_runner.model_path,
+            "fashion_detection_device": str(getattr(self.fashion_detection_runner, "device", "") or ""),
             "grounding_dino_loaded": self.grounding_dino.is_loaded,
             "grounding_dino_model_path": self.grounding_dino.model_path,
+            "grounding_dino_device": str(getattr(self.grounding_dino, "device", "") or ""),
             "human_parser_loaded": bool(self.parser_runner and self.parser_runner.is_loaded),
+            "human_parser_device": str(getattr(self.parser_runner, "device", "") or "") if self.parser_runner else "",
         }
     
     def _get_heuristic_base_mask(self, image):
