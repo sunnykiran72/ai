@@ -4,9 +4,12 @@ Dedicated API + dev lab routes for Qwen Image Edit + Extract-Outfit LoRA.
 
 from __future__ import annotations
 
+import asyncio
+import base64
 import io
 import logging
-from typing import Optional
+import time
+from typing import Optional, Tuple
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse
@@ -68,6 +71,59 @@ def _load_uploaded_image(upload: UploadFile, field_name: str) -> Image.Image:
         return image
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"{field_name} is not a valid image: {exc}") from exc
+
+
+def _resize_longest_edge_to(image: Image.Image, target_longest_edge: int) -> Image.Image:
+    rgb = image.convert("RGB")
+    width, height = rgb.size
+    longest = max(width, height)
+    target = max(1, int(target_longest_edge))
+    if longest == target:
+        return rgb
+    ratio = float(target) / float(max(1, longest))
+    target_size = (
+        max(1, int(round(width * ratio))),
+        max(1, int(round(height * ratio))),
+    )
+    return rgb.resize(target_size, Image.Resampling.LANCZOS)
+
+
+def _parse_aspect_ratio(raw_ratio: str) -> Tuple[int, int]:
+    text = str(raw_ratio or "").strip().lower()
+    normalized = text.replace("x", ":").replace("/", ":")
+    parts = [part.strip() for part in normalized.split(":", maxsplit=1)]
+    if len(parts) != 2:
+        raise HTTPException(
+            status_code=422,
+            detail="aspect_ratio must be in '<w>:<h>' format (examples: 2:3, 1:1, 3:4).",
+        )
+    try:
+        ratio_w = int(parts[0])
+        ratio_h = int(parts[1])
+    except Exception as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="aspect_ratio must contain integer values (example: 2:3).",
+        ) from exc
+    if ratio_w <= 0 or ratio_h <= 0:
+        raise HTTPException(status_code=422, detail="aspect_ratio values must be > 0.")
+    return ratio_w, ratio_h
+
+
+def _resolve_output_size_from_ratio(*, output_max_edge: int, ratio_w: int, ratio_h: int) -> Tuple[int, int]:
+    edge = int(output_max_edge)
+    if ratio_w >= ratio_h:
+        out_w = edge
+        out_h = max(1, int(round(edge * (float(ratio_h) / float(ratio_w)))))
+    else:
+        out_h = edge
+        out_w = max(1, int(round(edge * (float(ratio_w) / float(ratio_h)))))
+    return int(out_w), int(out_h)
+
+
+def _align_to_model_grid(value: int, *, base: int = 8) -> int:
+    raw = max(int(value), int(base))
+    return max(int(base), (raw // int(base)) * int(base))
 
 
 def _run_qwen_extract_outfit(
@@ -143,25 +199,28 @@ async def qwen_extract_outfit_endpoint(
         raise HTTPException(status_code=422, detail="Provide one image using 'file' or 'image'.")
 
     try:
-        data = _run_qwen_extract_outfit(
-            app_request=request,
-            upload=upload,
-            prompt=prompt,
-            steps=steps,
-            seed=seed,
-            guidance_scale=guidance_scale,
-            guidance_scale_alias=guidanceScale,
-            negative_prompt=negative_prompt,
-            negative_prompt_alias=negativePrompt,
-            max_input_edge=max_input_edge,
-            max_input_edge_alias=maxInputEdge,
-            output_max_edge=output_max_edge,
-            output_max_edge_alias=outputMaxEdge,
-            output_aspect_ratio=output_aspect_ratio,
-            output_aspect_ratio_alias=outputAspectRatio,
-            upload_output=upload_output,
-            include_base64=include_base64,
-        )
+        def _run_qwen_extract_outfit_blocking() -> dict:
+            return _run_qwen_extract_outfit(
+                app_request=request,
+                upload=upload,
+                prompt=prompt,
+                steps=steps,
+                seed=seed,
+                guidance_scale=guidance_scale,
+                guidance_scale_alias=guidanceScale,
+                negative_prompt=negative_prompt,
+                negative_prompt_alias=negativePrompt,
+                max_input_edge=max_input_edge,
+                max_input_edge_alias=maxInputEdge,
+                output_max_edge=output_max_edge,
+                output_max_edge_alias=outputMaxEdge,
+                output_aspect_ratio=output_aspect_ratio,
+                output_aspect_ratio_alias=outputAspectRatio,
+                upload_output=upload_output,
+                include_base64=include_base64,
+            )
+
+        data = await asyncio.to_thread(_run_qwen_extract_outfit_blocking)
     except HTTPException:
         raise
     except PromptGenerationFailedError as exc:
@@ -327,40 +386,50 @@ async def qwen_extract_outfit_lab_page() -> HTMLResponse:
           <div class="row3">
             <div>
               <label>Steps</label>
-              <input name="steps" type="number" min="4" max="80" step="1" value="28" />
+              <input name="steps" type="number" min="4" max="80" step="1" value="8" required />
             </div>
             <div>
               <label>Seed</label>
-              <input name="seed" type="number" min="0" max="2147483647" step="1" value="42" />
+              <input name="seed" type="number" min="0" max="2147483647" step="1" value="42" required />
             </div>
             <div>
-              <label>Max Input Edge</label>
-              <input name="max_input_edge" type="number" min="512" max="4096" step="1" value="1536" />
-            </div>
-          </div>
-          <div class="row">
-            <div>
-              <label>Max Output Edge (optional; blank = use Max Input Edge)</label>
-              <input name="output_max_edge" type="text" value="" placeholder="512" />
-            </div>
-            <div>
-              <label>Output Aspect Ratio (optional)</label>
-              <input name="output_aspect_ratio" type="text" value="2:3" placeholder="2:3" />
+              <label>Input Max Edge (required)</label>
+              <input name="input_max_edge" type="number" min="256" max="4096" step="1" value="768" required />
             </div>
           </div>
           <div class="row">
             <div>
-              <label>Guidance Scale (optional)</label>
-              <input name="guidance_scale" type="text" value="" placeholder="leave blank for default" />
+              <label>Output Max Edge (fallback)</label>
+              <input name="output_max_edge" type="number" min="256" max="4096" step="1" value="768" required />
+            </div>
+            <div>
+              <label>Aspect Ratio (fallback)</label>
+              <input name="aspect_ratio" type="text" value="2:3" placeholder="2:3" required />
+            </div>
+          </div>
+          <div class="row">
+            <div>
+              <label>Output Width (optional override)</label>
+              <input name="output_width" type="number" min="256" max="4096" step="1" placeholder="e.g. 768" />
+            </div>
+            <div>
+              <label>Output Height (optional override)</label>
+              <input name="output_height" type="number" min="256" max="4096" step="1" placeholder="e.g. 1024" />
+            </div>
+          </div>
+          <div class="row">
+            <div>
+              <label>Guidance Scale (required)</label>
+              <input name="guidance_scale" type="number" min="0" max="20" step="0.1" value="1.0" required />
             </div>
             <div>
               <label>Negative Prompt (optional)</label>
-              <input name="negative_prompt" type="text" value="" placeholder="blurry, low quality" />
+              <input name="negative_prompt" type="text" value="" placeholder="" />
             </div>
           </div>
           <div>
             <label>Prompt</label>
-            <textarea name="prompt" id="prompt">{default_prompt}</textarea>
+            <textarea name="prompt" id="prompt" required>{default_prompt}</textarea>
           </div>
           <div class="check-row">
             <label><input type="checkbox" name="upload_output" /> Upload output to Azure</label>
@@ -387,15 +456,11 @@ async def qwen_extract_outfit_lab_page() -> HTMLResponse:
         </div>
         <div class="meta">
           <div>
-            <label>Generated Prompt (MiniCPM)</label>
-            <div id="prompt-generated" class="prompt-box"></div>
-          </div>
-          <div>
-            <label>Input Prompt Sent To Qwen</label>
+            <label>Prompt Sent To Qwen</label>
             <div id="prompt-used" class="prompt-box"></div>
           </div>
           <div>
-            <label>Latency Breakdown</label>
+            <label>Resolution & Latency Metrics</label>
             <div id="latency-breakdown" class="prompt-box"></div>
           </div>
           <div>
@@ -411,7 +476,6 @@ async def qwen_extract_outfit_lab_page() -> HTMLResponse:
     const statusEl = document.getElementById("status");
     const rawEl = document.getElementById("raw-json");
     const promptUsedEl = document.getElementById("prompt-used");
-    const promptGeneratedEl = document.getElementById("prompt-generated");
     const latencyEl = document.getElementById("latency-breakdown");
     const runBtn = document.getElementById("run-btn");
     const longPromptBtn = document.getElementById("long-prompt-btn");
@@ -450,16 +514,22 @@ async def qwen_extract_outfit_lab_page() -> HTMLResponse:
       data.append("prompt", form.querySelector('[name="prompt"]').value);
       data.append("steps", form.querySelector('[name="steps"]').value);
       data.append("seed", form.querySelector('[name="seed"]').value);
-      data.append("max_input_edge", form.querySelector('[name="max_input_edge"]').value);
-      const outputEdgeValue = form.querySelector('[name="output_max_edge"]').value.trim();
-      if (outputEdgeValue) data.append("output_max_edge", outputEdgeValue);
-      const outputAspectRatioValue = form.querySelector('[name="output_aspect_ratio"]').value.trim();
-      if (outputAspectRatioValue) data.append("output_aspect_ratio", outputAspectRatioValue);
-
-      const guidanceValue = form.querySelector('[name="guidance_scale"]').value.trim();
-      const negativeValue = form.querySelector('[name="negative_prompt"]').value.trim();
-      if (guidanceValue) data.append("guidance_scale", guidanceValue);
-      if (negativeValue) data.append("negative_prompt", negativeValue);
+      data.append("input_max_edge", form.querySelector('[name="input_max_edge"]').value);
+      data.append("output_max_edge", form.querySelector('[name="output_max_edge"]').value);
+      data.append("aspect_ratio", form.querySelector('[name="aspect_ratio"]').value);
+      const outputWidthValue = form.querySelector('[name="output_width"]').value;
+      const outputHeightValue = form.querySelector('[name="output_height"]').value;
+      if (outputWidthValue && outputWidthValue.trim()) {{
+        data.append("output_width", outputWidthValue);
+      }}
+      if (outputHeightValue && outputHeightValue.trim()) {{
+        data.append("output_height", outputHeightValue);
+      }}
+      data.append("guidance_scale", form.querySelector('[name="guidance_scale"]').value);
+      const negativePromptValue = form.querySelector('[name="negative_prompt"]').value;
+      if (negativePromptValue && negativePromptValue.trim()) {{
+        data.append("negative_prompt", negativePromptValue);
+      }}
 
       const uploadOutput = form.querySelector('[name="upload_output"]').checked;
       const includeBase64 = form.querySelector('[name="include_base64"]').checked;
@@ -470,7 +540,6 @@ async def qwen_extract_outfit_lab_page() -> HTMLResponse:
       setStatus("Running extraction...");
       rawEl.textContent = "";
       promptUsedEl.textContent = "";
-      promptGeneratedEl.textContent = "";
       latencyEl.textContent = "";
       imgOutput.src = "";
 
@@ -488,27 +557,30 @@ async def qwen_extract_outfit_lab_page() -> HTMLResponse:
         const base64Image = payload?.data?.image_base64 || "";
         if (base64Image) {{
           imgOutput.src = `data:image/png;base64,${{base64Image}}`;
+        }} else if (payload?.data?.output_url) {{
+          imgOutput.src = payload.data.output_url;
         }}
-        promptGeneratedEl.textContent = payload?.data?.promptDescription || "(empty)";
         promptUsedEl.textContent = payload?.data?.metadata?.prompt || "(empty)";
         rawEl.textContent = JSON.stringify(payload, null, 2);
-        const minicpmElapsed = payload?.data?.minicpmElapsedSeconds
-          ?? payload?.data?.promptElapsedSeconds
-          ?? payload?.data?.metadata?.minicpm_elapsed_seconds;
-        const qwenElapsed = payload?.data?.qwenElapsedSeconds
-          ?? payload?.data?.metadata?.qwen_elapsed_seconds
-          ?? payload?.data?.metadata?.elapsed_seconds;
-        const totalElapsed = payload?.data?.totalElapsedSeconds
-          ?? payload?.data?.metadata?.total_elapsed_seconds;
-        const promptSource = payload?.data?.promptDescriptionSource || "n/a";
-        const fallbackUsed = payload?.data?.promptFallbackUsed ? "yes" : "no";
+        const meta = payload?.data?.metadata || {{}};
+        const qwenElapsed = meta?.timings?.qwen_elapsed_seconds ?? "n/a";
+        const totalElapsed = meta?.timings?.total_elapsed_seconds ?? "n/a";
+        const inputOriginal = meta?.input_original_size || {{}};
+        const inputPreprocessed = meta?.input_preprocessed_size || {{}};
+        const requestedOutput = meta?.requested_output_size || {{}};
+        const alignedOutput = meta?.requested_output_size_aligned || {{}};
+        const actualOutput = meta?.output_size || {{}};
+        const resolutionMode = meta?.resolution_mode || "n/a";
         latencyEl.textContent =
-          `MiniCPM: ${{minicpmElapsed ?? "n/a"}} sec\\n` +
           `Qwen: ${{qwenElapsed ?? "n/a"}} sec\\n` +
           `Total: ${{totalElapsed ?? "n/a"}} sec\\n` +
-          `Prompt source: ${{promptSource}}\\n` +
-          `Fallback used: ${{fallbackUsed}}`;
-        setStatus(`Success. Total: ${{totalElapsed ?? "n/a"}} sec | MiniCPM: ${{minicpmElapsed ?? "n/a"}} sec | Qwen: ${{qwenElapsed ?? "n/a"}} sec`);
+          `Resolution mode: ${{resolutionMode}}\\n` +
+          `Input original: ${{inputOriginal.width ?? "?"}}x${{inputOriginal.height ?? "?"}}\\n` +
+          `Input preprocessed: ${{inputPreprocessed.width ?? "?"}}x${{inputPreprocessed.height ?? "?"}}\\n` +
+          `Output requested: ${{requestedOutput.width ?? "?"}}x${{requestedOutput.height ?? "?"}}\\n` +
+          `Output aligned(/8): ${{alignedOutput.width ?? "?"}}x${{alignedOutput.height ?? "?"}}\\n` +
+          `Output actual: ${{actualOutput.width ?? "?"}}x${{actualOutput.height ?? "?"}}`;
+        setStatus(`Success. Total: ${{totalElapsed ?? "n/a"}} sec | Qwen: ${{qwenElapsed ?? "n/a"}} sec`);
       }} catch (error) {{
         setStatus(`Run failed: ${{error.message}}`, true);
       }} finally {{
@@ -524,22 +596,18 @@ async def qwen_extract_outfit_lab_page() -> HTMLResponse:
 
 @router.post("/dev/qwen/extract-outfit-lab/run")
 async def qwen_extract_outfit_lab_run(
-    request: Request,
     file: Optional[UploadFile] = File(None),
     image: Optional[UploadFile] = File(None),
-    prompt: str = Form(DEFAULT_QWEN_EXTRACT_OUTFIT_PROMPT),
-    steps: int = Form(28, ge=4, le=80),
-    seed: int = Form(42, ge=0, le=2147483647),
-    guidance_scale: Optional[float] = Form(None, ge=0.0, le=20.0),
-    guidanceScale: Optional[float] = Form(None),
+    prompt: str = Form(...),
+    steps: int = Form(..., ge=4, le=80),
+    seed: int = Form(..., ge=0, le=2147483647),
+    guidance_scale: float = Form(..., ge=0.0, le=20.0),
     negative_prompt: Optional[str] = Form(None),
-    negativePrompt: Optional[str] = Form(None),
-    max_input_edge: int = Form(1536, ge=512, le=4096),
-    maxInputEdge: Optional[int] = Form(None),
+    input_max_edge: int = Form(..., ge=256, le=4096),
     output_max_edge: Optional[int] = Form(None, ge=256, le=4096),
-    outputMaxEdge: Optional[int] = Form(None),
-    output_aspect_ratio: Optional[str] = Form(None),
-    outputAspectRatio: Optional[str] = Form(None),
+    aspect_ratio: Optional[str] = Form(None),
+    output_width: Optional[int] = Form(None, ge=256, le=4096),
+    output_height: Optional[int] = Form(None, ge=256, le=4096),
     upload_output: bool = Form(False),
     include_base64: bool = Form(True),
 ) -> dict:
@@ -547,36 +615,139 @@ async def qwen_extract_outfit_lab_run(
     if upload is None:
         raise HTTPException(status_code=422, detail="Provide one image using 'file' or 'image'.")
     try:
-        data = _run_qwen_extract_outfit(
-            app_request=request,
-            upload=upload,
-            prompt=prompt,
-            steps=steps,
-            seed=seed,
-            guidance_scale=guidance_scale,
-            guidance_scale_alias=guidanceScale,
-            negative_prompt=negative_prompt,
-            negative_prompt_alias=negativePrompt,
-            max_input_edge=max_input_edge,
-            max_input_edge_alias=maxInputEdge,
-            output_max_edge=output_max_edge,
-            output_max_edge_alias=outputMaxEdge,
-            output_aspect_ratio=output_aspect_ratio,
-            output_aspect_ratio_alias=outputAspectRatio,
-            upload_output=upload_output,
-            include_base64=include_base64,
+        normalized_prompt = " ".join(str(prompt or "").split()).strip()
+        if not normalized_prompt:
+            raise HTTPException(status_code=422, detail="prompt must not be empty.")
+
+        source_image = _load_uploaded_image(upload, field_name="image").convert("RGB")
+        original_width, original_height = source_image.size
+        preprocessed = _resize_longest_edge_to(source_image, target_longest_edge=int(input_max_edge))
+        preprocessed_width, preprocessed_height = preprocessed.size
+
+        explicit_output_requested = output_width is not None or output_height is not None
+        if explicit_output_requested:
+            if output_width is None or output_height is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="When using direct output size, provide both output_width and output_height.",
+                )
+            requested_width = int(output_width)
+            requested_height = int(output_height)
+            ratio_w, ratio_h = int(requested_width), int(requested_height)
+            resolved_output_max_edge = max(int(requested_width), int(requested_height))
+            resolution_mode = "direct_dimensions"
+        else:
+            if output_max_edge is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="output_max_edge is required when output_width/output_height are not provided.",
+                )
+            if not str(aspect_ratio or "").strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail="aspect_ratio is required when output_width/output_height are not provided.",
+                )
+            ratio_w, ratio_h = _parse_aspect_ratio(str(aspect_ratio))
+            requested_width, requested_height = _resolve_output_size_from_ratio(
+                output_max_edge=int(output_max_edge),
+                ratio_w=ratio_w,
+                ratio_h=ratio_h,
+            )
+            resolved_output_max_edge = int(output_max_edge)
+            resolution_mode = "max_edge_ratio"
+
+        aligned_requested_width = _align_to_model_grid(requested_width)
+        aligned_requested_height = _align_to_model_grid(requested_height)
+
+        def _run_qwen_edit_blocking():
+            return _get_runner().run_edit(
+                preprocessed,
+                prompt=normalized_prompt,
+                steps=int(steps),
+                guidance_scale=float(guidance_scale),
+                negative_prompt=str(negative_prompt or ""),
+                seed=int(seed),
+                output_width=int(requested_width),
+                output_height=int(requested_height),
+            )
+
+        t0 = time.perf_counter()
+        output_image, run_meta = await asyncio.to_thread(_run_qwen_edit_blocking)
+        qwen_elapsed_seconds = round(float(time.perf_counter() - t0), 3)
+
+        output_bytes = b""
+        if bool(upload_output) or bool(include_base64):
+            out_buf = io.BytesIO()
+            output_image.save(out_buf, format="PNG")
+            output_bytes = out_buf.getvalue()
+
+        output_url = ""
+        if bool(upload_output):
+            if not output_bytes:
+                out_buf = io.BytesIO()
+                output_image.save(out_buf, format="PNG")
+                output_bytes = out_buf.getvalue()
+            output_url = str(
+                storage.upload_image(
+                    output_bytes,
+                    filename=f"qwen-lab-{int(time.time() * 1000)}.png",
+                    content_type="image/png",
+                )
+                or ""
+            )
+
+        image_base64 = ""
+        if bool(include_base64):
+            if not output_bytes:
+                out_buf = io.BytesIO()
+                output_image.save(out_buf, format="PNG")
+                output_bytes = out_buf.getvalue()
+            image_base64 = base64.b64encode(output_bytes).decode("ascii")
+
+        metadata = dict(run_meta or {})
+        metadata.update(
+            {
+                "prompt": normalized_prompt,
+                "input_max_edge": int(input_max_edge),
+                "output_max_edge": int(resolved_output_max_edge),
+                "aspect_ratio": f"{int(ratio_w)}:{int(ratio_h)}",
+                "resolution_mode": str(resolution_mode),
+                "direct_output_size_input": {
+                    "width": int(output_width) if output_width is not None else None,
+                    "height": int(output_height) if output_height is not None else None,
+                },
+                "input_original_size": {"width": int(original_width), "height": int(original_height)},
+                "input_preprocessed_size": {
+                    "width": int(preprocessed_width),
+                    "height": int(preprocessed_height),
+                },
+                "requested_output_size": {
+                    "width": int(requested_width),
+                    "height": int(requested_height),
+                },
+                "requested_output_size_aligned": {
+                    "width": int(aligned_requested_width),
+                    "height": int(aligned_requested_height),
+                },
+                "output_size": {
+                    "width": int(output_image.width),
+                    "height": int(output_image.height),
+                },
+                "timings": {
+                    "qwen_elapsed_seconds": qwen_elapsed_seconds,
+                    "total_elapsed_seconds": qwen_elapsed_seconds,
+                },
+                "lab_mode": "strict_direct_qwen",
+            }
         )
+
+        data = {
+            "output_url": output_url,
+            "image_base64": image_base64,
+            "metadata": metadata,
+        }
     except HTTPException:
         raise
-    except PromptGenerationFailedError as exc:
-        logger.warning("Qwen extract-outfit lab prompt generation failed: %s", exc)
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "message": str(exc),
-                "reason_codes": [PROMPT_GENERATION_FAILED_CODE],
-            },
-        ) from exc
     except Exception as exc:
         logger.exception("Qwen extract-outfit lab run failed")
         raise HTTPException(status_code=500, detail=f"Qwen extract-outfit failed: {exc}") from exc
