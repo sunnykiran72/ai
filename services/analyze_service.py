@@ -346,6 +346,8 @@ class AnalyzeService:
                     minicpm_runner=getattr(self.engine, "minicpm", None),
                     upload_image_fn=None,
                     enable_minicpm_prompt_override=ANALYZE_QWEN_FORCE_MINICPM_PROMPT,
+                    minicpm_garment_type_override=selected_type,
+                    fail_on_minicpm_error_override=True,
                 )
                 image_base64 = str(qwen_data.get("image_base64") or "").strip()
                 if not image_base64:
