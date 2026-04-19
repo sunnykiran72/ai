@@ -227,10 +227,21 @@ def _normalize_subtype(raw_subtype: Any, garment_type: str) -> str:
     if not text:
         return _default_subtype_for_type(garment_type)
     text = re.sub(r"[^a-zA-Z0-9 _-]", " ", text)
-    text = re.sub(r"\s+", " ", text).strip().lower().replace(" ", "_")
+    text = text.replace("_", " ").replace("-", " ")
+    text = re.sub(r"\s+", " ", text).strip().lower()
     if not text:
         return _default_subtype_for_type(garment_type)
     return text
+
+
+def _get_model_grid_base() -> int:
+    raw = str(os.getenv("QWEN_IMAGE_EDIT_GRID_BASE", "16")).strip()
+    return 16 if raw == "16" else 8
+
+
+def _align_dim_to_grid(value: int, *, base: int) -> int:
+    raw = max(int(value), int(base))
+    return max(int(base), (raw // int(base)) * int(base))
 
 
 def _sanitize_construction_prompt(raw_prompt: Any) -> str:
@@ -607,11 +618,21 @@ def execute_qwen_extract_outfit_request(
 def _resize_to_max_edge(image: Image.Image, max_edge: int) -> Image.Image:
     width, height = image.size
     longest = max(width, height)
+    resized = image
     if longest <= max_edge:
-        return image
-    ratio = float(max_edge) / float(longest)
-    target = (max(1, int(round(width * ratio))), max(1, int(round(height * ratio))))
-    return image.resize(target, Image.Resampling.LANCZOS)
+        resized = image
+    else:
+        ratio = float(max_edge) / float(longest)
+        target = (max(1, int(round(width * ratio))), max(1, int(round(height * ratio))))
+        resized = image.resize(target, Image.Resampling.LANCZOS)
+
+    # Keep input size on model grid to avoid hidden snapping inside pipeline.
+    base = _get_model_grid_base()
+    aligned_w = _align_dim_to_grid(resized.width, base=base)
+    aligned_h = _align_dim_to_grid(resized.height, base=base)
+    if aligned_w == resized.width and aligned_h == resized.height:
+        return resized
+    return resized.resize((aligned_w, aligned_h), Image.Resampling.LANCZOS)
 
 
 def _fit_to_max_edge_without_upscale(width: int, height: int, max_edge: int) -> tuple[int, int]:

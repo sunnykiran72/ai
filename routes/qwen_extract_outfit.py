@@ -8,6 +8,7 @@ import asyncio
 import base64
 import io
 import logging
+import os
 import time
 from typing import Optional, Tuple
 
@@ -78,14 +79,22 @@ def _resize_longest_edge_to(image: Image.Image, target_longest_edge: int) -> Ima
     width, height = rgb.size
     longest = max(width, height)
     target = max(1, int(target_longest_edge))
-    if longest == target:
-        return rgb
-    ratio = float(target) / float(max(1, longest))
-    target_size = (
-        max(1, int(round(width * ratio))),
-        max(1, int(round(height * ratio))),
-    )
-    return rgb.resize(target_size, Image.Resampling.LANCZOS)
+    resized = rgb
+    if longest != target:
+        ratio = float(target) / float(max(1, longest))
+        target_size = (
+            max(1, int(round(width * ratio))),
+            max(1, int(round(height * ratio))),
+        )
+        resized = rgb.resize(target_size, Image.Resampling.LANCZOS)
+
+    # Keep input dimensions on same model grid as runner.
+    base = _model_grid_base()
+    aligned_w = _align_to_model_grid(resized.width, base=base)
+    aligned_h = _align_to_model_grid(resized.height, base=base)
+    if aligned_w == resized.width and aligned_h == resized.height:
+        return resized
+    return resized.resize((aligned_w, aligned_h), Image.Resampling.LANCZOS)
 
 
 def _parse_aspect_ratio(raw_ratio: str) -> Tuple[int, int]:
@@ -124,6 +133,11 @@ def _resolve_output_size_from_ratio(*, output_max_edge: int, ratio_w: int, ratio
 def _align_to_model_grid(value: int, *, base: int = 8) -> int:
     raw = max(int(value), int(base))
     return max(int(base), (raw // int(base)) * int(base))
+
+
+def _model_grid_base() -> int:
+    raw = str(os.getenv("QWEN_IMAGE_EDIT_GRID_BASE", "16")).strip()
+    return 16 if raw == "16" else 8
 
 
 def _run_qwen_extract_outfit(
@@ -656,8 +670,9 @@ async def qwen_extract_outfit_lab_run(
             resolved_output_max_edge = int(output_max_edge)
             resolution_mode = "max_edge_ratio"
 
-        aligned_requested_width = _align_to_model_grid(requested_width)
-        aligned_requested_height = _align_to_model_grid(requested_height)
+        grid_base = _model_grid_base()
+        aligned_requested_width = _align_to_model_grid(requested_width, base=grid_base)
+        aligned_requested_height = _align_to_model_grid(requested_height, base=grid_base)
 
         def _run_qwen_edit_blocking():
             return _get_runner().run_edit(

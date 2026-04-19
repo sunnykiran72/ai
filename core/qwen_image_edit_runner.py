@@ -60,7 +60,7 @@ class QwenImageEditRunner:
         self.warmup_steps = max(1, int(os.getenv("QWEN_IMAGE_EDIT_WARMUP_STEPS", "4")))
         self.warmup_edge = max(256, int(os.getenv("QWEN_IMAGE_EDIT_WARMUP_EDGE", "512")))
         self._warmed_up = False
-        grid_raw = str(os.getenv("QWEN_IMAGE_EDIT_GRID_BASE", "8")).strip()
+        grid_raw = str(os.getenv("QWEN_IMAGE_EDIT_GRID_BASE", "16")).strip()
         self.grid_base = 16 if grid_raw == "16" else 8
 
         requested_device = str(os.getenv("QWEN_IMAGE_EDIT_DEVICE", "auto")).strip().lower()
