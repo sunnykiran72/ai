@@ -77,3 +77,30 @@ def test_runner_applies_guidance_and_negative_prompt_when_set(monkeypatch):
     assert call["negative_prompt"] == "blurry, low quality"
     assert meta["negative_prompt_supplied"] is True
     assert meta["guidance_scale"] == 3.2
+
+
+def test_runner_honors_configurable_grid_base(monkeypatch):
+    fake_pipe = _FakePipeline()
+    monkeypatch.setenv("QWEN_IMAGE_EDIT_ENABLE_LORA", "0")
+    monkeypatch.setenv("QWEN_IMAGE_EDIT_DEVICE", "cpu")
+    monkeypatch.setenv("QWEN_IMAGE_EDIT_GRID_BASE", "16")
+
+    with patch("core.qwen_image_edit_runner.DiffusionPipeline.from_pretrained", return_value=fake_pipe):
+        runner = QwenImageEditRunner(model_id="Qwen/Qwen-Image-Edit-2511")
+        _out, meta = runner.run_edit(
+            Image.new("RGB", (64, 64), color="white"),
+            prompt="Extract the clothing",
+            steps=6,
+            guidance_scale=None,
+            negative_prompt=None,
+            seed=5,
+            output_width=777,
+            output_height=713,
+        )
+
+    call = fake_pipe.infer_calls[0]
+    assert call["width"] == 768
+    assert call["height"] == 704
+    assert meta["grid_base"] == 16
+    assert meta["requested_output_size"] == {"width": 777, "height": 713}
+    assert meta["requested_output_size_aligned"] == {"width": 768, "height": 704}

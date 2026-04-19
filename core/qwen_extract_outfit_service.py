@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import os
 import re
 import time
@@ -33,7 +34,34 @@ DEFAULT_QWEN_EXTRACT_OUTFIT_GUIDANCE = None
 PROMPT_GENERATION_FAILED_CODE = "PROMPT_GENERATION_FAILED"
 PROMPT_SOURCE_INPUT_PARALLEL = "minicpm_input_parallel"
 PROMPT_SOURCE_EXTRACTED_FALLBACK = "minicpm_extracted_fallback"
+PROMPT_SOURCE_QWEN_FASTPATH = "qwen_fastpath_default"
 _INVALID_PROMPT_TOKENS = {"none", "n/a", "unknown", "no garment"}
+_DIRECTIONAL_TERMS = {
+    "left",
+    "right",
+    "front",
+    "back",
+    "side",
+    "one side",
+    "opposite side",
+    "viewer-left",
+    "viewer-right",
+}
+_COLOR_TERMS = {
+    "black",
+    "white",
+    "red",
+    "blue",
+    "green",
+    "yellow",
+    "pink",
+    "orange",
+    "brown",
+    "purple",
+    "gray",
+    "grey",
+    "beige",
+}
 
 
 class PromptGenerationFailedError(RuntimeError):
@@ -161,12 +189,129 @@ def _build_analyze_style_garment_metadata(*, prompt_description: str, prompt_sou
         }
 
 
+def _default_prompt_description_for_type(garment_type: str) -> str:
+    normalized = normalize_garment_type(garment_type) or "top"
+    if normalized == "bottom":
+        return "A bottom garment with visible waistband, leg structure, and hem details."
+    if normalized == "dress":
+        return "A dress garment with visible bodice, waist, skirt structure, and hem details."
+    if normalized == "outer":
+        return "An outerwear garment with visible front opening, sleeve structure, and hem details."
+    return "A top garment with visible neckline, sleeve structure, and hem details."
+
+
+def _default_subtype_for_type(garment_type: str) -> str:
+    normalized = normalize_garment_type(garment_type) or "top"
+    if normalized == "bottom":
+        return "bottom"
+    if normalized == "dress":
+        return "dress"
+    if normalized == "outer":
+        return "outer"
+    return "top"
+
+
+def _extract_json_object_text(raw_text: str) -> Optional[str]:
+    text = str(raw_text or "").strip()
+    if not text:
+        return None
+    start = text.find("{")
+    end = text.rfind("}")
+    if start < 0 or end < 0 or end <= start:
+        return None
+    return text[start : end + 1]
+
+
+def _normalize_subtype(raw_subtype: Any, garment_type: str) -> str:
+    text = _normalize_text(raw_subtype)
+    if not text:
+        return _default_subtype_for_type(garment_type)
+    text = re.sub(r"[^a-zA-Z0-9 _-]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip().lower().replace(" ", "_")
+    if not text:
+        return _default_subtype_for_type(garment_type)
+    return text
+
+
+def _sanitize_construction_prompt(raw_prompt: Any) -> str:
+    text = _normalize_text(raw_prompt)
+    if not text:
+        return ""
+    for directional in _DIRECTIONAL_TERMS:
+        text = re.sub(rf"\b{re.escape(directional)}\b", " ", text, flags=re.IGNORECASE)
+    for color in _COLOR_TERMS:
+        text = re.sub(rf"\b{re.escape(color)}\b", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip(" ,.;:-")
+    return text
+
+
+def _parse_minicpm_prompt_contract(raw_text: Any, garment_type: str) -> Dict[str, object]:
+    raw = str(raw_text or "").strip()
+    subtype = _default_subtype_for_type(garment_type)
+
+    json_valid = False
+    fallback_used = False
+    construction_prompt = ""
+
+    payload: Optional[Dict[str, object]] = None
+    json_text = _extract_json_object_text(raw)
+    if json_text:
+        try:
+            parsed = json.loads(json_text)
+            if isinstance(parsed, dict):
+                payload = parsed
+        except Exception:
+            payload = None
+
+    if payload:
+        subtype = _normalize_subtype(
+            payload.get("category_type")
+            or payload.get("garment_category_subtype")
+            or payload.get("top_category_subtype")
+            or payload.get("bottom_category_subtype")
+            or payload.get("dress_category_subtype")
+            or payload.get("outer_category_subtype"),
+            garment_type,
+        )
+        construction_prompt = _sanitize_construction_prompt(payload.get("garment_construction_prompt"))
+        json_valid = bool(_is_prompt_usable(construction_prompt))
+        fallback_used = not json_valid
+
+    if not construction_prompt:
+        fallback_used = True
+        construction_prompt = _sanitize_construction_prompt(raw)
+
+    if not _is_prompt_usable(construction_prompt):
+        fallback_used = True
+        construction_prompt = ""
+
+    return {
+        "category_type": subtype,
+        "garment_category_subtype": subtype,
+        "garment_construction_prompt": construction_prompt,
+        "json_valid": bool(json_valid),
+        "fallback_used": bool(fallback_used),
+        "raw_text": _normalize_text(raw),
+    }
+
+
+def _render_qwen_prompt_with_subtype(prompt_template: str, garment_category_subtype: str) -> str:
+    template = str(prompt_template or "").strip()
+    subtype = _normalize_text(garment_category_subtype)
+    if "{garment_category_subtype}" not in template and "{category_type}" not in template:
+        return template
+    replacement = subtype or "garment"
+    template = template.replace("{garment_category_subtype}", replacement)
+    template = template.replace("{category_type}", replacement)
+    return template
+
+
 def _run_minicpm_prompt(
     *,
     minicpm_runner: Any,
     image: Image.Image,
     garment_type: Optional[str],
-) -> str:
+) -> Dict[str, object]:
     if minicpm_runner is None:
         raise PromptGenerationFailedError("MiniCPM runner is unavailable for prompt generation.")
     try:
@@ -177,7 +322,10 @@ def _run_minicpm_prompt(
         )
     except Exception as exc:
         raise PromptGenerationFailedError(f"MiniCPM prompt generation failed: {exc}") from exc
-    return _normalize_text(described)
+    return _parse_minicpm_prompt_contract(
+        described,
+        garment_type=(normalize_garment_type(garment_type) or "top"),
+    )
 
 
 def build_qwen_extract_outfit_request(
@@ -252,8 +400,11 @@ def execute_qwen_extract_outfit_request(
     Execute one normalized request and return a reusable API payload block.
     """
     request_started_at = time.time()
-    source = _resize_to_max_edge(source_image.convert("RGB"), request.max_input_edge)
+    source_original = source_image.convert("RGB")
+    source_original_width, source_original_height = source_original.size
+    source = _resize_to_max_edge(source_original, request.max_input_edge)
     minicpm_garment_type = _infer_garment_type(request.prompt)
+    enable_minicpm_prompt = _is_truthy(os.getenv("QWEN_EXTRACT_ENABLE_MINICPM_PROMPT", "1"))
     output_width, output_height = _resolve_output_size(
         source_width=source.width,
         source_height=source.height,
@@ -262,24 +413,32 @@ def execute_qwen_extract_outfit_request(
     )
     minicpm_elapsed_seconds = 0.0
     input_prompt_error = None
-    try:
-        minicpm_started_at = time.time()
-        # Match /analyze behavior: run MiniCPM as its own stage (no Qwen GPU contention).
-        input_prompt_description = _run_minicpm_prompt(
-            minicpm_runner=minicpm_runner,
-            image=source,
-            garment_type=minicpm_garment_type,
-        )
-        minicpm_elapsed_seconds += max(0.0, time.time() - minicpm_started_at)
-    except Exception as exc:
-        minicpm_elapsed_seconds += max(0.0, time.time() - locals().get("minicpm_started_at", time.time()))
-        input_prompt_description = ""
-        input_prompt_error = exc
+    input_prompt_contract: Dict[str, object] = {}
+    if enable_minicpm_prompt:
+        try:
+            minicpm_started_at = time.time()
+            # Match /analyze behavior: run MiniCPM as its own stage (no Qwen GPU contention).
+            input_prompt_contract = _run_minicpm_prompt(
+                minicpm_runner=minicpm_runner,
+                image=source,
+                garment_type=minicpm_garment_type,
+            )
+            minicpm_elapsed_seconds += max(0.0, time.time() - minicpm_started_at)
+        except Exception as exc:
+            minicpm_elapsed_seconds += max(0.0, time.time() - locals().get("minicpm_started_at", time.time()))
+            input_prompt_contract = {}
+            input_prompt_error = exc
+
+    initial_subtype = _normalize_subtype(
+        input_prompt_contract.get("category_type") or input_prompt_contract.get("garment_category_subtype"),
+        minicpm_garment_type,
+    )
+    rendered_qwen_prompt = _render_qwen_prompt_with_subtype(request.prompt, initial_subtype)
 
     qwen_started_at = time.time()
     output_image, meta = runner.run_edit(
         source,
-        prompt=request.prompt,
+        prompt=rendered_qwen_prompt,
         steps=request.steps,
         guidance_scale=request.guidance_scale,
         negative_prompt=request.negative_prompt,
@@ -292,15 +451,28 @@ def execute_qwen_extract_outfit_request(
     prompt_description = ""
     prompt_source = ""
     prompt_fallback_used = False
-    if _is_prompt_usable(input_prompt_description):
-        prompt_description = input_prompt_description
+    prompt_contract: Dict[str, object] = {}
+    if not enable_minicpm_prompt:
+        prompt_description = _default_prompt_description_for_type(minicpm_garment_type)
+        prompt_source = PROMPT_SOURCE_QWEN_FASTPATH
+        prompt_contract = {
+            "category_type": _default_subtype_for_type(minicpm_garment_type),
+            "garment_construction_prompt": prompt_description,
+            "json_valid": False,
+            "fallback_used": True,
+            "raw_text": "",
+        }
+    elif _is_prompt_usable(str(input_prompt_contract.get("garment_construction_prompt") or "")):
+        prompt_contract = dict(input_prompt_contract)
+        prompt_description = str(prompt_contract.get("garment_construction_prompt") or "").strip()
         prompt_source = PROMPT_SOURCE_INPUT_PARALLEL
     else:
         prompt_fallback_used = True
-        fallback_error = None
+        fallback_error: Optional[Exception] = None
+        fallback_prompt_contract: Dict[str, object] = {}
         try:
             fallback_started_at = time.time()
-            fallback_prompt_description = _run_minicpm_prompt(
+            fallback_prompt_contract = _run_minicpm_prompt(
                 minicpm_runner=minicpm_runner,
                 image=output_image,
                 garment_type=minicpm_garment_type,
@@ -308,25 +480,39 @@ def execute_qwen_extract_outfit_request(
             minicpm_elapsed_seconds += max(0.0, time.time() - fallback_started_at)
         except Exception as exc:
             minicpm_elapsed_seconds += max(0.0, time.time() - locals().get("fallback_started_at", time.time()))
-            fallback_prompt_description = ""
+            fallback_prompt_contract = {}
             fallback_error = exc
-        if _is_prompt_usable(fallback_prompt_description):
-            prompt_description = fallback_prompt_description
+        if _is_prompt_usable(str(fallback_prompt_contract.get("garment_construction_prompt") or "")):
+            prompt_contract = dict(fallback_prompt_contract)
+            prompt_description = str(prompt_contract.get("garment_construction_prompt") or "").strip()
             prompt_source = PROMPT_SOURCE_EXTRACTED_FALLBACK
         else:
-            reasons = []
-            if input_prompt_error is not None:
-                reasons.append(f"input_prompt_error={input_prompt_error}")
-            else:
-                reasons.append("input_prompt_invalid")
-            if fallback_error is not None:
-                reasons.append(f"fallback_prompt_error={fallback_error}")
-            else:
-                reasons.append("fallback_prompt_invalid")
-            detail = ", ".join(reasons)
-            raise PromptGenerationFailedError(
-                f"{PROMPT_GENERATION_FAILED_CODE}: failed to generate usable prompt ({detail})"
-            )
+            prompt_description = _default_prompt_description_for_type(minicpm_garment_type)
+            prompt_source = PROMPT_SOURCE_QWEN_FASTPATH
+            prompt_contract = {
+                "category_type": _default_subtype_for_type(minicpm_garment_type),
+                "garment_construction_prompt": prompt_description,
+                "json_valid": False,
+                "fallback_used": True,
+                "raw_text": "",
+            }
+            if input_prompt_error is not None or fallback_error is not None:
+                prompt_fallback_used = True
+
+    if not prompt_contract:
+        prompt_contract = {
+            "category_type": _default_subtype_for_type(minicpm_garment_type),
+            "garment_construction_prompt": prompt_description or _default_prompt_description_for_type(minicpm_garment_type),
+            "json_valid": False,
+            "fallback_used": True,
+            "raw_text": "",
+        }
+    resolved_subtype = _normalize_subtype(
+        prompt_contract.get("category_type") or prompt_contract.get("garment_category_subtype"),
+        minicpm_garment_type,
+    )
+    if not prompt_description:
+        prompt_description = str(prompt_contract.get("garment_construction_prompt") or "").strip()
     prompt_elapsed_seconds = round(float(minicpm_elapsed_seconds), 3)
     total_elapsed_seconds = round(float(time.time() - request_started_at), 3)
     garment_metadata = _build_analyze_style_garment_metadata(
@@ -362,16 +548,35 @@ def execute_qwen_extract_outfit_request(
         image_base64 = base64.b64encode(output_bytes).decode("ascii")
 
     response_meta = dict(meta or {})
-    response_meta["prompt"] = request.prompt
+    aligned_output_size = dict(response_meta.get("requested_output_size_aligned") or {})
+    if not aligned_output_size:
+        aligned_output_size = dict(response_meta.get("requested_output_size") or {})
+    response_meta["prompt_template"] = request.prompt
+    response_meta["prompt"] = rendered_qwen_prompt
     response_meta["prompt_default_applied"] = bool(request.prompt_default_applied)
+    response_meta["input_original_size"] = {
+        "width": int(source_original_width),
+        "height": int(source_original_height),
+    }
+    response_meta["input_preprocessed_size"] = {"width": int(source.width), "height": int(source.height)}
+    # Backward-compatible alias.
     response_meta["input_size"] = {"width": int(source.width), "height": int(source.height)}
     response_meta["requested_output_size"] = {"width": int(output_width), "height": int(output_height)}
+    response_meta["requested_output_size_aligned"] = {
+        "width": int(aligned_output_size.get("width") or output_width),
+        "height": int(aligned_output_size.get("height") or output_height),
+    }
     response_meta["output_size"] = {"width": int(output_image.width), "height": int(output_image.height)}
     response_meta["elapsed_seconds"] = round(float(qwen_elapsed_seconds), 3)
     response_meta["max_input_edge"] = int(request.max_input_edge)
     response_meta["max_output_edge"] = int(request.output_max_edge)
     response_meta["output_aspect_ratio"] = str(request.output_aspect_ratio or "")
+    response_meta["minicpm_prompt_enabled"] = bool(enable_minicpm_prompt)
     response_meta["minicpm_elapsed_seconds"] = round(float(minicpm_elapsed_seconds), 3)
+    response_meta["minicpm_json_valid"] = bool(prompt_contract.get("json_valid"))
+    response_meta["minicpm_json_fallback_used"] = bool(prompt_contract.get("fallback_used"))
+    response_meta["normalized_category_type"] = resolved_subtype
+    response_meta["normalized_garment_category_subtype"] = resolved_subtype
     response_meta["qwen_elapsed_seconds"] = round(float(qwen_elapsed_seconds), 3)
     response_meta["total_elapsed_seconds"] = total_elapsed_seconds
 
@@ -381,9 +586,13 @@ def execute_qwen_extract_outfit_request(
         "image_base64": image_base64,
         "promptDescription": prompt_description,
         "promptDescriptionSource": prompt_source,
+        "categoryType": resolved_subtype,
+        "garmentCategorySubtype": resolved_subtype,
         "garmentMetadata": garment_metadata,
         "promptElapsedSeconds": prompt_elapsed_seconds,
         "promptFallbackUsed": bool(prompt_fallback_used),
+        "minicpmJsonValid": bool(prompt_contract.get("json_valid")),
+        "minicpmJsonFallbackUsed": bool(prompt_contract.get("fallback_used")),
         "minicpmElapsedSeconds": round(float(minicpm_elapsed_seconds), 3),
         "qwenElapsedSeconds": round(float(qwen_elapsed_seconds), 3),
         "totalElapsedSeconds": total_elapsed_seconds,

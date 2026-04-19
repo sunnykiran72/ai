@@ -60,6 +60,8 @@ class QwenImageEditRunner:
         self.warmup_steps = max(1, int(os.getenv("QWEN_IMAGE_EDIT_WARMUP_STEPS", "4")))
         self.warmup_edge = max(256, int(os.getenv("QWEN_IMAGE_EDIT_WARMUP_EDGE", "512")))
         self._warmed_up = False
+        grid_raw = str(os.getenv("QWEN_IMAGE_EDIT_GRID_BASE", "8")).strip()
+        self.grid_base = 16 if grid_raw == "16" else 8
 
         requested_device = str(os.getenv("QWEN_IMAGE_EDIT_DEVICE", "auto")).strip().lower()
         if requested_device not in {"auto", "cuda", "cpu"}:
@@ -249,12 +251,14 @@ class QwenImageEditRunner:
             run_kwargs["generator"] = generator
 
         requested_output_size = None
+        requested_output_size_aligned = None
         if output_width is not None and output_height is not None:
-            aligned_width = _align_to_model_grid(int(output_width))
-            aligned_height = _align_to_model_grid(int(output_height))
+            requested_output_size = {"width": int(output_width), "height": int(output_height)}
+            aligned_width = _align_to_model_grid(int(output_width), base=int(self.grid_base))
+            aligned_height = _align_to_model_grid(int(output_height), base=int(self.grid_base))
             run_kwargs["width"] = int(aligned_width)
             run_kwargs["height"] = int(aligned_height)
-            requested_output_size = {"width": int(aligned_width), "height": int(aligned_height)}
+            requested_output_size_aligned = {"width": int(aligned_width), "height": int(aligned_height)}
 
         with self._infer_lock, torch.inference_mode():
             try:
@@ -267,6 +271,7 @@ class QwenImageEditRunner:
                     run_kwargs.pop("width", None)
                     run_kwargs.pop("height", None)
                     requested_output_size = None
+                    requested_output_size_aligned = None
                     result = self._pipeline(**run_kwargs)
                 else:
                     raise
@@ -301,5 +306,7 @@ class QwenImageEditRunner:
             "seed": int(seed) if seed is not None else None,
             "lora_source_is_repo": _looks_like_repo_id(self.lora_repo),
             "requested_output_size": requested_output_size,
+            "requested_output_size_aligned": requested_output_size_aligned,
+            "grid_base": int(self.grid_base),
         }
         return images[0], metadata

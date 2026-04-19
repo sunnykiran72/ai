@@ -603,43 +603,38 @@ class TestGarmentPromptNatural:
     def test_minicpm_garment_prompt_requests_detailed_garment_paragraph(self):
         prompt = get_minicpm_garment_prompt().lower()
 
-        assert "requested garment type" in prompt
-        assert "40 to 90 words" in prompt
-        assert "do not add fluff" in prompt
-        assert "garment-only product image" in prompt
-        assert "never mention exposed human features" in prompt
-        assert "never infer hidden length" in prompt
-        assert "not fully visible" in prompt
-        assert "use direct factual wording" in prompt
-        assert "do not mention colors" in prompt
-        assert "do not use directional wording" in prompt
+        assert "return exactly one valid json object" in prompt
+        assert "category_type" in prompt
+        assert "garment_construction_prompt" in prompt
+        assert "exactly one line, plain text, 40 to 75 words" in prompt
+        assert "output only json" in prompt
+        assert "no directional/side terms" in prompt
+        assert "no color terms" in prompt
 
     def test_minicpm_top_prompt_includes_top_only_structure_fields(self):
         prompt = get_minicpm_garment_prompt("top").lower()
 
-        assert "top-only guidance" in prompt
-        assert "shoulder layout" in prompt
-        assert "torso panel continuity" in prompt
-        assert "without assigning a side" in prompt
-        assert "name the feature itself rather than its direction" in prompt
-        assert "lower-body features" in prompt
-        assert "not fully visible" in prompt
+        assert "describe only the top garment" in prompt
+        assert "upper-edge/neckline/opening shape" in prompt
+        assert "torso silhouette/construction" in prompt
+        assert "no non-top garment or hardware details" in prompt
+        assert "replace any directional wording with garment-only phrasing" in prompt
 
     def test_minicpm_dress_prompt_includes_nondirectional_asymmetry_guidance(self):
         prompt = get_minicpm_garment_prompt("dress").lower()
 
-        assert "dress-only guidance" in prompt
-        assert "without assigning a side" in prompt
-        assert "name the feature itself rather than its direction" in prompt
-        assert "never describe the body area revealed through it" in prompt
+        assert "describe only the dress garment" in prompt
+        assert "bodice-to-skirt continuity as one garment" in prompt
+        assert "if asymmetry is visible, describe it without side words" in prompt
+        assert "no non-dress garment or hardware details" in prompt
 
     def test_minicpm_outer_prompt_excludes_inner_layers(self):
         prompt = get_minicpm_garment_prompt("outer").lower()
 
-        assert "outerwear-only guidance" in prompt
-        assert "inner garments" in prompt
-        assert "collar" in prompt
-        assert "not fully visible" in prompt
+        assert "describe only the outer garment" in prompt
+        assert "no non-outer garment or hardware details" in prompt
+        assert "upper-edge/neckline/opening shape" in prompt
+        assert "if upper edge is broad/pleated/draped, use panel/band wording" in prompt
 
     def test_top_subtype_router_identifies_bust_band_top(self):
         subtype = infer_top_prompt_subtype(

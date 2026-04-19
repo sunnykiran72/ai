@@ -1,14 +1,11 @@
 from pathlib import Path
-
-import pytest
 from PIL import Image
 
 from core.qwen_extract_outfit_service import (
     DEFAULT_QWEN_EXTRACT_OUTFIT_PROMPT,
-    PROMPT_GENERATION_FAILED_CODE,
     PROMPT_SOURCE_EXTRACTED_FALLBACK,
     PROMPT_SOURCE_INPUT_PARALLEL,
-    PromptGenerationFailedError,
+    PROMPT_SOURCE_QWEN_FASTPATH,
     build_qwen_extract_outfit_request,
     execute_qwen_extract_outfit_request,
 )
@@ -141,13 +138,20 @@ def test_execute_request_generates_payload_with_parallel_prompt(tmp_path: Path):
     assert payload["promptDescriptionSource"] == PROMPT_SOURCE_INPUT_PARALLEL
     assert payload["promptFallbackUsed"] is False
     assert payload["promptDescription"]
+    assert payload["garmentCategorySubtype"] == "top"
+    assert payload["minicpmJsonValid"] is False
+    assert payload["minicpmJsonFallbackUsed"] is True
     assert payload["promptElapsedSeconds"] >= 0
     assert payload["garmentMetadata"]["schema_version"] == "garment_metadata.v1"
     assert payload["metadata"]["prompt"] == "Extract only outfit"
+    assert payload["metadata"]["prompt_template"] == "Extract only outfit"
     assert payload["metadata"]["max_input_edge"] == 512
     assert payload["metadata"]["max_output_edge"] == 512
+    assert payload["metadata"]["input_original_size"] == {"width": 800, "height": 600}
+    assert payload["metadata"]["input_preprocessed_size"] == {"width": 512, "height": 384}
     assert payload["metadata"]["input_size"] == {"width": 512, "height": 384}
     assert payload["metadata"]["requested_output_size"] == {"width": 512, "height": 384}
+    assert payload["metadata"]["requested_output_size_aligned"] == {"width": 512, "height": 384}
     assert fake_runner.calls[0]["size"] == (512, 384)
     assert fake_runner.calls[0]["guidance_scale"] is None
     assert fake_runner.calls[0]["output_width"] == 512
@@ -193,16 +197,17 @@ def test_execute_request_fails_when_both_prompt_attempts_are_unusable(tmp_path: 
     fake_minicpm = _FakeMiniCPM(["n/a", "no garment"])
     source = Image.new("RGB", (800, 600), "gray")
 
-    with pytest.raises(PromptGenerationFailedError) as exc:
-        execute_qwen_extract_outfit_request(
-            request=request,
-            source_image=source,
-            runner=fake_runner,
-            minicpm_runner=fake_minicpm,
-            upload_image_fn=None,
-            output_dir=str(tmp_path),
-        )
-    assert PROMPT_GENERATION_FAILED_CODE in str(exc.value)
+    payload = execute_qwen_extract_outfit_request(
+        request=request,
+        source_image=source,
+        runner=fake_runner,
+        minicpm_runner=fake_minicpm,
+        upload_image_fn=None,
+        output_dir=str(tmp_path),
+    )
+    assert payload["promptDescriptionSource"] == PROMPT_SOURCE_QWEN_FASTPATH
+    assert payload["promptFallbackUsed"] is True
+    assert "top garment with visible neckline" in payload["promptDescription"].lower()
 
 
 def test_execute_request_can_save_local_when_enabled(tmp_path: Path, monkeypatch):
@@ -227,3 +232,62 @@ def test_execute_request_can_save_local_when_enabled(tmp_path: Path, monkeypatch
 
     assert payload["local_path"]
     assert Path(payload["local_path"]).exists()
+
+
+def test_execute_request_prefers_valid_minicpm_json_contract(tmp_path: Path):
+    request = _build_default_request(include_base64=False)
+    fake_runner = _FakeRunner()
+    fake_minicpm = _FakeMiniCPM(
+        [
+            """{
+                "category_type": "one_shoulder_top",
+                "garment_construction_prompt": "One-shoulder top with asymmetric upper edge, single strap configuration, fitted torso panel, and cropped hem endpoint."
+            }"""
+        ]
+    )
+    source = Image.new("RGB", (800, 600), "gray")
+
+    payload = execute_qwen_extract_outfit_request(
+        request=request,
+        source_image=source,
+        runner=fake_runner,
+        minicpm_runner=fake_minicpm,
+        upload_image_fn=None,
+        output_dir=str(tmp_path),
+    )
+
+    assert payload["promptDescriptionSource"] == PROMPT_SOURCE_INPUT_PARALLEL
+    assert payload["minicpmJsonValid"] is True
+    assert payload["minicpmJsonFallbackUsed"] is False
+    assert payload["garmentCategorySubtype"] == "one_shoulder_top"
+    assert "one-shoulder top" in payload["promptDescription"].lower()
+
+
+def test_execute_request_renders_subtype_placeholder_into_qwen_prompt(tmp_path: Path):
+    request = _build_default_request(
+        prompt="Extract mockup for {category_type} garment only",
+        include_base64=False,
+    )
+    fake_runner = _FakeRunner()
+    fake_minicpm = _FakeMiniCPM(
+        [
+            """{
+                "category_type": "halter_top",
+                "garment_construction_prompt": "Halter top with gathered neckline and cropped hem."
+            }"""
+        ]
+    )
+    source = Image.new("RGB", (800, 600), "gray")
+
+    payload = execute_qwen_extract_outfit_request(
+        request=request,
+        source_image=source,
+        runner=fake_runner,
+        minicpm_runner=fake_minicpm,
+        upload_image_fn=None,
+        output_dir=str(tmp_path),
+    )
+
+    assert fake_runner.calls[0]["prompt"] == "Extract mockup for halter_top garment only"
+    assert payload["metadata"]["prompt_template"] == "Extract mockup for {category_type} garment only"
+    assert payload["metadata"]["prompt"] == "Extract mockup for halter_top garment only"

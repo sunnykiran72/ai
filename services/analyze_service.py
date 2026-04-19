@@ -57,32 +57,28 @@ logger = logging.getLogger("glamify-ai")
 
 ANALYZE_QWEN_TYPE_PROMPTS = {
     "top": (
-        "Extract the clothing and create a flat mockup for the top garment into a clean, standalone white background mockup. "
-        "Preserve the original fabric texture, stitching, folds, patterns, and color accuracy. "
-        "Remove the model, other garments and accessories completely, keeping the garment's natural shape and proportions intact."
+        "Extract the clothing and create a flat mockup for a {category_type} garment only as shown into a clean, standalone white background mockup. "
+        "Strictly preserve every detail of target garment and size, original fabric texture, stitching, folds, patterns and color accuracy."
     ),
     "bottom": (
-        "Extract the clothing and create a flat mockup for the bottom garment into a clean, standalone white background mockup. "
-        "Preserve the original fabric texture, stitching, folds, patterns, and color accuracy. "
-        "Remove the model, other garments and accessories completely, keeping the garment's natural shape and proportions intact."
+        "Extract the clothing and create a flat mockup for a {category_type} garment only as shown into a clean, standalone white background mockup. "
+        "Strictly preserve every detail of target garment and size, original fabric texture, stitching, folds, patterns and color accuracy."
     ),
     "dress": (
-        "Extract the clothing and create a flat mockup for the dress garment into a clean, standalone white background mockup. "
-        "Preserve the original fabric texture, stitching, folds, patterns, and color accuracy. "
-        "Remove the model, other garments and accessories completely, keeping the garment's natural shape and proportions intact."
+        "Extract the clothing and create a flat mockup for a {category_type} garment only as shown into a clean, standalone white background mockup. "
+        "Strictly preserve every detail of target garment and size, original fabric texture, stitching, folds, patterns and color accuracy."
     ),
     "outer": (
-        "Extract the clothing and create a flat mockup for the outer garment into a clean, standalone white background mockup. "
-        "Preserve the original fabric texture, stitching, folds, patterns, and color accuracy. "
-        "Remove the model, other garments and accessories completely, keeping the garment's natural shape and proportions intact."
+        "Extract the clothing and create a flat mockup for a {category_type} garment only as shown into a clean, standalone white background mockup. "
+        "Strictly preserve every detail of target garment and size, original fabric texture, stitching, folds, patterns and color accuracy."
     ),
 }
-ANALYZE_QWEN_DEFAULT_STEPS = 14
-ANALYZE_QWEN_DEFAULT_SEED = 123
-ANALYZE_QWEN_MAX_INPUT_EDGE = 512
+ANALYZE_QWEN_DEFAULT_STEPS = 12
+ANALYZE_QWEN_DEFAULT_SEED = 576
+ANALYZE_QWEN_MAX_INPUT_EDGE = 768
 ANALYZE_QWEN_MIN_INPUT_LONGEST_EDGE = 768
 ANALYZE_QWEN_MAX_OUTPUT_EDGE = 768
-ANALYZE_QWEN_OUTPUT_ASPECT_RATIO = "2:3"
+ANALYZE_QWEN_OUTPUT_ASPECT_RATIO = ""
 
 try:
     import jwt as _jwt
@@ -124,7 +120,7 @@ class AnalyzeService:
 
         try:
             from ai import main as main_mod
-        except ModuleNotFoundError:
+        except (ModuleNotFoundError, ImportError):
             import main as main_mod
 
         if not inspect.iscoroutinefunction(upload.read):
@@ -277,12 +273,14 @@ class AnalyzeService:
                 if source_image is None:
                     raise RuntimeError("source_image is required for extraction")
                 source_image = source_image.convert("RGB")
+                original_source_width, original_source_height = source_image.size
 
-                # Keep Qwen input consistent for small crops:
-                # if longest edge < 768px, upscale proportionally with Lanczos.
+                # Keep Qwen input deterministic for analyze:
+                # resize longest edge to exactly 768px (upscale or downscale).
                 longest_edge = max(source_image.width, source_image.height)
-                if longest_edge < ANALYZE_QWEN_MIN_INPUT_LONGEST_EDGE:
-                    ratio = float(ANALYZE_QWEN_MIN_INPUT_LONGEST_EDGE) / float(max(1, longest_edge))
+                target_edge = int(ANALYZE_QWEN_MIN_INPUT_LONGEST_EDGE)
+                if longest_edge != target_edge:
+                    ratio = float(target_edge) / float(max(1, longest_edge))
                     target_size = (
                         max(1, int(round(source_image.width * ratio))),
                         max(1, int(round(source_image.height * ratio))),
@@ -293,6 +291,21 @@ class AnalyzeService:
 
                 selected_type = normalize_garment_type(str(kwargs.get("garment_type") or "")) or "top"
                 qwen_prompt = ANALYZE_QWEN_TYPE_PROMPTS.get(selected_type, ANALYZE_QWEN_TYPE_PROMPTS["top"])
+                qwen_output_max_edge_alias = None
+                qwen_output_aspect_ratio_alias = None
+                top_min_output_width_rule_applied = False
+                forced_output_width = None
+                forced_output_height = None
+                if selected_type == "top" and int(source_image.width) < 512:
+                    top_min_output_width_rule_applied = True
+                    forced_output_width = 512
+                    safe_width = max(1, int(source_image.width))
+                    forced_output_height = max(
+                        1,
+                        int(round(float(source_image.height) * (float(forced_output_width) / float(safe_width)))),
+                    )
+                    qwen_output_max_edge_alias = int(max(forced_output_width, forced_output_height))
+                    qwen_output_aspect_ratio_alias = f"{int(forced_output_width)}:{int(forced_output_height)}"
                 qwen_request = build_qwen_extract_outfit_request(
                     prompt=qwen_prompt,
                     steps=ANALYZE_QWEN_DEFAULT_STEPS,
@@ -303,10 +316,10 @@ class AnalyzeService:
                     negative_prompt_alias=None,
                     max_input_edge=ANALYZE_QWEN_MAX_INPUT_EDGE,
                     max_input_edge_alias=qwen_input_edge,
-                    output_max_edge=ANALYZE_QWEN_MAX_OUTPUT_EDGE,
-                    output_max_edge_alias=None,
-                    output_aspect_ratio=ANALYZE_QWEN_OUTPUT_ASPECT_RATIO,
-                    output_aspect_ratio_alias=None,
+                    output_max_edge=None,
+                    output_max_edge_alias=qwen_output_max_edge_alias,
+                    output_aspect_ratio=None,
+                    output_aspect_ratio_alias=qwen_output_aspect_ratio_alias,
                     upload_output=False,
                     include_base64=True,
                 )
@@ -357,6 +370,24 @@ class AnalyzeService:
                 
                 # Build metadata
                 metadata = dict(qwen_data.get("metadata") or {})
+                metadata["input_original_size"] = {
+                    "width": int(original_source_width),
+                    "height": int(original_source_height),
+                }
+                metadata["input_preprocessed_size"] = {
+                    "width": int(source_image.width),
+                    "height": int(source_image.height),
+                }
+                metadata["input_size"] = {
+                    "width": int(source_image.width),
+                    "height": int(source_image.height),
+                }
+                metadata["top_min_output_width_rule_applied"] = bool(top_min_output_width_rule_applied)
+                if top_min_output_width_rule_applied:
+                    metadata["top_min_output_width_rule"] = {
+                        "requested_width": int(forced_output_width or 512),
+                        "derived_height": int(forced_output_height or source_image.height),
+                    }
                 garment_metadata_obj = qwen_data.get("garmentMetadata")
                 qwen_garment_metadata = garment_metadata_obj if isinstance(garment_metadata_obj, dict) else {}
                 prompt_description = str(qwen_data.get("promptDescription") or "").strip()

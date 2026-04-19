@@ -7,9 +7,9 @@ from PIL import Image
 import routes.qwen_extract_outfit as route_mod
 from core.qwen_extract_outfit_service import (
     DEFAULT_QWEN_EXTRACT_OUTFIT_PROMPT,
-    PROMPT_GENERATION_FAILED_CODE,
     PROMPT_SOURCE_EXTRACTED_FALLBACK,
     PROMPT_SOURCE_INPUT_PARALLEL,
+    PROMPT_SOURCE_QWEN_FASTPATH,
 )
 
 EXPECTED_DEFAULT_PROMPT = DEFAULT_QWEN_EXTRACT_OUTFIT_PROMPT
@@ -114,6 +114,7 @@ def test_route_applies_default_prompt_when_blank():
     payload = resp.json()
     assert payload["status"] == "success"
     assert payload["data"]["metadata"]["prompt"] == EXPECTED_DEFAULT_PROMPT
+    assert payload["data"]["metadata"]["prompt_template"] == EXPECTED_DEFAULT_PROMPT
     assert payload["data"]["metadata"]["prompt_default_applied"] is True
     assert payload["data"]["promptDescriptionSource"] == PROMPT_SOURCE_INPUT_PARALLEL
     assert payload["data"]["promptFallbackUsed"] is False
@@ -206,7 +207,7 @@ def test_route_uses_fallback_prompt_when_initial_prompt_is_weak():
     assert payload["data"]["promptFallbackUsed"] is True
 
 
-def test_route_returns_prompt_generation_failed_when_both_attempts_fail():
+def test_route_uses_safe_default_when_both_prompt_attempts_fail():
     fake_runner = _FakeRunner()
     fake_minicpm = _FakeMiniCPM(["n/a", "unknown"])
     client = _build_client(fake_runner, fake_minicpm)
@@ -221,9 +222,10 @@ def test_route_returns_prompt_generation_failed_when_both_attempts_fail():
         files={"file": ("input.png", _png_bytes("green"), "image/png")},
     )
 
-    assert resp.status_code == 502
+    assert resp.status_code == 200
     payload = resp.json()
-    assert payload["detail"]["reason_codes"] == [PROMPT_GENERATION_FAILED_CODE]
+    assert payload["data"]["promptDescriptionSource"] == PROMPT_SOURCE_QWEN_FASTPATH
+    assert payload["data"]["promptFallbackUsed"] is True
 
 
 def test_route_requires_uploaded_image():
