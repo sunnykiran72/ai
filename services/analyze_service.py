@@ -295,6 +295,14 @@ class AnalyzeService:
                     )
                     resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
                     source_image = source_image.resize(target_size, resampling)
+                # Keep analyze input on same model grid (8/16) before Qwen call.
+                grid_raw = str(os.getenv("QWEN_IMAGE_EDIT_GRID_BASE", "16")).strip()
+                grid_base = 16 if grid_raw == "16" else 8
+                aligned_w = max(grid_base, (int(source_image.width) // grid_base) * grid_base)
+                aligned_h = max(grid_base, (int(source_image.height) // grid_base) * grid_base)
+                if aligned_w != source_image.width or aligned_h != source_image.height:
+                    resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS")
+                    source_image = source_image.resize((int(aligned_w), int(aligned_h)), resampling)
                 qwen_input_edge = int(max(source_image.width, source_image.height))
 
                 selected_type = normalize_garment_type(str(kwargs.get("garment_type") or "")) or "top"
