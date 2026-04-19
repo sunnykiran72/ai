@@ -161,7 +161,7 @@ async def analyze_api_lab_page() -> HTMLResponse:
     <title>Analyze API Full Flow Lab</title>
     <style>
       body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 14px; color: #0f172a; background: #f8fafc; }
-      .grid { display: grid; grid-template-columns: 340px 1fr 1fr; gap: 10px; align-items: start; }
+      .grid { display: grid; grid-template-columns: 340px 1fr 1fr 1fr; gap: 10px; align-items: start; }
       .card { border: 1px solid #d0d7de; border-radius: 10px; padding: 10px; background: #fff; }
       .title { font-size: 12px; font-weight: 800; margin-bottom: 8px; color: #0f172a; text-transform: uppercase; letter-spacing: .04em; }
       label { display: block; font-size: 11px; font-weight: 700; margin: 8px 0 4px; color: #334155; }
@@ -220,6 +220,11 @@ async def analyze_api_lab_page() -> HTMLResponse:
       </div>
 
       <div class="card">
+        <div class="title">Preprocessed Preview</div>
+        <img id="preprocessedPreview" alt="preprocessed preview" />
+      </div>
+
+      <div class="card">
         <div class="title">Output Preview</div>
         <img id="outputPreview" alt="output preview" />
       </div>
@@ -269,6 +274,7 @@ async def analyze_api_lab_page() -> HTMLResponse:
       const runBtn = document.getElementById("runBtn");
       const statusEl = document.getElementById("status");
       const inputPreview = document.getElementById("inputPreview");
+      const preprocessedPreview = document.getElementById("preprocessedPreview");
       const outputPreview = document.getElementById("outputPreview");
       const rawJsonEl = document.getElementById("rawJson");
       const summaryPre = document.getElementById("summaryPre");
@@ -310,6 +316,7 @@ async def analyze_api_lab_page() -> HTMLResponse:
         }
         runBtn.disabled = true;
         statusEl.textContent = "Running analyze...";
+        preprocessedPreview.removeAttribute("src");
         outputPreview.removeAttribute("src");
         resetPanels();
 
@@ -336,6 +343,9 @@ async def analyze_api_lab_page() -> HTMLResponse:
             outputPreview.src = payload.extracted_image_data_url;
           } else if (payload && payload.analyze_response && payload.analyze_response.data && payload.analyze_response.data.cloth_url) {
             outputPreview.src = payload.analyze_response.data.cloth_url;
+          }
+          if (payload && payload.preprocessed_image_data_url) {
+            preprocessedPreview.src = payload.preprocessed_image_data_url;
           }
 
           const analyzeResp = payload && payload.analyze_response ? payload.analyze_response : {};
@@ -481,6 +491,7 @@ async def analyze_api_lab_run(
             metadata = parsed.get("metadata") if isinstance(parsed, dict) else None
             parts: List[Dict[str, Any]] = list(parsed.get("parts") or []) if isinstance(parsed, dict) else []
             extracted_data_url = ""
+            preprocessed_data_url = ""
             part_summaries: List[Dict[str, Any]] = []
             for part in parts:
                 part_summaries.append(
@@ -504,6 +515,13 @@ async def analyze_api_lab_run(
             qwen_debug = analyze_data.get("qwen_debug") if isinstance(analyze_data, dict) else {}
             if not isinstance(qwen_debug, dict):
                 qwen_debug = {}
+            preprocessed_image_base64 = str(
+                qwen_debug.get("input_preprocessed_image_base64")
+                or extraction.get("input_preprocessed_image_base64")
+                or ""
+            ).strip()
+            if preprocessed_image_base64:
+                preprocessed_data_url = f"data:image/png;base64,{preprocessed_image_base64}"
             flow = {
                 "request": {
                     "garment_type": str(garment_type or ""),
@@ -541,6 +559,7 @@ async def analyze_api_lab_run(
                     "final_output_size": qwen_debug.get("final_output_size")
                     or extraction.get("final_output_size")
                     or extraction.get("output_size"),
+                    "preprocessed_input_image_data_url": preprocessed_data_url,
                 },
                 "flags": {
                     "minicpm_prompt_enabled": qwen_debug.get("minicpm_prompt_enabled")
@@ -568,6 +587,7 @@ async def analyze_api_lab_run(
                     "analyze_response": metadata,
                     "binary_parts": part_summaries,
                     "extracted_image_data_url": extracted_data_url,
+                    "preprocessed_image_data_url": preprocessed_data_url,
                     "flow": flow,
                 }
             )

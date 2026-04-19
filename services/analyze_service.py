@@ -398,6 +398,15 @@ class AnalyzeService:
                     "width": int(source_image.width),
                     "height": int(source_image.height),
                 }
+                if bool(debug):
+                    try:
+                        pre_buf = io.BytesIO()
+                        source_image.save(pre_buf, format="PNG")
+                        metadata["input_preprocessed_image_base64"] = base64.b64encode(
+                            pre_buf.getvalue()
+                        ).decode("ascii")
+                    except Exception:
+                        metadata["input_preprocessed_image_base64"] = ""
                 metadata["input_size"] = {
                     "width": int(source_image.width),
                     "height": int(source_image.height),
