@@ -158,28 +158,45 @@ async def analyze_api_lab_page() -> HTMLResponse:
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Analyze API Lab</title>
+    <title>Analyze API Full Flow Lab</title>
     <style>
-      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 16px; color: #0f172a; }
-      .grid { display: grid; grid-template-columns: 360px 1fr 1fr; gap: 12px; align-items: start; }
-      .card { border: 1px solid #d0d7de; border-radius: 10px; padding: 12px; background: #fff; }
-      .title { font-size: 13px; font-weight: 700; margin-bottom: 8px; }
-      label { display: block; font-size: 12px; font-weight: 600; margin: 10px 0 6px; }
-      input[type=file], input[type=text], select, button, textarea { width: 100%; box-sizing: border-box; font-size: 13px; padding: 8px; border-radius: 8px; border: 1px solid #c9d1d9; }
-      button { cursor: pointer; font-weight: 700; background: #0f172a; color: #fff; border: none; margin-top: 12px; }
+      body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 14px; color: #0f172a; background: #f8fafc; }
+      .grid { display: grid; grid-template-columns: 340px 1fr 1fr; gap: 10px; align-items: start; }
+      .card { border: 1px solid #d0d7de; border-radius: 10px; padding: 10px; background: #fff; }
+      .title { font-size: 12px; font-weight: 800; margin-bottom: 8px; color: #0f172a; text-transform: uppercase; letter-spacing: .04em; }
+      label { display: block; font-size: 11px; font-weight: 700; margin: 8px 0 4px; color: #334155; }
+      input[type=file], input[type=text], select, button {
+        width: 100%; box-sizing: border-box; font-size: 13px; padding: 8px; border-radius: 8px; border: 1px solid #c9d1d9; background: #fff;
+      }
+      button { cursor: pointer; font-weight: 700; background: #0f172a; color: #fff; border: none; margin-top: 10px; }
       button:disabled { opacity: 0.6; cursor: not-allowed; }
       img { width: 100%; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; min-height: 240px; object-fit: contain; }
-      pre { background: #0b1020; color: #dbeafe; padding: 10px; border-radius: 8px; overflow: auto; max-height: 360px; font-size: 12px; }
-      .metrics { font-size: 12px; line-height: 1.5; }
-      .row { margin-top: 10px; }
       .status { font-size: 12px; color: #334155; margin-top: 8px; min-height: 18px; }
+      .flow-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+      pre {
+        margin: 0;
+        background: #0b1020;
+        color: #dbeafe;
+        padding: 10px;
+        border-radius: 8px;
+        overflow: auto;
+        max-height: 280px;
+        font-size: 11px;
+        line-height: 1.4;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .row { margin-top: 10px; }
+      .muted { font-size: 11px; color: #64748b; }
     </style>
   </head>
   <body>
-    <h2 style="margin:0 0 10px 0;">Analyze API Lab</h2>
-    <div class="grid">
+    <h2 style="margin:0 0 8px 0;">Analyze API Full Flow Lab</h2>
+    <div class="muted">Upload image + type, then inspect full flow trace: selection, prompt sent, MiniCPM state, sizes, timings, output.</div>
+
+    <div class="grid row">
       <div class="card">
-        <div class="title">INPUT</div>
+        <div class="title">Input</div>
         <label>Base URL</label>
         <input id="baseUrl" type="text" />
         <label>Authorization (optional)</label>
@@ -198,22 +215,49 @@ async def analyze_api_lab_page() -> HTMLResponse:
       </div>
 
       <div class="card">
-        <div class="title">INPUT PREVIEW</div>
+        <div class="title">Input Preview</div>
         <img id="inputPreview" alt="input preview" />
       </div>
 
       <div class="card">
-        <div class="title">OUTPUT PREVIEW</div>
+        <div class="title">Output Preview</div>
         <img id="outputPreview" alt="output preview" />
       </div>
     </div>
 
+    <div class="flow-grid">
+      <div class="card">
+        <div class="title">Flow Summary</div>
+        <pre id="summaryPre">No run yet.</pre>
+      </div>
+      <div class="card">
+        <div class="title">Request + Selection</div>
+        <pre id="selectionPre">No run yet.</pre>
+      </div>
+      <div class="card">
+        <div class="title">Prompt Trace</div>
+        <pre id="promptPre">No run yet.</pre>
+      </div>
+      <div class="card">
+        <div class="title">Resolution Trace</div>
+        <pre id="resolutionPre">No run yet.</pre>
+      </div>
+      <div class="card">
+        <div class="title">Timing Trace</div>
+        <pre id="timingPre">No run yet.</pre>
+      </div>
+      <div class="card">
+        <div class="title">MiniCPM + Qwen Flags</div>
+        <pre id="flagsPre">No run yet.</pre>
+      </div>
+    </div>
+
     <div class="row card">
-      <div class="title">METRICS</div>
-      <div id="metrics" class="metrics">No run yet.</div>
+      <div class="title">Binary Parts</div>
+      <pre id="partsPre">No run yet.</pre>
     </div>
     <div class="row card">
-      <div class="title">RAW RESPONSE (JSON)</div>
+      <div class="title">Raw Response JSON</div>
       <pre id="rawJson">{}</pre>
     </div>
 
@@ -226,10 +270,31 @@ async def analyze_api_lab_page() -> HTMLResponse:
       const statusEl = document.getElementById("status");
       const inputPreview = document.getElementById("inputPreview");
       const outputPreview = document.getElementById("outputPreview");
-      const metricsEl = document.getElementById("metrics");
       const rawJsonEl = document.getElementById("rawJson");
+      const summaryPre = document.getElementById("summaryPre");
+      const selectionPre = document.getElementById("selectionPre");
+      const promptPre = document.getElementById("promptPre");
+      const resolutionPre = document.getElementById("resolutionPre");
+      const timingPre = document.getElementById("timingPre");
+      const flagsPre = document.getElementById("flagsPre");
+      const partsPre = document.getElementById("partsPre");
 
       baseInput.value = window.location.origin;
+
+      function pp(obj) {
+        try { return JSON.stringify(obj, null, 2); } catch { return String(obj); }
+      }
+
+      function resetPanels() {
+        summaryPre.textContent = "Running...";
+        selectionPre.textContent = "Running...";
+        promptPre.textContent = "Running...";
+        resolutionPre.textContent = "Running...";
+        timingPre.textContent = "Running...";
+        flagsPre.textContent = "Running...";
+        partsPre.textContent = "Running...";
+        rawJsonEl.textContent = "{}";
+      }
 
       fileInput.addEventListener("change", () => {
         const f = fileInput.files && fileInput.files[0];
@@ -246,8 +311,8 @@ async def analyze_api_lab_page() -> HTMLResponse:
         runBtn.disabled = true;
         statusEl.textContent = "Running analyze...";
         outputPreview.removeAttribute("src");
-        metricsEl.textContent = "Running...";
-        rawJsonEl.textContent = "{}";
+        resetPanels();
+
         try {
           const fd = new FormData();
           fd.append("file", f);
@@ -255,37 +320,127 @@ async def analyze_api_lab_page() -> HTMLResponse:
           const headers = {};
           const auth = (authInput.value || "").trim();
           if (auth) headers["Authorization"] = auth;
+
           const t0 = performance.now();
           const resp = await fetch(baseInput.value.replace(/\\/$/, "") + "/dev/analyze-api-lab/run", {
             method: "POST",
             body: fd,
             headers,
           });
-          const data = await resp.json();
+          const payload = await resp.json();
           const t1 = performance.now();
-          rawJsonEl.textContent = JSON.stringify(data, null, 2);
-          if (data && data.extracted_image_data_url) {
-            outputPreview.src = data.extracted_image_data_url;
-          } else if (data && data.analyze_response && data.analyze_response.data && data.analyze_response.data.cloth_url) {
-            outputPreview.src = data.analyze_response.data.cloth_url;
+
+          rawJsonEl.textContent = pp(payload);
+
+          if (payload && payload.extracted_image_data_url) {
+            outputPreview.src = payload.extracted_image_data_url;
+          } else if (payload && payload.analyze_response && payload.analyze_response.data && payload.analyze_response.data.cloth_url) {
+            outputPreview.src = payload.analyze_response.data.cloth_url;
           }
-          const payload = (data && data.analyze_response && data.analyze_response.data) ? data.analyze_response.data : {};
-          const lat = payload.latencies || {};
-          const stage = lat.stages || {};
-          metricsEl.innerHTML = [
-            `HTTP: ${resp.status}`,
-            `Result: ${payload.result || "-"}`,
-            `Selected Type: ${payload.selected_type || "-"}`,
-            `Total Latency: ${lat.total ?? "-"} sec`,
-            `GPU Queue Wait: ${lat.gpu_queue_wait ?? "-"} sec`,
-            `Prompt: ${(payload.promptDescription || "").slice(0, 180) || "-"}`,
-            `Client Round Trip: ${((t1 - t0) / 1000).toFixed(3)} sec`,
-            `Stages: ${JSON.stringify(stage)}`,
-          ].join("<br/>");
+
+          const analyzeResp = payload && payload.analyze_response ? payload.analyze_response : {};
+          const data = analyzeResp && analyzeResp.data ? analyzeResp.data : {};
+          const selected = data.selected_item || {};
+          const extraction = selected.extraction || {};
+          const qwenDebug = data.qwen_debug || {};
+          const lat = data.latencies || {};
+          const stages = lat.stages || {};
+          const flow = payload.flow || {};
+
+          summaryPre.textContent = pp({
+            http_status: resp.status,
+            payload_status: analyzeResp.status,
+            result: data.result,
+            selected_type: data.selected_type,
+            cloth_url: data.cloth_url,
+            output_image_url: data.output_image_url,
+            promptDescription: data.promptDescription,
+            promptDescriptionSource: selected.promptDescriptionSource,
+            round_trip_seconds_client: Number(((t1 - t0) / 1000).toFixed(3)),
+            reason_codes: data.reason_codes || [],
+          });
+
+          selectionPre.textContent = pp({
+            input: {
+              filename: f.name,
+              garment_type_sent: garmentType.value || "top",
+              base_url: baseInput.value,
+            },
+            selected_item: {
+              garment_id: selected.garment_id,
+              type: selected.type,
+              style: selected.style,
+              confidence: selected.confidence,
+              detector_label: selected.detector_label,
+              bbox: selected.bbox,
+              extract_crop_mode: selected.extract_crop_mode,
+              extract_crop_bbox: selected.extract_crop_bbox,
+              output_image_source: selected.output_image_source,
+            },
+            flow_request: flow.request || {},
+          });
+
+          promptPre.textContent = pp({
+            prompt_sent_qwen: qwenDebug.prompt_sent || extraction.prompt,
+            prompt_template: qwenDebug.prompt_template || extraction.prompt_template,
+            prompt_source: qwenDebug.prompt_source || extraction.prompt_source,
+            prompt_description: qwenDebug.prompt_description || data.promptDescription,
+            prompt_description_source: qwenDebug.prompt_description_source || selected.promptDescriptionSource,
+            descriptor_raw_text: extraction.descriptor_raw_text,
+            base_garment_prompt: selected.baseGarmentPrompt || extraction.base_garment_prompt,
+          });
+
+          resolutionPre.textContent = pp({
+            input_original_size: qwenDebug.input_original_size || extraction.input_original_size,
+            input_preprocessed_size: qwenDebug.input_preprocessed_size || extraction.input_preprocessed_size,
+            requested_output_size: qwenDebug.requested_output_size || extraction.requested_output_size,
+            requested_output_size_aligned: qwenDebug.requested_output_size_aligned || extraction.requested_output_size_aligned,
+            qwen_output_size_raw: qwenDebug.qwen_output_size_raw || extraction.output_size,
+            final_output_size: qwenDebug.final_output_size || extraction.final_output_size || extraction.output_size,
+            top_min_output_width_rule_applied: qwenDebug.top_min_output_width_rule_applied || extraction.top_min_output_width_rule_applied,
+            top_min_output_width_rule: qwenDebug.top_min_output_width_rule || extraction.top_min_output_width_rule,
+            analyze_postprocess_applied: qwenDebug.analyze_postprocess_applied,
+            analyze_qwen_match_lab_output: qwenDebug.analyze_qwen_match_lab_output,
+          });
+
+          timingPre.textContent = pp({
+            latencies_total: lat.total,
+            gpu_queue_wait: lat.gpu_queue_wait,
+            stage_timings: stages,
+            qwen_elapsed_seconds: extraction.qwen_elapsed_seconds,
+            prompt_elapsed_seconds: extraction.prompt_elapsed_seconds,
+            total_elapsed_seconds_qwen_path: extraction.total_elapsed_seconds,
+          });
+
+          flagsPre.textContent = pp({
+            minicpm_prompt_enabled: qwenDebug.minicpm_prompt_enabled || extraction.minicpm_prompt_enabled,
+            minicpm_json_valid: qwenDebug.minicpm_json_valid || extraction.minicpm_json_valid,
+            minicpm_json_fallback_used: qwenDebug.minicpm_json_fallback_used || extraction.minicpm_json_fallback_used,
+            normalized_category_type: qwenDebug.normalized_category_type || extraction.normalized_category_type,
+            guidance_scale: qwenDebug.guidance_scale || extraction.guidance_scale,
+            steps: qwenDebug.steps || extraction.steps,
+            seed: qwenDebug.seed || extraction.seed,
+            device: extraction.device,
+            dtype: extraction.dtype,
+            lora_loaded: extraction.lora_loaded,
+            grid_base: extraction.grid_base,
+          });
+
+          partsPre.textContent = pp({
+            binary_parts: payload.binary_parts || [],
+            flow_binary_parts: flow.binary_parts || [],
+          });
+
           statusEl.textContent = "Done.";
         } catch (e) {
           statusEl.textContent = "Failed: " + (e && e.message ? e.message : String(e));
-          metricsEl.textContent = "Failed.";
+          summaryPre.textContent = "Failed.";
+          selectionPre.textContent = "Failed.";
+          promptPre.textContent = "Failed.";
+          resolutionPre.textContent = "Failed.";
+          timingPre.textContent = "Failed.";
+          flagsPre.textContent = "Failed.";
+          partsPre.textContent = "Failed.";
         } finally {
           runBtn.disabled = false;
         }
@@ -339,6 +494,73 @@ async def analyze_api_lab_run(
                 if part.get("name") == "extracted_cloth" and isinstance(part.get("bytes"), (bytes, bytearray)):
                     encoded = base64.b64encode(bytes(part["bytes"])).decode("ascii")
                     extracted_data_url = f"data:{part.get('content_type') or 'image/png'};base64,{encoded}"
+            analyze_data = (metadata.get("data") if isinstance(metadata, dict) else {}) or {}
+            selected_item = analyze_data.get("selected_item") if isinstance(analyze_data, dict) else {}
+            if not isinstance(selected_item, dict):
+                selected_item = {}
+            extraction = selected_item.get("extraction") if isinstance(selected_item, dict) else {}
+            if not isinstance(extraction, dict):
+                extraction = {}
+            qwen_debug = analyze_data.get("qwen_debug") if isinstance(analyze_data, dict) else {}
+            if not isinstance(qwen_debug, dict):
+                qwen_debug = {}
+            flow = {
+                "request": {
+                    "garment_type": str(garment_type or ""),
+                    "debug": bool(debug),
+                    "filename": str(getattr(upload, "filename", "") or ""),
+                },
+                "selection": {
+                    "selected_type": analyze_data.get("selected_type"),
+                    "selected_item_type": selected_item.get("type"),
+                    "style": selected_item.get("style"),
+                    "confidence": selected_item.get("confidence"),
+                    "bbox": selected_item.get("bbox"),
+                    "extract_crop_mode": selected_item.get("extract_crop_mode"),
+                    "extract_crop_bbox": selected_item.get("extract_crop_bbox"),
+                    "output_image_source": selected_item.get("output_image_source"),
+                },
+                "prompt": {
+                    "prompt_sent": qwen_debug.get("prompt_sent") or extraction.get("prompt"),
+                    "prompt_template": qwen_debug.get("prompt_template") or extraction.get("prompt_template"),
+                    "prompt_source": qwen_debug.get("prompt_source") or extraction.get("prompt_source"),
+                    "prompt_description": qwen_debug.get("prompt_description") or analyze_data.get("promptDescription"),
+                    "prompt_description_source": qwen_debug.get("prompt_description_source")
+                    or selected_item.get("promptDescriptionSource"),
+                },
+                "resolution": {
+                    "input_original_size": qwen_debug.get("input_original_size")
+                    or extraction.get("input_original_size"),
+                    "input_preprocessed_size": qwen_debug.get("input_preprocessed_size")
+                    or extraction.get("input_preprocessed_size"),
+                    "requested_output_size": qwen_debug.get("requested_output_size")
+                    or extraction.get("requested_output_size"),
+                    "requested_output_size_aligned": qwen_debug.get("requested_output_size_aligned")
+                    or extraction.get("requested_output_size_aligned"),
+                    "qwen_output_size_raw": qwen_debug.get("qwen_output_size_raw") or extraction.get("output_size"),
+                    "final_output_size": qwen_debug.get("final_output_size")
+                    or extraction.get("final_output_size")
+                    or extraction.get("output_size"),
+                },
+                "flags": {
+                    "minicpm_prompt_enabled": qwen_debug.get("minicpm_prompt_enabled")
+                    or extraction.get("minicpm_prompt_enabled"),
+                    "minicpm_json_valid": qwen_debug.get("minicpm_json_valid") or extraction.get("minicpm_json_valid"),
+                    "minicpm_json_fallback_used": qwen_debug.get("minicpm_json_fallback_used")
+                    or extraction.get("minicpm_json_fallback_used"),
+                    "normalized_category_type": qwen_debug.get("normalized_category_type")
+                    or extraction.get("normalized_category_type"),
+                    "analyze_postprocess_applied": qwen_debug.get("analyze_postprocess_applied"),
+                    "analyze_qwen_match_lab_output": qwen_debug.get("analyze_qwen_match_lab_output"),
+                },
+                "timings": {
+                    "latencies": analyze_data.get("latencies"),
+                    "qwen_elapsed_seconds": extraction.get("qwen_elapsed_seconds"),
+                    "prompt_elapsed_seconds": extraction.get("prompt_elapsed_seconds"),
+                    "total_elapsed_seconds": extraction.get("total_elapsed_seconds"),
+                },
+                "binary_parts": part_summaries,
+            }
             return JSONResponse(
                 {
                     "status": "success",
@@ -346,6 +568,7 @@ async def analyze_api_lab_run(
                     "analyze_response": metadata,
                     "binary_parts": part_summaries,
                     "extracted_image_data_url": extracted_data_url,
+                    "flow": flow,
                 }
             )
         # Non-multipart fallback response
