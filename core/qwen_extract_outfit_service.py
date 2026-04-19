@@ -394,6 +394,7 @@ def execute_qwen_extract_outfit_request(
     minicpm_runner: Optional[Any],
     upload_image_fn: Optional[Callable[..., str]] = None,
     output_dir: str = "/tmp/qwen_extract_outfit_outputs",
+    enable_minicpm_prompt_override: Optional[bool] = None,
 ) -> Dict[str, object]:
     """
     Independent function #2:
@@ -404,7 +405,10 @@ def execute_qwen_extract_outfit_request(
     source_original_width, source_original_height = source_original.size
     source = _resize_to_max_edge(source_original, request.max_input_edge)
     minicpm_garment_type = _infer_garment_type(request.prompt)
-    enable_minicpm_prompt = _is_truthy(os.getenv("QWEN_EXTRACT_ENABLE_MINICPM_PROMPT", "1"))
+    if enable_minicpm_prompt_override is None:
+        enable_minicpm_prompt = _is_truthy(os.getenv("QWEN_EXTRACT_ENABLE_MINICPM_PROMPT", "1"))
+    else:
+        enable_minicpm_prompt = bool(enable_minicpm_prompt_override)
     output_width, output_height = _resolve_output_size(
         source_width=source.width,
         source_height=source.height,

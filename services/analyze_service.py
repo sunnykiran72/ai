@@ -10,6 +10,7 @@ import asyncio
 import base64
 import inspect
 import logging
+import os
 import time
 import io
 import requests
@@ -75,10 +76,17 @@ ANALYZE_QWEN_TYPE_PROMPTS = {
 }
 ANALYZE_QWEN_DEFAULT_STEPS = 12
 ANALYZE_QWEN_DEFAULT_SEED = 576
+ANALYZE_QWEN_DEFAULT_GUIDANCE = 0.0
 ANALYZE_QWEN_MAX_INPUT_EDGE = 768
 ANALYZE_QWEN_MIN_INPUT_LONGEST_EDGE = 768
 ANALYZE_QWEN_MAX_OUTPUT_EDGE = 768
 ANALYZE_QWEN_OUTPUT_ASPECT_RATIO = ""
+ANALYZE_QWEN_FORCE_MINICPM_PROMPT = str(os.getenv("ANALYZE_QWEN_FORCE_MINICPM_PROMPT", "1")).strip().lower() in {
+    "1", "true", "yes", "on"
+}
+ANALYZE_QWEN_MATCH_LAB_OUTPUT = str(os.getenv("ANALYZE_QWEN_MATCH_LAB_OUTPUT", "1")).strip().lower() in {
+    "1", "true", "yes", "on"
+}
 
 try:
     import jwt as _jwt
@@ -310,7 +318,7 @@ class AnalyzeService:
                     prompt=qwen_prompt,
                     steps=ANALYZE_QWEN_DEFAULT_STEPS,
                     seed=ANALYZE_QWEN_DEFAULT_SEED,
-                    guidance_scale=None,
+                    guidance_scale=ANALYZE_QWEN_DEFAULT_GUIDANCE,
                     guidance_scale_alias=None,
                     negative_prompt="",
                     negative_prompt_alias=None,
@@ -329,31 +337,32 @@ class AnalyzeService:
                     runner=self._get_qwen_extract_runner(),
                     minicpm_runner=getattr(self.engine, "minicpm", None),
                     upload_image_fn=None,
+                    enable_minicpm_prompt_override=ANALYZE_QWEN_FORCE_MINICPM_PROMPT,
                 )
                 image_base64 = str(qwen_data.get("image_base64") or "").strip()
                 if not image_base64:
                     raise RuntimeError("Qwen extraction did not return image_base64.")
                 extracted_image = Image.open(io.BytesIO(base64.b64decode(image_base64))).convert("RGB")
 
-                # Apply postprocessing if enabled
+                # Analyze parity mode with qwen-lab:
+                # keep raw Qwen output unless explicitly disabled.
                 output_image = extracted_image
-                if bool(self.config.garment_postprocess_enabled):
-                    output_image = main_mod._enhance_image(output_image)
-
-                # Pad to target aspect ratio
-                output_image = main_mod._pad_image(
-                    output_image,
-                    int(self.config.garment_target_aspect_w),
-                    int(self.config.garment_target_aspect_h),
-                )
-
-                # Handle background format (white vs transparent)
-                if str(self.config.garment_output_background).lower() == "white":
-                    if output_image.mode != "RGBA":
-                        output_image = output_image.convert("RGBA")
-                    white_bg = Image.new("RGB", output_image.size, (255, 255, 255))
-                    white_bg.paste(output_image, mask=output_image.split()[-1])
-                    output_image = white_bg.convert("RGB")
+                analyze_postprocess_applied = False
+                if not ANALYZE_QWEN_MATCH_LAB_OUTPUT:
+                    if bool(self.config.garment_postprocess_enabled):
+                        output_image = main_mod._enhance_image(output_image)
+                    output_image = main_mod._pad_image(
+                        output_image,
+                        int(self.config.garment_target_aspect_w),
+                        int(self.config.garment_target_aspect_h),
+                    )
+                    if str(self.config.garment_output_background).lower() == "white":
+                        if output_image.mode != "RGBA":
+                            output_image = output_image.convert("RGBA")
+                        white_bg = Image.new("RGB", output_image.size, (255, 255, 255))
+                        white_bg.paste(output_image, mask=output_image.split()[-1])
+                        output_image = white_bg.convert("RGB")
+                    analyze_postprocess_applied = True
                 
                 # Save to bytes
                 out_buf = io.BytesIO()
@@ -370,6 +379,7 @@ class AnalyzeService:
                 
                 # Build metadata
                 metadata = dict(qwen_data.get("metadata") or {})
+                qwen_output_size_raw = dict(metadata.get("output_size") or {})
                 metadata["input_original_size"] = {
                     "width": int(original_source_width),
                     "height": int(original_source_height),
@@ -388,6 +398,17 @@ class AnalyzeService:
                         "requested_width": int(forced_output_width or 512),
                         "derived_height": int(forced_output_height or source_image.height),
                     }
+                metadata["qwen_output_size_raw"] = {
+                    "width": int(qwen_output_size_raw.get("width") or extracted_image.width),
+                    "height": int(qwen_output_size_raw.get("height") or extracted_image.height),
+                }
+                metadata["final_output_size"] = {
+                    "width": int(output_image.width),
+                    "height": int(output_image.height),
+                }
+                metadata["analyze_postprocess_applied"] = bool(analyze_postprocess_applied)
+                metadata["analyze_qwen_match_lab_output"] = bool(ANALYZE_QWEN_MATCH_LAB_OUTPUT)
+                metadata["analyze_force_minicpm_prompt"] = bool(ANALYZE_QWEN_FORCE_MINICPM_PROMPT)
                 garment_metadata_obj = qwen_data.get("garmentMetadata")
                 qwen_garment_metadata = garment_metadata_obj if isinstance(garment_metadata_obj, dict) else {}
                 prompt_description = str(qwen_data.get("promptDescription") or "").strip()

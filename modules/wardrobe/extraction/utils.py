@@ -176,6 +176,37 @@ def build_success_response(
     data["imageUrl"] = data["cloth_url"]
     data["progressId"] = data["wardrobe_progress_id"]
 
+    # Compact debug block for analyze/Qwen parity troubleshooting.
+    extraction_meta = (selected_item or {}).get("extraction") or {}
+    if isinstance(extraction_meta, dict) and extraction_meta:
+        qwen_debug = {
+            "pipeline": str((selected_item or {}).get("output_image_source") or extraction_meta.get("pipeline") or ""),
+            "prompt_sent": extraction_meta.get("prompt"),
+            "prompt_template": extraction_meta.get("prompt_template"),
+            "prompt_description": data.get("promptDescription"),
+            "prompt_description_source": (selected_item or {}).get("promptDescriptionSource"),
+            "prompt_source": extraction_meta.get("prompt_source"),
+            "steps": extraction_meta.get("steps"),
+            "seed": extraction_meta.get("seed"),
+            "guidance_scale": extraction_meta.get("guidance_scale"),
+            "input_original_size": extraction_meta.get("input_original_size"),
+            "input_preprocessed_size": extraction_meta.get("input_preprocessed_size"),
+            "requested_output_size": extraction_meta.get("requested_output_size"),
+            "requested_output_size_aligned": extraction_meta.get("requested_output_size_aligned"),
+            "qwen_output_size_raw": extraction_meta.get("qwen_output_size_raw") or extraction_meta.get("output_size"),
+            "final_output_size": extraction_meta.get("final_output_size"),
+            "minicpm_prompt_enabled": extraction_meta.get("minicpm_prompt_enabled"),
+            "minicpm_json_valid": extraction_meta.get("minicpm_json_valid"),
+            "minicpm_json_fallback_used": extraction_meta.get("minicpm_json_fallback_used"),
+            "normalized_category_type": extraction_meta.get("normalized_category_type"),
+            "top_min_output_width_rule_applied": extraction_meta.get("top_min_output_width_rule_applied"),
+            "top_min_output_width_rule": extraction_meta.get("top_min_output_width_rule"),
+            "analyze_postprocess_applied": extraction_meta.get("analyze_postprocess_applied"),
+            "analyze_qwen_match_lab_output": extraction_meta.get("analyze_qwen_match_lab_output"),
+            "analyze_force_minicpm_prompt": extraction_meta.get("analyze_force_minicpm_prompt"),
+        }
+        data["qwen_debug"] = qwen_debug
+
     success_binary_parts = []
     extracted_bytes = bytes((selected_item or {}).get("_extracted_image_bytes") or b"")
     if not extracted_bytes and output_image_url:
