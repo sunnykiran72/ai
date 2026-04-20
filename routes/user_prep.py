@@ -28,7 +28,7 @@ def get_user_prep_service() -> UserImageService:
     """Dependency to get UserImageService instance."""
     try:
         from ai import main as _main
-    except ModuleNotFoundError:
+    except (ModuleNotFoundError, ImportError):
         import main as _main
     return _main.get_user_prep_service()
 
@@ -454,7 +454,7 @@ async def prepare_user_image_probe_endpoint(
 
     try:
         from ai import main as main_mod
-    except ModuleNotFoundError:
+    except (ModuleNotFoundError, ImportError):
         import main as main_mod
 
     grounding_dino = getattr(user_prep_service.engine, "grounding_dino", None)

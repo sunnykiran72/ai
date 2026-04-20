@@ -281,23 +281,7 @@ class MiniCPMVRunner:
             instruction=instruction,
             max_new_tokens=self.garment_max_new_tokens,
         )
-        if self._word_count(response) >= self.garment_min_words:
-            return response
-
-        retry_instruction = (
-            f"{instruction} "
-            f"Your previous answer was too short. Rewrite it as one compact garment-construction paragraph of {self.garment_min_words} to 90 words and 3 to 5 complete sentences. "
-            "Keep only visible garment facts. Prioritize the garment category, key edges, strap or sleeve layout, panel structure, closure, and hem or visible length. "
-            "Do not add filler, repeated phrases, fit opinions, styling language, or inferred details."
-        ).strip()
-        retry_response = self._run_prompt(
-            image=image,
-            instruction=retry_instruction,
-            max_new_tokens=self.garment_max_new_tokens,
-        )
-        if self._word_count(retry_response) > self._word_count(response):
-            return retry_response
-
+        # Keep raw MiniCPM output as-is (no retry rewrite/postprocessing).
         return response
 
     def describe_person_and_outfit(self, image: Image.Image, prompt_override: Optional[str] = None) -> str:

@@ -291,3 +291,51 @@ def test_execute_request_renders_subtype_placeholder_into_qwen_prompt(tmp_path: 
     assert fake_runner.calls[0]["prompt"] == "Extract mockup for halter_top garment only"
     assert payload["metadata"]["prompt_template"] == "Extract mockup for {category_type} garment only"
     assert payload["metadata"]["prompt"] == "Extract mockup for halter_top garment only"
+
+
+def test_execute_request_includes_marqo_category_metadata(tmp_path: Path):
+    request = _build_default_request(include_base64=False)
+    fake_runner = _FakeRunner()
+    fake_minicpm = _FakeMiniCPM(
+        [
+            """{
+                "title": "leather jacket",
+                "garment_construction_prompt": "Cropped jacket with stand collar and front zip."
+            }"""
+        ]
+    )
+    source = Image.new("RGB", (800, 600), "gray")
+
+    classifier_calls = []
+
+    def _classifier(image, garment_type):
+        classifier_calls.append((tuple(image.size), garment_type))
+        return {
+            "enabled": True,
+            "applied": True,
+            "best": {
+                "category_key": "jackets",
+                "category_label": "Jackets",
+                "score": 0.91,
+            },
+            "top_matches": [
+                {"category_key": "jackets", "category_label": "Jackets", "score": 0.91},
+                {"category_key": "blazers", "category_label": "Blazers", "score": 0.06},
+            ],
+        }
+
+    payload = execute_qwen_extract_outfit_request(
+        request=request,
+        source_image=source,
+        runner=fake_runner,
+        minicpm_runner=fake_minicpm,
+        upload_image_fn=None,
+        output_dir=str(tmp_path),
+        category_classifier=_classifier,
+    )
+
+    assert classifier_calls
+    assert payload["marqoCategory"]["applied"] is True
+    assert payload["metadata"]["marqo_category"]["best"]["category_key"] == "jackets"
+    assert payload["metadata"]["marqo_applied"] is True
+    assert payload["metadata"]["marqo_best_category_key"] == "jackets"

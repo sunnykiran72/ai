@@ -5,6 +5,7 @@ Reusable request/build helpers for Qwen Extract-Outfit inference.
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import io
 import json
 import os
@@ -208,7 +209,8 @@ def _parse_minicpm_prompt_contract(raw_text: Any, garment_type: str) -> Dict[str
 
     if payload:
         subtype = str(
-            payload.get("category_type")
+            payload.get("title")
+            or payload.get("category_type")
             or payload.get("garment_category_subtype")
             or payload.get("top_category_subtype")
             or payload.get("bottom_category_subtype")
@@ -223,6 +225,7 @@ def _parse_minicpm_prompt_contract(raw_text: Any, garment_type: str) -> Dict[str
         construction_prompt = raw
     if not subtype:
         subtype = _default_subtype_for_type(garment_type)
+    subtype = " ".join(str(subtype).split()).strip().lower()
 
     return {
         "category_type": subtype,
@@ -336,6 +339,7 @@ def execute_qwen_extract_outfit_request(
     enable_minicpm_prompt_override: Optional[bool] = None,
     minicpm_garment_type_override: Optional[str] = None,
     fail_on_minicpm_error_override: Optional[bool] = None,
+    category_classifier: Optional[Callable[[Image.Image, str], Dict[str, object]]] = None,
 ) -> Dict[str, object]:
     """
     Independent function #2:
@@ -364,22 +368,60 @@ def execute_qwen_extract_outfit_request(
         output_aspect_ratio=request.output_aspect_ratio,
     )
     minicpm_elapsed_seconds = 0.0
+    marqo_elapsed_seconds = 0.0
     input_prompt_error = None
+    marqo_error = None
+    marqo_category: Dict[str, object] = {}
     input_prompt_contract: Dict[str, object] = {}
-    if enable_minicpm_prompt:
-        try:
-            minicpm_started_at = time.time()
-            # Match /analyze behavior: run MiniCPM as its own stage (no Qwen GPU contention).
-            input_prompt_contract = _run_minicpm_prompt(
-                minicpm_runner=minicpm_runner,
-                image=source,
-                garment_type=minicpm_garment_type,
-            )
-            minicpm_elapsed_seconds += max(0.0, time.time() - minicpm_started_at)
-        except Exception as exc:
-            minicpm_elapsed_seconds += max(0.0, time.time() - locals().get("minicpm_started_at", time.time()))
-            input_prompt_contract = {}
-            input_prompt_error = exc
+
+    def _run_minicpm_timed() -> tuple[Dict[str, object], float]:
+        started = time.time()
+        payload = _run_minicpm_prompt(
+            minicpm_runner=minicpm_runner,
+            image=source,
+            garment_type=minicpm_garment_type,
+        )
+        return payload, max(0.0, time.time() - started)
+
+    def _run_marqo_timed() -> tuple[Dict[str, object], float]:
+        started = time.time()
+        if callable(category_classifier):
+            payload = category_classifier(source, minicpm_garment_type)
+        else:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {"raw": str(payload)}
+        return payload, max(0.0, time.time() - started)
+
+    run_minicpm = bool(enable_minicpm_prompt)
+    run_marqo = callable(category_classifier)
+    if run_minicpm and run_marqo:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+            fut_minicpm = executor.submit(_run_minicpm_timed)
+            fut_marqo = executor.submit(_run_marqo_timed)
+            try:
+                input_prompt_contract, minicpm_elapsed_seconds = fut_minicpm.result()
+            except Exception as exc:
+                input_prompt_contract = {}
+                input_prompt_error = exc
+            try:
+                marqo_category, marqo_elapsed_seconds = fut_marqo.result()
+            except Exception as exc:
+                marqo_category = {}
+                marqo_error = exc
+    else:
+        if run_minicpm:
+            try:
+                input_prompt_contract, minicpm_elapsed_seconds = _run_minicpm_timed()
+            except Exception as exc:
+                input_prompt_contract = {}
+                input_prompt_error = exc
+        if run_marqo:
+            try:
+                marqo_category, marqo_elapsed_seconds = _run_marqo_timed()
+            except Exception as exc:
+                marqo_category = {}
+                marqo_error = exc
 
     if fail_on_minicpm_error:
         if not enable_minicpm_prompt:
@@ -526,6 +568,17 @@ def execute_qwen_extract_outfit_request(
     response_meta["normalized_garment_category_subtype"] = resolved_subtype
     response_meta["qwen_elapsed_seconds"] = round(float(qwen_elapsed_seconds), 3)
     response_meta["total_elapsed_seconds"] = total_elapsed_seconds
+    response_meta["marqo_category"] = marqo_category
+    response_meta["marqo_category_enabled"] = bool(run_marqo)
+    response_meta["marqo_elapsed_seconds"] = round(float(marqo_elapsed_seconds), 3)
+    response_meta["marqo_error"] = str(marqo_error) if marqo_error else ""
+    if isinstance(marqo_category, dict):
+        best = marqo_category.get("best")
+        if isinstance(best, dict):
+            response_meta["marqo_best_category_key"] = str(best.get("category_key") or "")
+            response_meta["marqo_best_category_label"] = str(best.get("category_label") or best.get("label") or "")
+            response_meta["marqo_best_score"] = float(best.get("score") or 0.0)
+        response_meta["marqo_applied"] = bool(marqo_category.get("applied"))
 
     return {
         "output_url": output_url,
@@ -543,6 +596,7 @@ def execute_qwen_extract_outfit_request(
         "minicpmElapsedSeconds": round(float(minicpm_elapsed_seconds), 3),
         "qwenElapsedSeconds": round(float(qwen_elapsed_seconds), 3),
         "totalElapsedSeconds": total_elapsed_seconds,
+        "marqoCategory": marqo_category,
         "metadata": response_meta,
     }
 

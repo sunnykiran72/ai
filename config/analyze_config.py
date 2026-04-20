@@ -99,6 +99,31 @@ class AnalyzeConfig(BaseModel):
     preload_florence: bool = Field(default=True, description="Preload Florence model at startup")
     florence_dress_lock_min_score: float = Field(default=0.74, description="Minimum score to lock dress type")
     preload_minicpm: bool = Field(default=True, description="Preload MiniCPM model at startup for analyze")
+
+    # Marqo subcategory classification
+    marqo_category_enabled: bool = Field(default=False, description="Enable Marqo subcategory classification")
+    marqo_preload: bool = Field(default=False, description="Preload Marqo fashionSigLIP at startup")
+    marqo_lookup_csv_path: str = Field(default="", description="Lookup CSV path for category candidates")
+    marqo_model_id: str = Field(default="Marqo/marqo-fashionSigLIP", description="Marqo model id")
+    marqo_device: str = Field(default="auto", description="Marqo device override (auto/cuda/cpu)")
+    marqo_min_confidence: float = Field(default=0.22, description="Minimum Marqo confidence to apply override")
+    marqo_top_k: int = Field(default=5, description="Top-K Marqo ranked labels saved in metadata")
+    marqo_lane_top_parents: str = Field(
+        default="tops,layering_pieces",
+        description="Comma-separated parent keys used for top lane fallback",
+    )
+    marqo_lane_bottom_parents: str = Field(
+        default="bottoms,skirts,activewear_sportswear",
+        description="Comma-separated parent keys used for bottom lane fallback",
+    )
+    marqo_lane_dress_parents: str = Field(
+        default="dresses,loungewear,sets_one_pieces",
+        description="Comma-separated parent keys used for dress lane fallback",
+    )
+    marqo_lane_outer_parents: str = Field(
+        default="outerwear,office_wear_formal",
+        description="Comma-separated parent keys used for outer lane fallback",
+    )
     
     # Extraction
     extract_cloth: bool = Field(default=True, description="Extract cloth from detected garments")
@@ -317,6 +342,34 @@ class AnalyzeConfig(BaseModel):
             preload_florence=env_bool("ANALYZE_PRELOAD_FLORENCE", "1"),
             florence_dress_lock_min_score=env_float("ANALYZE_FLORENCE_DRESS_LOCK_MIN_SCORE", 0.74),
             preload_minicpm=env_bool("ANALYZE_PRELOAD_MINICPM", "1"),
+
+            # Marqo subcategory classification
+            marqo_category_enabled=env_bool("ANALYZE_MARQO_CATEGORY_ENABLED", "0"),
+            marqo_preload=env_bool("ANALYZE_MARQO_PRELOAD", "0"),
+            marqo_lookup_csv_path=(
+                os.getenv("ANALYZE_MARQO_LOOKUP_CSV", "").strip()
+                or os.getenv("LOOKUP_CSV_PATH", "").strip()
+            ),
+            marqo_model_id=os.getenv("ANALYZE_MARQO_MODEL_ID", "Marqo/marqo-fashionSigLIP").strip(),
+            marqo_device=os.getenv("ANALYZE_MARQO_DEVICE", "auto").strip().lower(),
+            marqo_min_confidence=min(0.99, max(0.0, env_float("ANALYZE_MARQO_MIN_CONFIDENCE", 0.22))),
+            marqo_top_k=max(1, env_int("ANALYZE_MARQO_TOP_K", 5)),
+            marqo_lane_top_parents=os.getenv(
+                "ANALYZE_MARQO_LANE_TOP_PARENTS",
+                "tops,layering_pieces",
+            ).strip() or "tops,layering_pieces",
+            marqo_lane_bottom_parents=os.getenv(
+                "ANALYZE_MARQO_LANE_BOTTOM_PARENTS",
+                "bottoms,skirts,activewear_sportswear",
+            ).strip() or "bottoms,skirts,activewear_sportswear",
+            marqo_lane_dress_parents=os.getenv(
+                "ANALYZE_MARQO_LANE_DRESS_PARENTS",
+                "dresses,loungewear,sets_one_pieces",
+            ).strip() or "dresses,loungewear,sets_one_pieces",
+            marqo_lane_outer_parents=os.getenv(
+                "ANALYZE_MARQO_LANE_OUTER_PARENTS",
+                "outerwear,office_wear_formal",
+            ).strip() or "outerwear,office_wear_formal",
             
             # Extraction
             extract_cloth=env_bool("ANALYZE_EXTRACT_CLOTH", "1"),

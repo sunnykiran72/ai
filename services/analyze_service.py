@@ -5,7 +5,7 @@ This module provides the AnalyzeService class that orchestrates garment
 analysis workflows using the modular extraction pipeline.
 """
 
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 import asyncio
 import base64
 import inspect
@@ -28,6 +28,7 @@ from shared.response_payloads import (
 from shared.security import verify_bearer_token
 from shared.image_ops import download_image
 from shared.category_mapping import wardrobe_category_from_garment_type, infer_style_from_text
+from shared.marqo_category_taxonomy import MarqoCandidate, load_marqo_taxonomy
 from utils.validation import normalize_garment_type, sanitize_garment_description
 from utils.scoring import (
     dedupe_items_by_iou,
@@ -58,20 +59,31 @@ logger = logging.getLogger("glamify-ai")
 
 ANALYZE_QWEN_TYPE_PROMPTS = {
     "top": (
-        "Extract the clothing and create a flat mockup for a {category_type} garment only as shown into a clean, standalone white background mockup. "
-        "Strictly preserve every detail of target garment and size, original fabric texture, stitching, folds, patterns and color accuracy."
+        "Extract the clothing and create a flat mockup for {category_type} garment only as shown into a clean, standalone white background mockup. "
+        "Preserve every detail of garment structure and size, original fabric texture, stitching, folds, patterns and color fidelity. "
+        "Preserve the exact source orientation and any asymmetry placement from the input image. "
+        "Remove everything from waist completely."
     ),
     "bottom": (
         "Extract the clothing and create a flat mockup for a {category_type} garment only as shown into a clean, standalone white background mockup. "
-        "Strictly preserve every detail of target garment and size, original fabric texture, stitching, folds, patterns and color accuracy."
+        "Preserve the exact garment boundaries, design silhouette, neckline shape, shoulder layout, sleeve or strap count, seam and panel structure, hem shape and hem endpoint, fabric texture, folds, pattern placement, and color fidelity. "
+        "If any region is unclear, keep it minimal and do not invent new structure. "
+        "Do not add any extra garment sections, bottom garment and accessories, duplicate sleeves or straps, extended torso fabric, mirrored panels, hands, skin, mannequin form, accessories, props, text, or background elements. "
+        "The entire target garment must be fully visible and positioned at the center bottom."
     ),
     "dress": (
         "Extract the clothing and create a flat mockup for a {category_type} garment only as shown into a clean, standalone white background mockup. "
-        "Strictly preserve every detail of target garment and size, original fabric texture, stitching, folds, patterns and color accuracy."
+        "Preserve the exact garment boundaries, design silhouette, neckline shape, shoulder layout, sleeve or strap count, seam and panel structure, hem shape and hem endpoint, fabric texture, folds, pattern placement, and color fidelity. "
+        "If any region is unclear, keep it minimal and do not invent new structure. "
+        "Do not add any extra garment sections, bottom garment and accessories, duplicate sleeves or straps, extended torso fabric, mirrored panels, hands, skin, mannequin form, accessories, props, text, or background elements. "
+        "The entire target garment must be fully visible and positioned at the center bottom."
     ),
     "outer": (
         "Extract the clothing and create a flat mockup for a {category_type} garment only as shown into a clean, standalone white background mockup. "
-        "Strictly preserve every detail of target garment and size, original fabric texture, stitching, folds, patterns and color accuracy."
+        "Preserve the exact garment boundaries, design silhouette, neckline shape, shoulder layout, sleeve or strap count, seam and panel structure, hem shape and hem endpoint, fabric texture, folds, pattern placement, and color fidelity. "
+        "If any region is unclear, keep it minimal and do not invent new structure. "
+        "Do not add any extra garment sections, bottom garment and accessories, duplicate sleeves or straps, extended torso fabric, mirrored panels, hands, skin, mannequin form, accessories, props, text, or background elements. "
+        "The entire target garment must be fully visible and positioned at the center bottom."
     ),
 }
 ANALYZE_QWEN_DEFAULT_STEPS = 12
@@ -112,6 +124,107 @@ class AnalyzeService:
 
     def _get_qwen_extract_runner(self):
         return get_shared_qwen_extract_runner()
+
+    def _get_marqo_candidates(
+        self,
+        *,
+        garment_type: str,
+        preferred_primary_key: str,
+    ) -> List[MarqoCandidate]:
+        csv_path = str(getattr(self.config, "marqo_lookup_csv_path", "") or "").strip()
+        if not csv_path:
+            return []
+        taxonomy = load_marqo_taxonomy(
+            csv_path=csv_path,
+            lane_top_parents=str(getattr(self.config, "marqo_lane_top_parents", "") or ""),
+            lane_bottom_parents=str(getattr(self.config, "marqo_lane_bottom_parents", "") or ""),
+            lane_dress_parents=str(getattr(self.config, "marqo_lane_dress_parents", "") or ""),
+            lane_outer_parents=str(getattr(self.config, "marqo_lane_outer_parents", "") or ""),
+        )
+        if not taxonomy.has_rows:
+            return []
+        return taxonomy.candidates_for_lane(
+            garment_type,
+            preferred_primary_key=preferred_primary_key,
+        )
+
+    def _classify_subcategory_with_marqo(
+        self,
+        *,
+        image: Image.Image,
+        garment_type: str,
+        preferred_primary_key: str,
+    ) -> Dict[str, object]:
+        enabled = bool(getattr(self.config, "marqo_category_enabled", False))
+        runner = getattr(self.engine, "marqo_fashion_siglip", None)
+        result: Dict[str, Any] = {
+            "enabled": enabled,
+            "applied": False,
+            "garment_type": str(garment_type or ""),
+            "preferred_primary_key": str(preferred_primary_key or ""),
+            "candidate_count": 0,
+            "best": {},
+            "top_matches": [],
+            "reason": "",
+        }
+        if not enabled:
+            result["reason"] = "disabled"
+            return result
+        if runner is None:
+            result["reason"] = "runner_unavailable"
+            return result
+
+        candidates = self._get_marqo_candidates(
+            garment_type=garment_type,
+            preferred_primary_key=preferred_primary_key,
+        )
+        result["candidate_count"] = len(candidates)
+        if not candidates:
+            result["reason"] = "no_candidates"
+            return result
+
+        labels = [candidate.label for candidate in candidates]
+        try:
+            ranked = runner.rank_labels(
+                image=image,
+                labels=labels,
+                top_k=int(getattr(self.config, "marqo_top_k", 5)),
+            )
+        except Exception as exc:
+            result["reason"] = f"classification_failed:{exc}"
+            return result
+
+        enriched: List[Dict[str, Any]] = []
+        by_label = {candidate.label: candidate for candidate in candidates}
+        for row in ranked:
+            label = str(row.get("label") or "")
+            candidate = by_label.get(label)
+            if candidate is None:
+                continue
+            enriched.append(
+                {
+                    "category_key": candidate.key,
+                    "category_label": candidate.label,
+                    "parent_key": candidate.parent_key,
+                    "parent_label": candidate.parent_label,
+                    "score": float(row.get("score") or 0.0),
+                }
+            )
+        result["top_matches"] = enriched
+        if not enriched:
+            result["reason"] = "no_ranked_matches"
+            return result
+
+        best = enriched[0]
+        result["best"] = best
+        min_conf = float(getattr(self.config, "marqo_min_confidence", 0.22))
+        result["min_confidence"] = min_conf
+        if float(best.get("score") or 0.0) >= min_conf:
+            result["applied"] = True
+            result["reason"] = "applied"
+        else:
+            result["reason"] = "below_threshold"
+        return result
 
     async def analyze_image(
         self,
@@ -307,6 +420,15 @@ class AnalyzeService:
 
                 selected_type = normalize_garment_type(str(kwargs.get("garment_type") or "")) or "top"
                 qwen_prompt = ANALYZE_QWEN_TYPE_PROMPTS.get(selected_type, ANALYZE_QWEN_TYPE_PROMPTS["top"])
+                primary_hint = wardrobe_category_from_garment_type(selected_type)
+                preferred_primary_key = str(primary_hint.get("primary_category_key") or "").strip()
+                marqo_callback = None
+                if bool(getattr(self.config, "marqo_category_enabled", False)):
+                    marqo_callback = lambda image_for_classify, garment_type_for_classify: self._classify_subcategory_with_marqo(
+                        image=image_for_classify,
+                        garment_type=garment_type_for_classify,
+                        preferred_primary_key=preferred_primary_key,
+                    )
                 qwen_output_max_edge_alias = None
                 qwen_output_aspect_ratio_alias = None
                 top_min_output_width_rule_applied = False
@@ -315,11 +437,8 @@ class AnalyzeService:
                 if selected_type == "top" and int(source_image.width) < 512:
                     top_min_output_width_rule_applied = True
                     forced_output_width = 512
-                    safe_width = max(1, int(source_image.width))
-                    forced_output_height = max(
-                        1,
-                        int(round(float(source_image.height) * (float(forced_output_width) / float(safe_width)))),
-                    )
+                    # Keep fixed 512x768 for narrow top crops as requested.
+                    forced_output_height = int(ANALYZE_QWEN_MAX_OUTPUT_EDGE)
                     qwen_output_max_edge_alias = int(max(forced_output_width, forced_output_height))
                     qwen_output_aspect_ratio_alias = f"{int(forced_output_width)}:{int(forced_output_height)}"
                 qwen_request = build_qwen_extract_outfit_request(
@@ -348,6 +467,7 @@ class AnalyzeService:
                     enable_minicpm_prompt_override=ANALYZE_QWEN_FORCE_MINICPM_PROMPT,
                     minicpm_garment_type_override=selected_type,
                     fail_on_minicpm_error_override=True,
+                    category_classifier=marqo_callback,
                 )
                 image_base64 = str(qwen_data.get("image_base64") or "").strip()
                 if not image_base64:
@@ -636,6 +756,22 @@ class AnalyzeService:
             selected_item["style"] = final_sync_category["style"]
             selected_item["category_key"] = final_sync_category["category_key"]
             selected_item["primary_category_key"] = final_sync_category["primary_category_key"]
+            marqo_category_obj = extraction_meta.get("marqo_category")
+            marqo_category = marqo_category_obj if isinstance(marqo_category_obj, dict) else {}
+            marqo_best_obj = marqo_category.get("best")
+            marqo_best = marqo_best_obj if isinstance(marqo_best_obj, dict) else {}
+            marqo_best_key = str(marqo_best.get("category_key") or "").strip()
+            marqo_applied = bool(marqo_category.get("applied")) and bool(marqo_best_key)
+            if marqo_applied:
+                selected_item["category_key"] = marqo_best_key
+            if marqo_category:
+                selected_item["marqo_category"] = marqo_category
+                selected_item["marqo_category_applied"] = bool(marqo_applied)
+                selected_item["marqo_category_key"] = marqo_best_key
+                selected_item["marqo_category_label"] = str(
+                    marqo_best.get("category_label") or ""
+                ).strip()
+                selected_item["marqo_category_score"] = float(marqo_best.get("score") or 0.0)
 
             garment_meta_obj = selected_item.get("garmentMetadata")
             final_garment_metadata = garment_meta_obj if isinstance(garment_meta_obj, dict) else {}
@@ -644,6 +780,16 @@ class AnalyzeService:
                 if isinstance(extraction_garment_meta, dict):
                     final_garment_metadata = extraction_garment_meta
                     selected_item["garmentMetadata"] = extraction_garment_meta
+            if isinstance(final_garment_metadata, dict):
+                classification_obj = final_garment_metadata.get("classification")
+                classification = classification_obj if isinstance(classification_obj, dict) else {}
+                if classification:
+                    classification["primary_category_key"] = str(
+                        selected_item.get("primary_category_key") or ""
+                    )
+                    classification["category_key"] = str(selected_item.get("category_key") or "")
+                    final_garment_metadata["classification"] = classification
+                    selected_item["garmentMetadata"] = final_garment_metadata
 
             prompting_context = {
                 "selected_type": final_selected_type,
@@ -653,6 +799,7 @@ class AnalyzeService:
                 "garment_metadata": final_garment_metadata,
                 "prompt_source": final_prompt_source,
                 "minicpm_description": str(selected_item.get("minicpm_description") or ""),
+                "marqo_category": marqo_category,
             }
 
             # Stage: Sync Progress

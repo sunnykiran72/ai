@@ -25,7 +25,7 @@ def get_tryon_service() -> TryonService:
     """Dependency to get TryonService instance."""
     try:
         from ai import main as _main
-    except ModuleNotFoundError:
+    except (ModuleNotFoundError, ImportError):
         import main as _main
     return _main.get_tryon_service()
 

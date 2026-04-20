@@ -28,6 +28,7 @@ from core.yolo_runner import YoloPersonDetectorRunner, YoloRunner
 from core.human_parser_runner import HumanParserRunner
 from core.openclip_runner import OpenCLIPRunner
 from core.fashion_color_classifier_runner import FashionColorClassifierRunner
+from core.marqo_fashion_siglip_runner import MarqoFashionSiglipRunner
 from core.garment_color_masker import GarmentColorMasker
 from core.grounding_dino_runner import GroundingDinoRunner
 from core.gfpgan_runner import GFPGANRunner
@@ -99,6 +100,14 @@ class AIEngine:
             if self.config.analyze.fashion_basecolour_trial_enabled
             else None
         )
+        self.marqo_fashion_siglip = (
+            MarqoFashionSiglipRunner(
+                model_id=self.config.analyze.marqo_model_id,
+                device=self.config.analyze.marqo_device,
+            )
+            if self.config.analyze.marqo_category_enabled
+            else None
+        )
         
         # Generation models
         shared_flux2_config: Dict[str, object] = {}
@@ -146,6 +155,7 @@ class AIEngine:
             "gfpgan": getattr(self.gfpgan, "device", ""),
             "openclip": getattr(self.openclip, "device", ""),
             "fashion_basecolour": getattr(self.fashion_basecolour, "device", "") if self.fashion_basecolour else "",
+            "marqo_fashion_siglip": getattr(self.marqo_fashion_siglip, "device", "") if self.marqo_fashion_siglip else "",
             "yolo": getattr(self.yolo_runner, "device", ""),
             "fashion_detection": getattr(self.fashion_detection_runner, "device", ""),
             "grounding_dino": getattr(self.grounding_dino, "device", ""),
@@ -241,6 +251,8 @@ class AIEngine:
             _safe_preload("flux2", self.get_flux2_for_analyze().ensure_ready)
         if self.fashion_basecolour is not None:
             _safe_preload("fashion_basecolour", self.fashion_basecolour.ensure_ready)
+        if self.marqo_fashion_siglip is not None and self.config.analyze.marqo_preload:
+            _safe_preload("marqo_fashion_siglip", self.marqo_fashion_siglip.ensure_ready)
     
     def model_status(self) -> Dict[str, object]:
         """Get current status of all AI models."""
@@ -285,6 +297,20 @@ class AIEngine:
             "fashion_basecolour_model_id": str(getattr(self.fashion_basecolour, "model_id", "")),
             "fashion_basecolour_device": (
                 str(getattr(self.fashion_basecolour, "device", "") or "") if self.fashion_basecolour else ""
+            ),
+            "marqo_fashion_siglip_loaded": bool(
+                self.marqo_fashion_siglip and self.marqo_fashion_siglip.is_loaded
+            ),
+            "marqo_fashion_siglip_available": bool(
+                self.marqo_fashion_siglip and self.marqo_fashion_siglip.is_available
+            ),
+            "marqo_fashion_siglip_model_id": str(
+                getattr(self.marqo_fashion_siglip, "model_id", "")
+            ),
+            "marqo_fashion_siglip_device": (
+                str(getattr(self.marqo_fashion_siglip, "device", "") or "")
+                if self.marqo_fashion_siglip
+                else ""
             ),
             "yolo_loaded": self.yolo_runner.is_loaded,
             "yolo_model_path": self.yolo_runner.model_path,

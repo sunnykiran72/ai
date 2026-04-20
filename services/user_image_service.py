@@ -11,6 +11,7 @@ Responsibilities:
 """
 
 from typing import Dict, Optional, Tuple
+import os
 
 from PIL import Image
 
@@ -47,13 +48,22 @@ class UserImageService:
         """
         try:
             from ai import main as main_mod
-        except ModuleNotFoundError:
+        except (ModuleNotFoundError, ImportError):
             import main as main_mod
 
         minicpm_runner = getattr(self.engine, "minicpm", None)
         grounding_dino = getattr(self.engine, "grounding_dino", None)
         realesrgan = getattr(self.engine, "realesrgan", None)
         gfpgan = getattr(self.engine, "gfpgan", None)
+        minicpm_device = str(getattr(minicpm_runner, "device", "") or "").strip().lower()
+        user_prep_enable_minicpm_verify = str(
+            os.getenv("USER_PREP_ENABLE_MINICPM_VERIFY", "0")
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        use_minicpm_for_user_prep = bool(
+            minicpm_runner is not None
+            and user_prep_enable_minicpm_verify
+            and minicpm_device == "cuda"
+        )
         resolved_resize_method = resize_method or self.config.app.user_prep_resize_method
         resolved_output_max_edge = max(
             512,
@@ -66,7 +76,7 @@ class UserImageService:
             return grounding_dino.detect(image, prompts=list(prompts or []))
 
         def _description_fn(image):
-            if minicpm_runner is None:
+            if not use_minicpm_for_user_prep:
                 return ""
             try:
                 return str(minicpm_runner.describe_person_and_outfit(image)).strip()
@@ -74,12 +84,15 @@ class UserImageService:
                 return ""
 
         def _verification_fn(image, prompt):
-            if minicpm_runner is None:
+            if not use_minicpm_for_user_prep:
                 return ""
             try:
                 return str(minicpm_runner.describe_person_and_outfit(image, prompt_override=prompt)).strip()
             except Exception:
                 return ""
+
+        description_fn = _description_fn if use_minicpm_for_user_prep else None
+        verifier_fn = _verification_fn if use_minicpm_for_user_prep else None
 
         prepared_image_fn = None
         if realesrgan is not None and bool(self.config.app.user_prep_upscale_enabled):
@@ -111,8 +124,8 @@ class UserImageService:
             return await prepare_user_image_pipeline(
                 upload,
                 grounding_detector_fn=_grounding_detector_fn,
-                verifier_fn=_verification_fn,
-                description_fn=_description_fn,
+                verifier_fn=verifier_fn,
+                description_fn=description_fn,
                 fallback_description_fn=lambda image: main_mod._describe_user_image_for_prepare(image, description_backend=None),
                 prepared_image_fn=prepared_image_fn,
                 upload_fn=main_mod._upload_or_raise,
@@ -127,7 +140,7 @@ class UserImageService:
                 blur_check_enabled=bool(self.config.analyze.blur_check_enabled),
                 blur_min_focus_score=float(self.config.analyze.blur_min_focus_score),
                 blur_focus_max_edge=int(self.config.analyze.blur_focus_max_edge),
-                verification_required=True,
+                verification_required=bool(use_minicpm_for_user_prep),
             )
 
         result = await _run_prepare(str(resolved_resize_method))
@@ -139,6 +152,13 @@ class UserImageService:
                 and any(token in message for token in {"pyvips", "libvips", "vipsthumbnail"})
             )
             if fallback_needed:
+                # UploadFile streams are consumed on first read; rewind before retry.
+                try:
+                    file_obj = getattr(upload, "file", None)
+                    if file_obj is not None and hasattr(file_obj, "seek"):
+                        file_obj.seek(0)
+                except Exception:
+                    pass
                 result = await _run_prepare("pillow_lanczos")
         return result
     

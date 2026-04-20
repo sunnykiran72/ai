@@ -670,7 +670,7 @@ async def analyze_detection_lab_page() -> HTMLResponse:
 def get_ai_engine() -> AIEngine:
     try:
         from ai import main as _main
-    except ModuleNotFoundError:
+    except (ModuleNotFoundError, ImportError):
         import main as _main
     return _main.get_ai_engine()
 

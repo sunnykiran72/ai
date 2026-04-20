@@ -22,12 +22,13 @@ MINICPM_GARMENT_DESCRIPTION_PROMPTS = {
 
 Output format:
 - Return exactly one valid JSON object with exactly 2 keys:
-  1) "category_type": string
+  1) "title": string
   2) "garment_construction_prompt": string
 - Output only JSON. No extra text.
 
-Rules for "category_type":
-- Use an accurate type from visible evidence only for top garment.
+Rules for "title":
+- Use an accurate 2-5 words from visible evidence only for top garment.
+- Keep title in lowercase only.
 
 Rules for "garment_construction_prompt":
 - Exactly one line, plain text, 40 to 75 words.

@@ -25,7 +25,7 @@ def get_extract_service() -> GarmentExtractionService:
     """Dependency to get GarmentExtractionService instance."""
     try:
         from ai import main as _main
-    except ModuleNotFoundError:
+    except (ModuleNotFoundError, ImportError):
         import main as _main
     return _main.get_extract_service()
 

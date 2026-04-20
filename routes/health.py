@@ -23,7 +23,7 @@ def get_ai_engine() -> AIEngine:
     """Dependency to get AIEngine instance."""
     try:
         from ai import main as _main
-    except ModuleNotFoundError:
+    except (ModuleNotFoundError, ImportError):
         import main as _main
     return _main.get_ai_engine()
 
