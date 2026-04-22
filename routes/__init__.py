@@ -36,6 +36,7 @@ from .upscaler_test import router as upscaler_test_router
 from .analyze_detection_lab import router as analyze_detection_lab_router
 from .seedvr2_test import router as seedvr2_test_router
 from .minicpm_lab import router as minicpm_lab_router
+from .tryon_results import router as tryon_results_router
 
 __all__ = [
     "tryon_router",
@@ -51,4 +52,5 @@ __all__ = [
     "analyze_detection_lab_router",
     "seedvr2_test_router",
     "minicpm_lab_router",
+    "tryon_results_router",
 ]
