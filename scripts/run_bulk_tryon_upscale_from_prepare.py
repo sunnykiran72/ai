@@ -192,10 +192,13 @@ def _write_csv(path: Path, rows: List[CaseResult], args: argparse.Namespace) -> 
         "tryon_latency_s",
         "upscale_latency_s",
         "total_latency_s",
+        "garment_mode",
         "top_image_url",
         "bottom_image_url",
+        "dress_image_url",
         "top_prompt",
         "bottom_prompt",
+        "dress_prompt",
     ]
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -204,10 +207,13 @@ def _write_csv(path: Path, rows: List[CaseResult], args: argparse.Namespace) -> 
             payload = row.as_dict()
             payload.update(
                 {
+                    "garment_mode": args.garment_mode,
                     "top_image_url": args.top_image_url,
                     "bottom_image_url": args.bottom_image_url,
+                    "dress_image_url": args.dress_image_url,
                     "top_prompt": args.top_prompt,
                     "bottom_prompt": args.bottom_prompt,
+                    "dress_prompt": args.dress_prompt,
                 }
             )
             writer.writerow(payload)
@@ -230,10 +236,13 @@ def _build_summary(rows: List[CaseResult], args: argparse.Namespace) -> Dict[str
         "lora_scale": args.lora_scale,
         "output_max_edge": args.output_max_edge,
         "upscale_target_long_edge": args.upscale_target_long_edge,
+        "garment_mode": args.garment_mode,
         "top_image_url": args.top_image_url,
         "bottom_image_url": args.bottom_image_url,
+        "dress_image_url": args.dress_image_url,
         "top_prompt": args.top_prompt,
         "bottom_prompt": args.bottom_prompt,
+        "dress_prompt": args.dress_prompt,
         "total": total,
         "success": len(success_rows),
         "error": len(error_rows),
@@ -244,8 +253,21 @@ def _build_summary(rows: List[CaseResult], args: argparse.Namespace) -> Dict[str
 
 
 def _generate_html(path: Path, rows: List[CaseResult], summary: Dict[str, object]) -> None:
-    product_cards = [
-        f"""
+    if str(summary.get("garment_mode") or "top_bottom").strip().lower() == "dress":
+        product_cards = [
+            f"""
+<figure class="product-card">
+  <figcaption>Dress Reference</figcaption>
+  <a href="{html.escape(str(summary.get('dress_image_url') or ''))}" target="_blank" rel="noopener">
+    <img src="{html.escape(str(summary.get('dress_image_url') or ''))}" alt="dress garment" loading="lazy" />
+  </a>
+  <pre>{html.escape(str(summary.get('dress_prompt') or ''))}</pre>
+</figure>
+""",
+        ]
+    else:
+        product_cards = [
+            f"""
 <figure class="product-card">
   <figcaption>Top Reference</figcaption>
   <a href="{html.escape(str(summary.get('top_image_url') or ''))}" target="_blank" rel="noopener">
@@ -263,7 +285,7 @@ def _generate_html(path: Path, rows: List[CaseResult], summary: Dict[str, object
   <pre>{html.escape(str(summary.get('bottom_prompt') or ''))}</pre>
 </figure>
 """,
-    ]
+        ]
 
     case_cards = []
     for row in rows:
@@ -382,6 +404,24 @@ def _build_prompt(user_prompt: str, top_desc: str, bottom_desc: str) -> str:
     return TRYON_PROMPT_TEMPLATE.format(user_prompt=normalized_user)
 
 
+def _build_dress_prompt(user_prompt: str, dress_desc: str) -> str:
+    normalized_user = " ".join(str(user_prompt or "").split()).rstrip(" .!?").strip()
+    normalized_user = normalized_user or "same person as shown in the reference image"
+    normalized_dress = " ".join(str(dress_desc or "").split()).strip()
+    normalized_dress = normalized_dress or "dress garment"
+    return (
+        f"TRYON {normalized_user}. Replace the entire outfit with {normalized_dress} as shown in the reference image. "
+        "Preserve exact person identity including face, hair color, eye direction, pose, footwear, and accessories. "
+        "Preserve body geometry and silhouette: torso contour, waist-to-hip relationship, hip contour, glute projection, thigh volume, and leg length. "
+        "Render the garment with accurate construction, fit, seam placement, drape, hem length, texture, pattern placement. "
+        "Strictly remove any worn top, bottom, dress and outer garments. "
+        "Preserve the exact garment color fidelity, garment structure, deisgn pattern and positions, sleeve construction, edge finish and fabric pattern layout as shown in references. "
+        "Garment must preserve only the design and construction of its own reference image. "
+        "Keep camera distance, background, and lighting consistent. "
+        "The final image is a full body shot."
+    )
+
+
 def _build_prompt_from_template(template: str, user_prompt: str) -> str:
     normalized_user = " ".join(str(user_prompt or "").split()).rstrip(" .!?").strip()
     normalized_user = normalized_user or "same person as shown in the reference image"
@@ -392,10 +432,13 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Bulk try-on + SeedVR2 upscale runner")
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--prepare-cache-csv", required=True)
-    parser.add_argument("--top-image-url", required=True)
-    parser.add_argument("--bottom-image-url", required=True)
-    parser.add_argument("--top-prompt", required=True)
-    parser.add_argument("--bottom-prompt", required=True)
+    parser.add_argument("--garment-mode", choices=["top_bottom", "dress"], default="top_bottom")
+    parser.add_argument("--top-image-url", default="")
+    parser.add_argument("--bottom-image-url", default="")
+    parser.add_argument("--dress-image-url", default="")
+    parser.add_argument("--top-prompt", default="")
+    parser.add_argument("--bottom-prompt", default="")
+    parser.add_argument("--dress-prompt", default="")
     parser.add_argument("--steps", type=int, default=12)
     parser.add_argument("--seed", type=int, default=44)
     parser.add_argument("--guidance-scale", type=float, default=2.5)
@@ -418,6 +461,20 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.garment_mode == "dress":
+        if not str(args.dress_image_url or "").strip():
+            raise SystemExit("--dress-image-url is required when --garment-mode dress")
+        if not str(args.dress_prompt or "").strip():
+            raise SystemExit("--dress-prompt is required when --garment-mode dress")
+    else:
+        if not str(args.top_image_url or "").strip():
+            raise SystemExit("--top-image-url is required when --garment-mode top_bottom")
+        if not str(args.bottom_image_url or "").strip():
+            raise SystemExit("--bottom-image-url is required when --garment-mode top_bottom")
+        if not str(args.top_prompt or "").strip():
+            raise SystemExit("--top-prompt is required when --garment-mode top_bottom")
+        if not str(args.bottom_prompt or "").strip():
+            raise SystemExit("--bottom-prompt is required when --garment-mode top_bottom")
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     jsonl_path = output_dir / "results.jsonl"
@@ -461,13 +518,23 @@ def main() -> int:
         try:
             if prompt_template_override:
                 prompt_override = _build_prompt_from_template(prompt_template_override, str(item["user_prompt"]))
+            elif args.garment_mode == "dress":
+                prompt_override = _build_dress_prompt(str(item["user_prompt"]), args.dress_prompt)
             else:
                 prompt_override = _build_prompt(str(item["user_prompt"]), args.top_prompt, args.bottom_prompt)
             debug_dir = None
             if args.debug_dump:
                 debug_dir = output_dir / "debug" / f"{int(index):03d}_{_slugify(str(item['user_file']))}"
-            tryon_req = {
-                "products": [
+            if args.garment_mode == "dress":
+                products = [
+                    {
+                        "image": args.dress_image_url,
+                        "promptDescription": args.dress_prompt,
+                        "targetType": "dress",
+                    }
+                ]
+            else:
+                products = [
                     {
                         "image": args.top_image_url,
                         "promptDescription": args.top_prompt,
@@ -478,7 +545,9 @@ def main() -> int:
                         "promptDescription": args.bottom_prompt,
                         "targetType": "bottom",
                     },
-                ],
+                ]
+            tryon_req = {
+                "products": products,
                 "user_image": {
                     "tryonImage": str(item["prepared_input_url"]),
                     "promptDescription": str(item["user_prompt"]),
