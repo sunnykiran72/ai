@@ -12,7 +12,7 @@ Responsibilities:
 - Apply color guard and quality scoring
 """
 
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 import io
 import time
 import logging
@@ -69,6 +69,7 @@ class TryonService:
         mode: Optional[str] = None,
         lora_scale: Optional[float] = None,
         output_max_edge: Optional[int] = None,
+        prompt_override: Optional[str] = None,
         **_kwargs,
     ):
         """
@@ -87,7 +88,7 @@ class TryonService:
             garment_type=garment_type,
             prompt_description=prompt_description,
         )
-        board, board_mode = self._build_board(garments)
+        reference_input, board_mode = self._prepare_reference_input(garments, garment_types)
         source_worn_types = _kwargs.get("source_worn_types")
         resolved_mode = str(mode or "tryon-lora").strip().lower()
         if resolved_mode != "tryon-lora":
@@ -96,14 +97,19 @@ class TryonService:
         if effective_lora_scale is None:
             # fal/flux-klein-9b-virtual-tryon-lora recommends scale=1.0.
             effective_lora_scale = 1.0
+        normalized_prompt_override = " ".join(str(prompt_override or "").split()).strip()
         prompt_text_for_metadata = ""
 
-        prompt_text = self._build_tryon_lora_prompt(
-            user_description=user_prompt_description,
-            garment_descriptions=garment_descriptions,
-            target_types=garment_types,
-            board_mode=board_mode,
-            source_worn_types=source_worn_types,
+        prompt_text = (
+            normalized_prompt_override
+            if normalized_prompt_override
+            else self._build_tryon_lora_prompt(
+                user_description=user_prompt_description,
+                garment_descriptions=garment_descriptions,
+                target_types=garment_types,
+                board_mode=board_mode,
+                source_worn_types=source_worn_types,
+            )
         )
         prompt_text_for_metadata = prompt_text
 
@@ -113,7 +119,7 @@ class TryonService:
 
         flux_result = flux_runner.run_tryon(
             person_image=person,
-            board_image=board,
+            board_image=reference_input,
             prompt=prompt_text,
             steps=steps,
             seed=seed,
@@ -148,6 +154,7 @@ class TryonService:
                 ),
                 "board_mode": board_mode,
                 "garment_count": len(garments),
+                "reference_input_count": len(reference_input) if isinstance(reference_input, list) else 1,
                 "target_types": garment_types,
                 "prompt": prompt_text_for_metadata,
                 "output_size": [int(image.width), int(image.height)],
@@ -252,12 +259,15 @@ class TryonService:
                 bottom_desc = " ".join(str(kind_first_desc.get("bottom", "bottom garment") or "").split()).rstrip(" .!?").strip() or "bottom garment"
                 return (
                     f"TRYON {clean_person_desc}. "
-                    f"Replace the entire outfit with {top_desc} and {bottom_desc} as shown in the reference images. "
-                    "Preserve the exact garment structure from the reference, including the front opening shape, closure placement, hem length, "
-                    "exposed torso areas, sleeve construction, edge finish and fabric pattern layout. "
-                    "Preserve any intentionally open or cutout areas exactly as part of the garment design, and do not close them, fill them in, "
-                    "or convert them into continuous fabric coverage. "
-                    "Strictly Keep the same face, body measurements, hair color, eye directions, exact footwear, same accessories and preserve the body pose. "
+                    f"Replace the entire outfit with a upper-garment : {top_desc}; lower-garment : {bottom_desc} as shown in the reference images. "
+                    "Preserve exact person identity including face, hair color, eye direction, pose, footwear, and accessories. "
+                    "Preserve body geometry and silhouette: torso contour, waist-to-hip relationship, hip contour, glute projection, thigh volume, and leg length. "
+                    "Render both garments with accurate construction, fit, seam placement, drape, hem length, texture, pattern placement. "
+                    "Strictly remove any worn top, bottom, dress and outer garments. "
+                    "Preserve the exact garment color fidelity, garment structure, deisgn pattern and positions, sleeve construction, edge finish and fabric pattern layout as shown in references. "
+                    "Each garment must preserve only the design and construction of its own reference image. "
+                    "Maintain strict garment separation with no cross-garment inference, no feature borrowing, and no structural or visual mixing between upper and lower garments. "
+                    "Keep camera distance, background, and lighting consistent. "
                     "The final image is a full body shot."
                 ).strip()
 
@@ -358,9 +368,15 @@ class TryonService:
         if garment_kind == "dress":
             return (
                 f"TRYON {clean_person_desc}. "
-                f"Replace the entire outfit completely with {clean_garment_text} as shown in the reference image. "
-                "Strictly remove other worn garments. "
-                + SINGLE_GARMENT_PRESERVE_TAIL
+                f"Replace the entire outfit with {clean_garment_text} as shown in the reference image. "
+                "Preserve exact person identity including face, hair color, eye direction, pose, footwear, and accessories. "
+                "Preserve body geometry and silhouette: torso contour, waist-to-hip relationship, hip contour, glute projection, thigh volume, and leg length. "
+                "Render the garment with accurate construction, fit, seam placement, drape, hem length, texture, pattern placement. "
+                "Strictly remove any worn top, bottom, dress and outer garments. "
+                "Preserve the exact garment color fidelity, garment structure, deisgn pattern and positions, sleeve construction, edge finish and fabric pattern layout as shown in references. "
+                "Garment must preserve only the design and construction of its own reference image. "
+                "Keep camera distance, background, and lighting consistent. "
+                "The final image is a full body shot."
             ).strip()
 
         if garment_kind == "top":
@@ -533,6 +549,15 @@ class TryonService:
             return garments[0], "single"
         board = builder.build_board(garments)
         return board, "collage"
+
+    def _prepare_reference_input(
+        self,
+        garments: List[Image.Image],
+        garment_types: List[str],
+    ) -> Tuple[Union[Image.Image, List[Image.Image]], str]:
+        del garment_types
+        board, board_mode = self._build_board(garments)
+        return board, board_mode
 
     @staticmethod
     def _match_canvas(image: Image.Image, target_size: Tuple[int, int]) -> Image.Image:
