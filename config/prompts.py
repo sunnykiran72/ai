@@ -59,33 +59,33 @@ Final safety rewrite:
 
 Output format:
 - Return exactly one valid JSON object with exactly 2 keys:
-  1) "category_type": string
+  1) "title": string
   2) "garment_construction_prompt": string
 - Output only JSON. No extra text.
 
-Rules for "category_type":
-- Use a conservative bottom subtype from visible evidence only.
+Rules for "title":
+- Use an accurate 2-5 word bottom subtype from visible evidence only.
+- Keep title in lowercase only.
+- No color words, no fluff.
 
 Rules for "garment_construction_prompt":
 - Exactly one line, plain text, 40 to 75 words.
 - Natural sentence flow.
-- Focus mainly on bottom category/subtype, waistband/rise/opening shape, leg or skirt panel configuration, torso-to-hip transition, silhouette/construction, hem shape/endpoint, and at least one standout visible detail; optional texture/motif with garment-zone placement.
+- Focus on visible bottom construction: waistband/rise/opening shape, closure detail if visible, hip/seat shaping, leg or skirt-panel structure, seam/panel continuity, silhouette, hem shape/endpoint, and at least one standout visible detail.
 - Use only high-confidence evidence; skip weak details.
 
 Hard constraints:
 - Only directly visible bottom-garment evidence.
-- No guessing or inferred hidden structure.
+- No guessing, no inferred hidden structure.
 - No directional/side terms.
-- Forbidden terms: left, right, side, one side, opposite side, front, back, viewer-left, viewer-right.
 - No color terms.
 - No body/background/camera/styling terms.
-- No non-bottom garment or hardware details.
+- No non-bottom garment details.
 - No non-visible region details.
-- No absence phrasing: no, not visible, without, absent, unknown.
+- No absence phrasing.
 - No repeated facts.
 
 Disambiguation:
-- Use "strap" only for a clearly separate thin support band.
 - If asymmetry is visible, describe it without side words.
 
 Final safety rewrite:
@@ -94,35 +94,39 @@ Final safety rewrite:
 
 Output format:
 - Return exactly one valid JSON object with exactly 2 keys:
-  1) "category_type": string
+  1) "title": string
   2) "garment_construction_prompt": string
 - Output only JSON. No extra text.
 
-Rules for "category_type":
-- Use a conservative dress subtype from visible evidence only.
+Rules for "title":
+- Use an accurate 2-5 word dress subtype from visible evidence only.
+- Keep title in lowercase only.
+- Title must include dress length when clearly visible, such as micro, mini, short, above-knee, knee-length, midi, maxi, or floor-length.
+- If overall silhouette is also clear, combine both silhouette and length in the title, such as tiered mini dress, fitted midi dress, smocked maxi dress, or slip midi dress.
+- Do not use a sleeve-led title when the overall dress silhouette and length are more important.
+- No color words, no fluff.
 
 Rules for "garment_construction_prompt":
 - Exactly one line, plain text, 40 to 75 words.
-- Natural sentence flow.
-- Focus mainly on dress category/subtype, upper-edge/neckline/opening shape, sleeve/strap/panel configuration, shoulder coverage, bodice-to-skirt continuity as one garment, silhouette/construction, hem shape/endpoint, and at least one standout visible detail; optional texture/motif with garment-zone placement.
+- Write one continuous natural sentence.
+- Describe the dress as one continuous garment from bodice to hem.
+- Cover visible dress construction in this priority order when present: neckline or upper-edge or opening, sleeve or strap configuration, shoulder coverage, bodice structure, waist seam or waist transition, skirt-panel continuity, closure detail if visible, overall silhouette, hem shape, hem endpoint or dress length, and one standout visible construction or finish detail.
+- Dress length must be stated explicitly using dress-length wording when clearly visible, such as mini dress, short dress, above-knee dress, midi dress, maxi dress, or floor-length dress, as hem wording alone is not sufficient.
+- Shoulder coverage is mandatory when clearly visible.
+- Waist seam or waist transition is mandatory when clearly visible.
+- Prefer structural details over decorative wording.
 - Use only high-confidence evidence; skip weak details.
+- No color words, no fluff.
 
 Hard constraints:
 - Only directly visible dress-garment evidence.
-- No guessing or inferred hidden structure.
-- No directional/side terms.
-- Forbidden terms: left, right, side, one side, opposite side, front, back, viewer-left, viewer-right.
-- No color terms.
-- No body/background/camera/styling terms.
-- No non-dress garment or hardware details.
+- No guessing, no inferred hidden structure.
+- No directional or side terms.
+- No body, background, camera, styling, pose, or accessory terms.
+- No non-dress garment details.
 - No non-visible region details.
-- No absence phrasing: no, not visible, without, absent, unknown.
+- No absence phrasing.
 - No repeated facts.
-
-Disambiguation:
-- Use "strap" only for a clearly separate thin support band.
-- If upper edge is broad/pleated/draped, use panel/band wording.
-- If asymmetry is visible, describe it without side words.
 
 Final safety rewrite:
 - Before final answer, replace any directional wording with garment-only phrasing.""",
@@ -130,34 +134,33 @@ Final safety rewrite:
 
 Output format:
 - Return exactly one valid JSON object with exactly 2 keys:
-  1) "category_type": string
+  1) "title": string
   2) "garment_construction_prompt": string
 - Output only JSON. No extra text.
 
-Rules for "category_type":
-- Use a conservative outer subtype from visible evidence only.
+Rules for "title":
+- Use an accurate 2-5 word outerwear subtype from visible evidence only.
+- Keep title in lowercase only.
+- No color words, no fluff.
 
 Rules for "garment_construction_prompt":
 - Exactly one line, plain text, 40 to 75 words.
 - Natural sentence flow.
-- Focus mainly on outer category/subtype, upper-edge/neckline/opening shape, sleeve/strap/panel configuration, shoulder coverage, torso silhouette/construction, hem shape/endpoint, and at least one standout visible detail; optional texture/motif with garment-zone placement.
+- Focus on visible outer construction: collar/lapel/hood or upper-edge shape, front opening/closure mechanism, shoulder construction, sleeve configuration and cuff finish, torso panel/seam structure, pocket/flap detail if clearly visible, silhouette, hem shape/endpoint, and at least one standout visible detail.
 - Use only high-confidence evidence; skip weak details.
 
 Hard constraints:
 - Only directly visible outer-garment evidence.
-- No guessing or inferred hidden structure.
+- No guessing, no inferred hidden structure.
 - No directional/side terms.
-- Forbidden terms: left, right, side, one side, opposite side, front, back, viewer-left, viewer-right.
 - No color terms.
 - No body/background/camera/styling terms.
-- No non-outer garment or hardware details.
+- No non-outer garment details.
 - No non-visible region details.
-- No absence phrasing: no, not visible, without, absent, unknown.
+- No absence phrasing.
 - No repeated facts.
 
 Disambiguation:
-- Use "strap" only for a clearly separate thin support band.
-- If upper edge is broad/pleated/draped, use panel/band wording.
 - If asymmetry is visible, describe it without side words.
 
 Final safety rewrite:
@@ -192,10 +195,18 @@ Rules:
 - head_covering: short visibility state only (for example uncovered, partially-covered, fully-covered, unknown). Empty string if unclear.
 - If hair is covered by hijab, scarf, headscarf, veil, cap, hat, hoodie, or any head covering and hair is not clearly visible, set hair_style="", hair_length="", and hair_color="". Do not infer hidden hair.
 - If hair is clearly visible, do not leave hair_length empty. hair_style may be empty when no closed-list style is clearly identifiable.
-- body_build: short body-build phrase only (for example slim, athletic, curvy, average, petite, plus-size, etc.). These are examples for idea, not an exhaustive list. Empty string if unclear.
+- body_build:
+  - Return one short evidence-based body-geometry phrase only, not a generic category label.
+  - Describe only clearly visible body-shape cues from the image, using precise physical terms.
+  - Prefer visible geometry such as bust volume, waist definition, hip width or side-hip curve, glute contour, upper-thigh volume, and overall lower-body silhouette when they are clearly visible.
+  - Keep it compact and natural, for example: "full bust, clearly defined waist, fuller hips with outward side-hip curve, pronounced glute contour, and full upper-thigh volume forming a compact curvy lower-body silhouette".
+  - Do not guess hidden structure, do not exaggerate, and do not use aspirational or aesthetic wording.
+  - Do not mention pose, clothing compression effects, camera angle, or non-visible anatomy.
+  - Empty string if the body geometry is unclear.
 - Do not include pose/posture terms (standing, sitting, kneeling, etc.).
 - Do not include clothing details, colors, background, lighting, camera, mood, or aesthetics in person fields.
 - Do not mention left, right, side, viewer-left, viewer-right, or directional wording in person fields.
+- For body_build, include only directly visible body geometry and exclude anything inferred from hidden regions or clothing-induced shaping.
 - Never include these tokens in person fields: wearing, sunglasses, glasses, eyewear, none, smooth, straight, shoulder-length.
 - You may use any other visible cues in the image internally (etc.) to infer these fields more accurately, but do not output those extra cues.
 - Output only the schema fields above. Do not add prompt, description, notes, explanations, or any extra keys.

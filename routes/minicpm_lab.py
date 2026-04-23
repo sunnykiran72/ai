@@ -600,3 +600,379 @@ async def minicpm_garment_lab_run(
         "data": data,
     }
 
+
+@router.get("/dev/minicpm/user-prepare-lab", response_class=HTMLResponse)
+async def minicpm_user_prepare_lab_page() -> HTMLResponse:
+    default_instruction = str(get_minicpm_person_outfit_prompt() or "").strip()
+    html = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>MiniCPM User-Prepare Lab</title>
+  <style>
+    :root {{
+      --bg-0: #f8fafc;
+      --bg-1: #e2e8f0;
+      --ink: #111827;
+      --muted: #475569;
+      --line: #cbd5e1;
+      --card: #ffffff;
+      --accent: #0f766e;
+      --accent-2: #1e3a8a;
+      --danger: #b91c1c;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      color: var(--ink);
+      font-family: "Space Grotesk", "Manrope", "Avenir Next", sans-serif;
+      background:
+        radial-gradient(1200px 700px at 15% -20%, #dbeafe 0%, transparent 65%),
+        radial-gradient(900px 560px at 90% -20%, #d1fae5 0%, transparent 58%),
+        linear-gradient(180deg, var(--bg-0), var(--bg-1));
+      min-height: 100vh;
+    }}
+    .wrap {{ max-width: 1360px; margin: 18px auto 26px; padding: 0 14px; }}
+    h1 {{ margin: 0 0 14px; font-size: 30px; }}
+    .sub {{ margin: 0 0 14px; color: var(--muted); font-size: 14px; }}
+    .layout {{ display: grid; grid-template-columns: 440px 1fr; gap: 14px; }}
+    .card {{
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      box-shadow: 0 8px 20px rgba(17, 24, 39, 0.06);
+      padding: 14px;
+    }}
+    label {{
+      display: block;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.35px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 5px;
+    }}
+    input[type="file"], input[type="number"], textarea {{
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+      color: var(--ink);
+      font-size: 14px;
+      padding: 9px 10px;
+    }}
+    textarea {{ min-height: 260px; line-height: 1.35; resize: vertical; }}
+    .row2 {{ display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }}
+    .actions {{ display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }}
+    .btn {{
+      border: 0;
+      background: linear-gradient(135deg, var(--accent), var(--accent-2));
+      color: #fff;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+    }}
+    .btn:disabled {{ opacity: 0.65; cursor: wait; }}
+    .btn.gray {{ background: #334155; }}
+    .status {{ font-size: 13px; color: var(--muted); min-height: 20px; margin-top: 8px; }}
+    .status.err {{ color: var(--danger); font-weight: 700; }}
+    .tile {{
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #f8fafc;
+      padding: 8px;
+      margin-bottom: 10px;
+    }}
+    .tile h4 {{
+      margin: 0 0 6px;
+      font-size: 12px;
+      letter-spacing: 0.35px;
+      text-transform: uppercase;
+      color: var(--muted);
+    }}
+    .preview {{
+      width: 100%;
+      height: 320px;
+      object-fit: contain;
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      display: block;
+    }}
+    .mini {{
+      background: #f8fafc;
+      border: 1px dashed #cbd5e1;
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 13px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }}
+    .result-card {{
+      border: 1px solid #cbd5e1;
+      background: #fff;
+      border-radius: 10px;
+      padding: 10px;
+      margin-bottom: 10px;
+    }}
+    pre {{
+      margin: 0;
+      background: #0f172a;
+      color: #e2e8f0;
+      border-radius: 10px;
+      padding: 10px;
+      font-size: 12px;
+      max-height: 360px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }}
+    @media (max-width: 1140px) {{
+      .layout {{ grid-template-columns: 1fr; }}
+      .row2 {{ grid-template-columns: 1fr; }}
+      .preview {{ height: 260px; }}
+    }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>MiniCPM User-Prepare Lab</h1>
+    <p class="sub">Run only the MiniCPM person/outfit prompt path used by <code>/v1/user-image/prepare</code>. No GroundingDINO, no resizing pipeline, no upload step.</p>
+    <div class="layout">
+      <section class="card">
+        <form id="lab-form">
+          <div>
+            <label>Input Image</label>
+            <input id="image" name="image" type="file" accept="image/*" required />
+          </div>
+          <div class="row2">
+            <div>
+              <label>Runs</label>
+              <input id="runs" name="runs" type="number" min="1" max="5" value="1" />
+            </div>
+            <div>
+              <label>Mode</label>
+              <div class="mini">MiniCPM only</div>
+            </div>
+          </div>
+          <div>
+            <label>Prompt Sent To MiniCPM</label>
+            <textarea id="prompt" name="prompt_override">{default_instruction}</textarea>
+          </div>
+          <div class="actions">
+            <button id="runBtn" type="submit" class="btn">Run MiniCPM</button>
+            <button id="resetBtn" type="button" class="btn gray">Reset Prompt</button>
+          </div>
+          <div id="status" class="status"></div>
+        </form>
+      </section>
+      <section class="card">
+        <div class="tile">
+          <h4>Input Preview</h4>
+          <img id="preview" class="preview" alt="preview" />
+        </div>
+        <div class="tile">
+          <h4>Prompt Sent</h4>
+          <div id="instructionUsed" class="mini"></div>
+        </div>
+        <div class="tile">
+          <h4>Runs</h4>
+          <div id="runsOutput"></div>
+        </div>
+        <div class="tile">
+          <h4>Raw Response</h4>
+          <pre id="raw"></pre>
+        </div>
+      </section>
+    </div>
+  </div>
+  <script>
+    const form = document.getElementById("lab-form");
+    const imageEl = document.getElementById("image");
+    const previewEl = document.getElementById("preview");
+    const promptEl = document.getElementById("prompt");
+    const runsEl = document.getElementById("runs");
+    const statusEl = document.getElementById("status");
+    const rawEl = document.getElementById("raw");
+    const runsOutputEl = document.getElementById("runsOutput");
+    const instructionUsedEl = document.getElementById("instructionUsed");
+    const runBtn = document.getElementById("runBtn");
+    const resetBtn = document.getElementById("resetBtn");
+    const defaultPrompt = promptEl.value;
+
+    function setStatus(msg, isErr = false) {{
+      statusEl.textContent = msg || "";
+      statusEl.className = isErr ? "status err" : "status";
+    }}
+
+    imageEl.addEventListener("change", () => {{
+      const file = imageEl.files && imageEl.files[0];
+      if (!file) {{
+        previewEl.removeAttribute("src");
+        return;
+      }}
+      previewEl.src = URL.createObjectURL(file);
+    }});
+
+    resetBtn.addEventListener("click", () => {{
+      promptEl.value = defaultPrompt;
+      setStatus("Prompt reset.");
+    }});
+
+    form.addEventListener("submit", async (event) => {{
+      event.preventDefault();
+      const file = imageEl.files && imageEl.files[0];
+      if (!file) {{
+        setStatus("Choose an image first.", true);
+        return;
+      }}
+
+      const fd = new FormData();
+      fd.append("image", file);
+      fd.append("prompt_override", promptEl.value || "");
+      fd.append("runs", runsEl.value || "1");
+
+      runBtn.disabled = true;
+      runsOutputEl.innerHTML = "";
+      rawEl.textContent = "";
+      instructionUsedEl.textContent = "";
+      setStatus("Running MiniCPM...");
+
+      try {{
+        const res = await fetch("/dev/minicpm/user-prepare-lab/run", {{
+          method: "POST",
+          body: fd
+        }});
+        const payload = await res.json();
+        if (!res.ok) {{
+          const detail = payload?.detail || payload?.message || "Unknown error";
+          throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+        }}
+        const data = payload?.data || {{}};
+        instructionUsedEl.textContent = data?.payload_sent_to_minicpm?.instruction || "";
+        const runs = Array.isArray(data?.runs) ? data.runs : [];
+        for (const run of runs) {{
+          const card = document.createElement("div");
+          card.className = "result-card";
+          const meta = document.createElement("div");
+          meta.className = "mini";
+          meta.textContent =
+            `run #${{run.index}}\\n` +
+            `elapsed: ${{run.elapsed_seconds}}s\\n` +
+            `word_count: ${{run.word_count}}\\n` +
+            `looks_like_json: ${{run.quality_signals?.looks_like_json}}\\n` +
+            `human_term_hits: ${{(run.quality_signals?.human_term_hits || []).join(", ") || "-"}}\\n` +
+            `directional_term_hits: ${{(run.quality_signals?.directional_term_hits || []).join(", ") || "-"}}\\n` +
+            `color_term_hits: ${{(run.quality_signals?.color_term_hits || []).join(", ") || "-"}}`;
+          const text = document.createElement("div");
+          text.className = "mini";
+          text.textContent = run?.text || "";
+          card.appendChild(meta);
+          card.appendChild(text);
+          runsOutputEl.appendChild(card);
+        }}
+        rawEl.textContent = JSON.stringify(payload, null, 2);
+        setStatus("MiniCPM user-prepare simulation completed.");
+      }} catch (error) {{
+        setStatus(`Run failed: ${{error.message}}`, true);
+      }} finally {{
+        runBtn.disabled = false;
+      }}
+    }});
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
+
+
+@router.post("/dev/minicpm/user-prepare-lab/run")
+async def minicpm_user_prepare_lab_run(
+    request: Request,
+    file: Optional[UploadFile] = File(None),
+    image: Optional[UploadFile] = File(None),
+    prompt_override: Optional[str] = Form(None),
+    runs: int = Form(1, ge=1, le=5),
+) -> Dict[str, object]:
+    upload = file or image
+    if upload is None:
+        raise HTTPException(status_code=422, detail="Provide one image using 'file' or 'image'.")
+
+    override_text = _normalize_text(prompt_override)
+    default_instruction = str(get_minicpm_person_outfit_prompt() or "").strip()
+    instruction_to_send = override_text or default_instruction
+    prompt_override_applied = bool(override_text)
+
+    source = _load_uploaded_image(upload, field_name="image").convert("RGB")
+    input_size = {"width": int(source.width), "height": int(source.height)}
+    runner = _resolve_minicpm_runner(request)
+
+    def _run_blocking() -> Dict[str, object]:
+        all_runs: List[Dict[str, object]] = []
+        t0 = time.perf_counter()
+        for idx in range(1, int(runs) + 1):
+            run_started = time.perf_counter()
+            output_text = str(
+                runner.describe_person_and_outfit(
+                    source,
+                    prompt_override=(instruction_to_send if prompt_override_applied else None),
+                )
+            ).strip()
+            elapsed = round(float(time.perf_counter() - run_started), 3)
+            all_runs.append(
+                {
+                    "index": int(idx),
+                    "text": output_text,
+                    "word_count": int(_word_count(output_text)),
+                    "elapsed_seconds": elapsed,
+                    "quality_signals": _quality_signals(output_text),
+                }
+            )
+
+        total_elapsed = round(float(time.perf_counter() - t0), 3)
+        avg_elapsed = round(
+            float(sum(float(item.get("elapsed_seconds", 0.0) or 0.0) for item in all_runs) / max(1, len(all_runs))),
+            3,
+        )
+        unique_outputs = len({str(item.get("text") or "").strip() for item in all_runs})
+        return {
+            "prompt_override_applied": prompt_override_applied,
+            "payload_sent_to_minicpm": {
+                "instruction": instruction_to_send,
+                "max_new_tokens": int(getattr(runner, "user_max_new_tokens", 0) or 0),
+                "sampling": False,
+                "temperature": 0.0,
+                "input_size": input_size,
+            },
+            "runs": all_runs,
+            "summary": {
+                "runs": int(len(all_runs)),
+                "unique_outputs": int(unique_outputs),
+                "avg_elapsed_seconds": avg_elapsed,
+                "total_elapsed_seconds": total_elapsed,
+            },
+            "runner": {
+                "model_id": str(getattr(runner, "model_id", "") or ""),
+                "device": str(getattr(runner, "device", "") or ""),
+                "dtype": str(getattr(runner, "torch_dtype", "")).replace("torch.", ""),
+                "is_loaded": bool(getattr(runner, "is_loaded", False)),
+                "user_max_new_tokens": int(getattr(runner, "user_max_new_tokens", 0) or 0),
+            },
+        }
+
+    try:
+        data = await asyncio.to_thread(_run_blocking)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("MiniCPM user-prepare lab run failed")
+        raise HTTPException(status_code=500, detail=f"MiniCPM run failed: {exc}") from exc
+
+    return {
+        "status": "success",
+        "message": "MiniCPM user-prepare lab run completed",
+        "data": data,
+    }
