@@ -169,49 +169,56 @@ Final safety rewrite:
 
 MINICPM_GARMENT_DESCRIPTION_PROMPT = MINICPM_GARMENT_DESCRIPTION_PROMPTS["top"]
 
-MINICPM_PERSON_OUTFIT_DESCRIPTION_PROMPT = """Analyze the image for user-image preparation and return JSON only with this exact schema:
-{"garments":["top","bottom","outer","dress"],"person_type":"","age_band":"","hair_style":"","hair_length":"","hair_color":"","head_covering":"","body_build":""}
-Rules:
-- garments: include only garment categories worn on the main body of the dominant person.
-- Allowed garment values: top, bottom, outer, dress.
-- garments may include multiple values; do not include duplicates.
-- Include garments only when they are physically worn on the person's body (torso, lower body, or outer layer).
-- Do not include garments that are held in hands, carried, draped over arms/shoulders without being worn, placed nearby, or present in the background.
-- Category definitions:
+MINICPM_PERSON_OUTFIT_DESCRIPTION_PROMPT = """
+Task: Analyze only the dominant person in the image and return exactly one valid JSON object matching this schema:
+
+{
+ "garments":["top","bottom","outer","dress"],
+  "user_metadata": {
+    "person_label": "",
+    "age_hint": "",
+    "body_build": ""
+  }
+}
+
+- garment rules:
+
+1. garments: include only garment categories worn on the main body of the dominant person.
+2. Allowed garment values: top, bottom, outer, dress.
+3. garments may include multiple values; do not include duplicates.
+4. Include garments only when they are physically worn on the person's body (torso, lower body, or outer layer).
+5. Do not include garments that are held in hands, carried, draped over arms/shoulders without being worn, placed nearby, or present in the background.
+6.Category definitions:
   - top: upper-body garment piece only.
   - bottom: lower-body garment piece only.
   - dress: one continuous one-piece garment spanning upper and lower body.
   - outer: outermost layer worn over base garment(s).
-- Base-outfit exclusivity:
+7. Base-outfit exclusivity:
   - Use either top+bottom or dress as base outfit.
   - Do not output dress together with top or bottom for the same worn outfit.
   - outer may appear with either base-outfit form.
-- Do not include side objects, hand-held items, nearby garments, or background apparel.
-- person_type: person label only (for example woman, man, person, girl, boy, etc.). These are examples for idea, not an exhaustive list. No clothing words.
-- age_band: short age hint only (for example young, adult, middle-aged, older, etc.). These are examples for idea, not an exhaustive list. Empty string if unclear.
-- hair_style: choose exactly one value from this closed list only: loose, wavy, curly, coily, braided, twists, locs, bun, ponytail, pigtails, half-up, updo, afro. Do not generate any other value. Do not use smooth or straight. Use ponytail only when a clearly tied-back ponytail structure is visible. Use pigtails only when two clearly separated tied sections are visible. Use half-up only when part of the hair is tied up and the rest is left down. Use loose when the hair is visibly open/untied and no other closed-list style fits better. If none of these labels clearly fits, return empty string.
-- hair_length: choose exactly one value from this closed list only: bald/shaved, very short, short, medium, long, very long. Do not generate any other value. Do not use shoulder-length. If the visible length is around the shoulder area, use medium. If unclear, return empty string.
-- hair_color: short hair-color phrase only (for example black, brown, blonde, auburn, gray, white, dyed, multi-tone, gradient, etc.). These are examples for idea, not an exhaustive list. If gradient/highlights/ombre are visible, return a short phrase such as multi-tone or gradient (optionally with one dominant color). Empty string if unclear.
-- head_covering: short visibility state only (for example uncovered, partially-covered, fully-covered, unknown). Empty string if unclear.
-- If hair is covered by hijab, scarf, headscarf, veil, cap, hat, hoodie, or any head covering and hair is not clearly visible, set hair_style="", hair_length="", and hair_color="". Do not infer hidden hair.
-- If hair is clearly visible, do not leave hair_length empty. hair_style may be empty when no closed-list style is clearly identifiable.
-- body_build:
-  - Return one short evidence-based body-geometry phrase only, not a generic category label.
-  - Describe only clearly visible body-shape cues from the image, using precise physical terms.
-  - Prefer visible geometry such as bust volume, waist definition, hip width or side-hip curve, glute contour, upper-thigh volume, and overall lower-body silhouette when they are clearly visible.
-  - Keep it compact and natural, for example: "full bust, clearly defined waist, fuller hips with outward side-hip curve, pronounced glute contour, and full upper-thigh volume forming a compact curvy lower-body silhouette".
-  - Do not guess hidden structure, do not exaggerate, and do not use aspirational or aesthetic wording.
-  - Do not mention pose, clothing compression effects, camera angle, or non-visible anatomy.
-  - Empty string if the body geometry is unclear.
-- Do not include pose/posture terms (standing, sitting, kneeling, etc.).
-- Do not include clothing details, colors, background, lighting, camera, mood, or aesthetics in person fields.
-- Do not mention left, right, side, viewer-left, viewer-right, or directional wording in person fields.
-- For body_build, include only directly visible body geometry and exclude anything inferred from hidden regions or clothing-induced shaping.
-- Never include these tokens in person fields: wearing, sunglasses, glasses, eyewear, none, smooth, straight, shoulder-length.
-- You may use any other visible cues in the image internally (etc.) to infer these fields more accurately, but do not output those extra cues.
-- Output only the schema fields above. Do not add prompt, description, notes, explanations, or any extra keys.
-- If uncertain, return empty string for that field.
-- Return only valid JSON, no markdown, no extra keys."""
+8. Do not include side objects, hand-held items, nearby garments, or background apparel.
+
+
+user_metadata rules: it must contain these details :  
+a. person_label : person label only (for example woman, man, person, girl, boy, etc.). These are examples for idea, not an exhaustive list. No clothing words.
+b. age_hint : for example young, adult, middle-aged, older, etc.). These are examples for idea, not an exhaustive list. Empty string if unclear.
+c. body_build:
+1.Describe only clearly visible body-shape from the image, using precise physical terms.
+2. Write it as a short natural descriptive phrase.
+3. Mention these visible region-level cues from this allowed set: bust volume, waist definition, hip width, side-hip curve, and upper-thigh volume only if it is clearly visible without depending on the garment, neglect if we it's not clear.
+4. Do not use proportion summaries such as long legs, short legs, tall frame, short frame, compact frame, or overall silhouette summaries.
+5. Do not guess hidden structure.
+6. Do not exaggerate or beautify the body shape.
+7. If the cue is visible but only mildly supported, prefer softer wording such as defined, fuller, visible, moderate, or slight.
+8. If a loose, gathered, tiered, draped, or voluminous garment obscures the torso or hips, do not describe bust volume, hip width, or side-hip curve unless those regions remain independently readable from exposed body contours.
+9. For loose dresses or loose tops, use bust volume only when the bust contour is clearly readable from exposed body contour, not only from neckline opening or fabric separation.
+10. Bust cue hard gate: include bust volume only when the bust contour is directly readable from visible chest/body outline. Do not infer bust volume from neckline opening, fabric stretch/wrinkles, seams, or side/back pose. If not clearly readable, omit bust cue.
+
+final rules : 
+1. If uncertain, return empty string for that field.
+2. Return only valid JSON, no markdown, no extra keys.
+"""
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # FLUX2 POSITIVE PROMPTS (What TO Generate)

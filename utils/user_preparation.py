@@ -28,7 +28,7 @@ except Exception:  # pragma: no cover - face detection is optional in tests
 from utils.validation import validate_image_quality
 
 
-DEFAULT_USER_DESCRIPTION = "A person with balanced body build."
+DEFAULT_USER_DESCRIPTION = "A person with balanced body as shown in the reference image."
 ALLOWED_WORN_TYPES = ("top", "bottom", "outer", "dress")
 DEFAULT_USER_PREP_MIN_INPUT_HEIGHT = 768
 DEFAULT_USER_PREP_TARGET_HEIGHT = 1024
@@ -68,7 +68,7 @@ _PERSON_TYPE_MAP: Tuple[Tuple[str, str], ...] = (
     ("boy", "boy"),
     ("person", "person"),
 )
-_AGE_BAND_TOKENS = ("young", "adult", "middle-aged", "older", "teen")
+_AGE_BAND_TOKENS = ("child", "teen", "young", "young-adult", "adult", "middle-aged", "older")
 _CANONICAL_HAIR_STYLE_VALUES = (
     "loose",
     "wavy",
@@ -234,10 +234,15 @@ def _sanitize_worn_types_policy(values: List[str]) -> List[str]:
     return out
 
 
-def _extract_user_prepare_prompt_bundle(raw_text: str) -> Tuple[str, List[str]]:
+def _extract_user_prepare_prompt_bundle(raw_text: str) -> Tuple[str, List[str], Dict[str, Any]]:
     text = str(raw_text or "").strip()
     if not text:
-        return DEFAULT_USER_DESCRIPTION, []
+        return DEFAULT_USER_DESCRIPTION, [], {
+            "raw_text": "",
+            "json_valid": False,
+            "parsed_json": None,
+            "person_fields": {},
+        }
 
     candidate_payloads: List[str] = [text]
     if text.startswith("```"):
@@ -253,6 +258,8 @@ def _extract_user_prepare_prompt_bundle(raw_text: str) -> Tuple[str, List[str]]:
     prompt = ""
     worn_types: List[str] = []
     structured: Dict[str, str] = {}
+    parsed_json: Optional[Dict[str, Any]] = None
+    json_valid = False
 
     def _first_text(obj: Dict[str, Any], keys: Sequence[str]) -> str:
         for key in keys:
@@ -263,6 +270,17 @@ def _extract_user_prepare_prompt_bundle(raw_text: str) -> Tuple[str, List[str]]:
 
     def _extract_structured_fields(obj: Dict[str, Any]) -> Dict[str, str]:
         root = dict(obj)
+        user_metadata = obj.get("user_metadata")
+        if isinstance(user_metadata, dict):
+            merged = dict(root)
+            merged.update(
+                {
+                    "person_label": user_metadata.get("person_label"),
+                    "age_hint": user_metadata.get("age_hint"),
+                    "body_build": user_metadata.get("body_build"),
+                }
+            )
+            root = merged
         person_block = obj.get("person")
         if isinstance(person_block, dict):
             # person.* can override top-level keys when provided.
@@ -270,8 +288,8 @@ def _extract_user_prepare_prompt_bundle(raw_text: str) -> Tuple[str, List[str]]:
             merged.update({str(k): v for k, v in person_block.items()})
             root = merged
         return {
-            "person_type": _first_text(root, ("person_type", "person", "subject_type", "gender")),
-            "age_band": _first_text(root, ("age_band", "visible_age_band", "age", "age_group")),
+            "person_type": _first_text(root, ("person_type", "person_label", "person", "subject_type", "gender")),
+            "age_band": _first_text(root, ("age_band", "age_hint", "visible_age_band", "age", "age_group")),
             "hair_style": _first_text(root, ("hair_style", "hairstyle")),
             "hair_length": _first_text(root, ("hair_length",)),
             "hair_color": _first_text(root, ("hair_color", "hair_colour", "hairColor")),
@@ -285,6 +303,8 @@ def _extract_user_prepare_prompt_bundle(raw_text: str) -> Tuple[str, List[str]]:
             continue
         if not isinstance(obj, dict):
             continue
+        parsed_json = dict(obj)
+        json_valid = True
         prompt = str(obj.get("prompt") or obj.get("description") or "").strip()
         structured = _extract_structured_fields(obj)
         worn_types = _sanitize_worn_types_policy(
@@ -300,7 +320,20 @@ def _extract_user_prepare_prompt_bundle(raw_text: str) -> Tuple[str, List[str]]:
     built_prompt = _build_user_prepare_prompt(structured)
     if not built_prompt:
         built_prompt = _sanitize_user_prepare_prompt(prompt)
-    return built_prompt, worn_types
+    return built_prompt, worn_types, {
+        "raw_text": text,
+        "json_valid": bool(json_valid),
+        "parsed_json": parsed_json,
+        "person_fields": {
+            "person_type": _direct_field_value(structured.get("person_type", "")),
+            "age_band": _normalize_value_by_tokens(
+                structured.get("age_band", ""),
+                _AGE_BAND_TOKENS,
+                max_words=2,
+            ),
+            "body_build": _normalize_body_build_phrase(structured.get("body_build", "")),
+        },
+    }
 
 
 def _sanitize_user_prepare_prompt(raw_text: str) -> str:
@@ -373,6 +406,17 @@ def _normalize_free_value(raw: str, *, max_words: int = 3) -> str:
     if not words:
         return ""
     return " ".join(words[:max_words]).strip()
+
+
+def _normalize_body_build_phrase(raw: str) -> str:
+    text = " ".join(str(raw or "").split()).strip(" ,.;:")
+    if not text:
+        return ""
+    text = re.sub(r"\b(wearing|wears|dressed|outfit|clothing|garment)\b", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s{2,}", " ", text).strip(" ,.;:")
+    if not text:
+        return ""
+    return text
 
 
 def _normalize_value_by_tokens(raw: str, allowed_tokens: Sequence[str], *, max_words: int = 3) -> str:
@@ -457,45 +501,28 @@ def _is_hair_hidden(head_covering_raw: str) -> bool:
 def _build_user_prepare_prompt(fields: Dict[str, str]) -> str:
     if not isinstance(fields, dict):
         return ""
-    # Use MiniCPM structured values directly (minimal cleanup only).
-    person_type = _direct_field_value(fields.get("person_type", ""))
-    age_band = _direct_field_value(fields.get("age_band", ""))
-    hair_style = _normalize_hair_style(fields.get("hair_style", ""))
-    hair_length = _normalize_hair_length(fields.get("hair_length", ""))
-    hair_color = _direct_field_value(fields.get("hair_color", ""))
-    head_covering = _direct_field_value(fields.get("head_covering", ""))
-    body_build = _direct_field_value(fields.get("body_build", ""))
+    # User-image prompt is intentionally focused on person label + age hint + body build only.
+    person_type = _direct_field_value(fields.get("person_type", "") or fields.get("person_label", ""))
+    age_band = _normalize_value_by_tokens(fields.get("age_band", "") or fields.get("age_hint", ""), _AGE_BAND_TOKENS)
+    body_build = _normalize_body_build_phrase(fields.get("body_build", ""))
 
-    # Minimal safety fallback for subject if MiniCPM omits person_type.
+    # Safety fallback for subject if MiniCPM omits person_type.
     if not person_type:
         person_type = _normalize_person_type(fields.get("person_type", ""))
-
-    # If head is covered and hair is not clearly visible, do not infer hidden hair.
-    if _is_hair_hidden(head_covering):
-        hair_style = ""
-        hair_length = ""
-        hair_color = ""
 
     subject = person_type or "person"
     if age_band and age_band not in subject:
         subject = f"{age_band} {subject}"
 
-    hair_bits: List[str] = []
-    for v in (hair_color, hair_length, hair_style):
-        if not v:
-            continue
-        vv = re.sub(r"\bhair\b", "", v).strip()
-        if vv and vv not in hair_bits:
-            hair_bits.append(vv)
     article = "An" if subject[:1].lower() in {"a", "e", "i", "o", "u"} else "A"
     prompt = f"{article} {subject}"
-    if hair_bits:
-        prompt += f" with {' '.join(hair_bits)} hair"
     if body_build:
-        prompt += (" and " if hair_bits else " with ") + body_build + " body build"
-    # Final guardrail: strip stray leaked tokens and avoid legacy hair labels.
-    prompt = re.sub(r"\b(smooth|straight|shoulder-length)\b(?=\s+hair\b)", " ", prompt, flags=re.IGNORECASE)
-    prompt = re.sub(r"\b(sunglasses|glasses|eyewear|none)\b", " ", prompt, flags=re.IGNORECASE)
+        if re.fullmatch(r"[a-z-]+", body_build):
+            body_article = "an" if body_build[:1].lower() in {"a", "e", "i", "o", "u"} else "a"
+            prompt += f" with {body_article} {body_build} build"
+        else:
+            prompt += f" with {body_build}"
+    prompt += " as shown in the reference image"
     prompt = re.sub(r"\s{2,}", " ", prompt).strip(" ,.;:")
     if not prompt:
         return ""
@@ -1933,6 +1960,7 @@ def prepare_user_image_core(
     blur_min_focus_score: float = 22.0,
     blur_focus_max_edge: int = 1024,
     verification_required: bool = True,
+    verification_prompt_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     if not isinstance(image, Image.Image):
         return _error_payload("invalid_image", "Expected a valid image.", status_code=422)
@@ -2013,7 +2041,11 @@ def prepare_user_image_core(
 
     if verifier_fn is not None:
         verification_meta["enabled"] = True
-        prompt = build_verification_prompt(candidates=candidates, primary_candidate=primary_candidate)
+        prompt = (
+            str(verification_prompt_override).strip()
+            if str(verification_prompt_override or "").strip()
+            else build_verification_prompt(candidates=candidates, primary_candidate=primary_candidate)
+        )
         raw_verdict = _call_optional_image_text_fn(verifier_fn, image, prompt)
         verdict = parse_verifier_response(raw_verdict)
         verification_meta.update(
@@ -2021,6 +2053,7 @@ def prepare_user_image_core(
                 "backend": str(verdict.get("backend") or "vlm"),
                 "raw": raw_verdict,
                 "parsed": verdict,
+                "prompt_override_used": bool(str(verification_prompt_override or "").strip()),
             }
         )
         if not verdict:
@@ -2120,7 +2153,7 @@ def prepare_user_image_core(
     if not description_raw:
         description_raw = DEFAULT_USER_DESCRIPTION
 
-    prompt_description, worn_types = _extract_user_prepare_prompt_bundle(description_raw)
+    prompt_description, worn_types, minicpm_bundle = _extract_user_prepare_prompt_bundle(description_raw)
 
     return {
         "url": url,
@@ -2129,6 +2162,10 @@ def prepare_user_image_core(
         "minicpmOutput": {
             "garments": worn_types,
             "prompt": prompt_description,
+            "raw": description_raw,
+            "json_valid": bool(minicpm_bundle.get("json_valid")),
+            "parsed_json": minicpm_bundle.get("parsed_json"),
+            "person_fields": minicpm_bundle.get("person_fields") or {},
         },
         "focusScore": float(focus),
         "meta": {
@@ -2144,6 +2181,12 @@ def prepare_user_image_core(
             "detect": detect_meta,
             "face": face_meta,
             "verification": verification_meta,
+            "minicpm": {
+                "raw": description_raw,
+                "json_valid": bool(minicpm_bundle.get("json_valid")),
+                "parsed_json": minicpm_bundle.get("parsed_json"),
+                "person_fields": minicpm_bundle.get("person_fields") or {},
+            },
             "background": {"enabled": False, "backend": "none"},
         },
     }
@@ -2170,6 +2213,7 @@ async def prepare_user_image_pipeline(
     blur_min_focus_score: float = 22.0,
     blur_focus_max_edge: int = 1024,
     verification_required: bool = True,
+    verification_prompt_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     if upload is None or not hasattr(upload, "read"):
         return _error_payload("invalid_upload", "UserImageService expects an uploaded file.", status_code=422)
@@ -2218,4 +2262,5 @@ async def prepare_user_image_pipeline(
         blur_min_focus_score=blur_min_focus_score,
         blur_focus_max_edge=blur_focus_max_edge,
         verification_required=verification_required,
+        verification_prompt_override=verification_prompt_override,
     )

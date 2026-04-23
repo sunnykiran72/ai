@@ -19,15 +19,17 @@ class TestUserPreparationPipeline(unittest.TestCase):
             '{"garments":["top","bottom","top"],'
             '"prompt":"young woman with curly hair, medium build, smiling while seated with hands grounded and legs spread"}'
         )
-        prompt, worn_types = _extract_user_prepare_prompt_bundle(raw)
+        prompt, worn_types, meta = _extract_user_prepare_prompt_bundle(raw)
         self.assertTrue(prompt.endswith("."))
         self.assertEqual(worn_types, ["top", "bottom"])
+        self.assertTrue(meta["json_valid"])
 
     def test_extract_prompt_bundle_from_plain_text_without_keyword_inference(self):
         raw = "young woman wearing a jacket over a dress, seated casually with one hand on the floor"
-        prompt, worn_types = _extract_user_prepare_prompt_bundle(raw)
+        prompt, worn_types, meta = _extract_user_prepare_prompt_bundle(raw)
         self.assertTrue(prompt.endswith("."))
         self.assertEqual(worn_types, [])
+        self.assertFalse(meta["json_valid"])
 
     def test_build_user_prompt_normalizes_loose_hair(self):
         prompt = _build_user_prepare_prompt(
@@ -40,7 +42,7 @@ class TestUserPreparationPipeline(unittest.TestCase):
                 "body_build": "slim",
             }
         )
-        self.assertEqual(prompt, "A young girl with brown long loose hair and slim body build.")
+        self.assertEqual(prompt, "A young girl with a slim build as shown in the reference image.")
 
     def test_build_user_prompt_maps_legacy_hair_labels(self):
         prompt = _build_user_prepare_prompt(
@@ -53,7 +55,7 @@ class TestUserPreparationPipeline(unittest.TestCase):
                 "body_build": "average",
             }
         )
-        self.assertEqual(prompt, "An adult woman with blonde medium hair and average body build.")
+        self.assertEqual(prompt, "An adult woman with an average build as shown in the reference image.")
 
     def test_extract_prompt_bundle_accepts_loose_and_empty_style(self):
         raw = (
@@ -61,9 +63,10 @@ class TestUserPreparationPipeline(unittest.TestCase):
             '"person_type":"girl","age_band":"young","hair_color":"brown",'
             '"hair_length":"long","hair_style":"loose","body_build":"slim"}'
         )
-        prompt, worn_types = _extract_user_prepare_prompt_bundle(raw)
-        self.assertEqual(prompt, "A young girl with brown long loose hair and slim body build.")
+        prompt, worn_types, meta = _extract_user_prepare_prompt_bundle(raw)
+        self.assertEqual(prompt, "A young girl with a slim build as shown in the reference image.")
         self.assertEqual(worn_types, ["dress"])
+        self.assertTrue(meta["json_valid"])
 
     def test_build_user_prompt_supports_half_up_style(self):
         prompt = _build_user_prepare_prompt(
@@ -76,7 +79,7 @@ class TestUserPreparationPipeline(unittest.TestCase):
                 "body_build": "slim",
             }
         )
-        self.assertEqual(prompt, "A young woman with brown long half-up hair and slim body build.")
+        self.assertEqual(prompt, "A young woman with a slim build as shown in the reference image.")
 
     def test_build_user_prompt_dedupes_repeated_hair_tokens(self):
         prompt = _build_user_prepare_prompt(
@@ -89,7 +92,7 @@ class TestUserPreparationPipeline(unittest.TestCase):
                 "body_build": "average",
             }
         )
-        self.assertEqual(prompt, "A young woman with multi-tone medium hair and average body build.")
+        self.assertEqual(prompt, "A young woman with an average build as shown in the reference image.")
 
     def test_accepts_with_grounding_dino_and_verifier(self):
         image = Image.new("RGB", (800, 1200), "white")
@@ -118,7 +121,7 @@ class TestUserPreparationPipeline(unittest.TestCase):
             resize_method=TEST_RESIZE_METHOD,
             grounding_detector_fn=grounding_detector_fn,
             verifier_fn=verifier_fn,
-            description_fn=lambda _img: "identity: test subject. face: clear.",
+            description_fn=lambda _img: '{"garments":["top","bottom"],"person_type":"woman","age_band":"young","body_build":"slim"}',
             upload_fn=lambda _bytes: "https://example.com/prepared.png",
             blur_check_enabled=False,
             verification_required=True,
@@ -133,6 +136,12 @@ class TestUserPreparationPipeline(unittest.TestCase):
         self.assertEqual(result["meta"]["prepare_policy"]["resize_action"], "none")
         self.assertTrue(result["meta"]["prepare_policy"]["jpeg"]["within_budget"])
         self.assertEqual(result["meta"]["prepare_policy"]["target_long_edge"], 1024)
+        self.assertEqual(
+            result["promptDescription"],
+            "A young woman with a slim build as shown in the reference image.",
+        )
+        self.assertTrue(result["meta"]["minicpm"]["json_valid"])
+        self.assertEqual(result["meta"]["minicpm"]["person_fields"]["person_type"], "woman")
 
     def test_prepare_can_force_fixed_long_edge_downscale(self):
         image = Image.new("RGB", (1600, 2400), "white")
