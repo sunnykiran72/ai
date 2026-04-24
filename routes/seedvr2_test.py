@@ -414,6 +414,7 @@ async def upscale_user_image_from_url(
     URL-based upscaling endpoint.
 
     Fixed model: 7B FP8 mixed variant for best quality/latency balance.
+    Supports metric-based sizing via payload.metric ("2k" or "4k").
     """
     try:
         image = _download_image_url_for_upscale(payload.image_url, timeout_seconds=30)
@@ -438,7 +439,19 @@ async def upscale_user_image_from_url(
     model_key = "7b-fp8"
     model_name = _MODEL_VARIANTS[model_key]
     offload_device = "none" if bool(payload.gpu_resident) else "cpu"
-    target_long_edge = int(payload.target_long_edge)
+    requested_metric = str(payload.metric or "").strip().lower()
+    if requested_metric == "4k":
+        target_long_edge = 4096
+    elif requested_metric == "2k":
+        target_long_edge = 2048
+    else:
+        target_long_edge = int(payload.target_long_edge)
+    if target_long_edge == 4096:
+        applied_metric = "4k"
+    elif target_long_edge == 2048:
+        applied_metric = "2k"
+    else:
+        applied_metric = "custom"
     input_long_edge = max(int(image.width), int(image.height))
     input_short_edge = min(int(image.width), int(image.height))
     if input_long_edge <= 0 or input_short_edge <= 0:
@@ -563,6 +576,8 @@ async def upscale_user_image_from_url(
                 "mode": "persistent" if bool(payload.use_persistent) else "subprocess",
                 "model_variant": model_key,
                 "model": model_name,
+                "metric_requested": requested_metric or None,
+                "metric_applied": applied_metric,
                 "target_long_edge": int(target_long_edge),
                 "resolution": int(effective_resolution),
                 "max_resolution": int(effective_max_resolution),

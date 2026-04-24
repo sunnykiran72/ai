@@ -272,6 +272,10 @@ class UserPrepRequest(BaseModel):
 class SeedVR2UpscaleUrlRequest(BaseModel):
     """Request model for SeedVR2 URL-based upscaling (fixed 7B FP8)."""
     image_url: str = Field(..., description="Public HTTP(S) URL for the input image")
+    metric: Optional[str] = Field(
+        default=None,
+        description="Optional output metric: 2k (2048) or 4k (4096). Overrides target_long_edge when provided.",
+    )
     target_long_edge: int = Field(
         default=2048,
         ge=512,
@@ -300,6 +304,25 @@ class SeedVR2UpscaleUrlRequest(BaseModel):
         if not cleaned.startswith(("http://", "https://")):
             raise ValueError("image_url must start with http:// or https://")
         return cleaned
+
+    @field_validator("metric")
+    @classmethod
+    def _validate_metric(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("metric must be a string")
+        cleaned = value.strip().lower()
+        aliases = {
+            "2k": "2k",
+            "2048": "2k",
+            "4k": "4k",
+            "4096": "4k",
+        }
+        normalized = aliases.get(cleaned)
+        if normalized is None:
+            raise ValueError("metric must be one of: 2k, 4k, 2048, 4096")
+        return normalized
 
 
 class UserPrepResponse(SuccessResponse):
