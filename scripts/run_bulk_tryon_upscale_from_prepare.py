@@ -19,6 +19,7 @@ import json
 import re
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -135,6 +136,25 @@ def _load_prepare_rows(path: Path) -> List[Dict[str, object]]:
 def _slugify(value: str) -> str:
     text = re.sub(r"[^a-zA-Z0-9._-]+", "_", str(value or "").strip())
     return text.strip("._-") or "case"
+
+
+def _build_upscale_filename(prefix: str, index: int) -> str:
+    prefix_slug = _slugify(prefix)
+    unique_suffix = uuid.uuid4().hex
+    return f"{prefix_slug}_{index:03d}_{unique_suffix}.png"
+
+
+def _resolve_output_dir(raw_output_dir: str) -> Path:
+    repo_root = Path(__file__).resolve().parents[1]
+    pod_pull_root = repo_root / "tmp" / "pod_pull"
+    text = str(raw_output_dir or "").strip()
+    if not text:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return pod_pull_root / f"bulk_tryon_{timestamp}"
+    path = Path(text)
+    if path.is_absolute():
+        return path
+    return pod_pull_root / path
 
 
 def _write_debug_json(debug_dir: Optional[Path], name: str, payload: Dict[str, object]) -> None:
@@ -410,13 +430,14 @@ def _build_dress_prompt(user_prompt: str, dress_desc: str) -> str:
     normalized_dress = " ".join(str(dress_desc or "").split()).strip()
     normalized_dress = normalized_dress or "dress garment"
     return (
-        f"TRYON {normalized_user}. Replace the entire outfit with {normalized_dress} as shown in the reference image. "
+        f"TRYON {normalized_user}. Replace the entire outfit with {normalized_dress} as shown in the reference images. "
         "Preserve exact person identity including face, hair color, eye direction, pose, footwear, and accessories. "
         "Preserve body geometry and silhouette: torso contour, waist-to-hip relationship, hip contour, glute projection, thigh volume, and leg length. "
-        "Render the garment with accurate construction, fit, seam placement, drape, hem length, texture, pattern placement. "
+        "Render garment with accurate construction, fit, seam placement, drape, hem length, texture, pattern placement. "
         "Strictly remove any worn top, bottom, dress and outer garments. "
-        "Preserve the exact garment color fidelity, garment structure, deisgn pattern and positions, sleeve construction, edge finish and fabric pattern layout as shown in references. "
+        "Preserve the exact garment color fidelity, garment size, garment structure, deisgn patterns with positions and construction, edge finish and fabric pattern layout as shown in reference. "
         "Garment must preserve only the design and construction of its own reference image. "
+        "no cross-garment inference, no feature borrowing, and no structural or visual mixing with garments. "
         "Keep camera distance, background, and lighting consistent. "
         "The final image is a full body shot."
     )
@@ -445,7 +466,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lora-scale", type=float, default=1.0)
     parser.add_argument("--output-max-edge", type=int, default=1024)
     parser.add_argument("--upscale-target-long-edge", type=int, default=2048)
-    parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--output-dir", default="")
     parser.add_argument("--max-cases", type=int, default=0)
     parser.add_argument("--start-index", type=int, default=0)
     parser.add_argument("--end-index", type=int, default=0)
@@ -475,8 +496,9 @@ def main() -> int:
             raise SystemExit("--top-prompt is required when --garment-mode top_bottom")
         if not str(args.bottom_prompt or "").strip():
             raise SystemExit("--bottom-prompt is required when --garment-mode top_bottom")
-    output_dir = Path(args.output_dir)
+    output_dir = _resolve_output_dir(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    output_filename = lambda idx: _build_upscale_filename(args.output_filename_prefix, idx)
     jsonl_path = output_dir / "results.jsonl"
     csv_path = output_dir / "results.csv"
     summary_path = output_dir / "summary.json"
@@ -594,7 +616,7 @@ def main() -> int:
                 "cache_models": True,
                 "timeout_seconds": 900,
                 "upload_to_storage": True,
-                "output_filename": f"{args.output_filename_prefix}_{index:03d}.png",
+                "output_filename": output_filename(index),
             }
             _write_debug_json(debug_dir, "03_upscale_request.json", upscale_req)
             upscale_started = time.time()
